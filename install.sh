@@ -288,6 +288,12 @@ run_security_check() {
     
     cd "$INSTALL_DIR"
     
+    # Fix permissions first
+    if [[ -f "script/fix-permissions.sh" ]]; then
+        print_status "Fixing permissions before security check..."
+        ./script/fix-permissions.sh
+    fi
+    
     if [[ -f "script/security-check.sh" ]]; then
         if ./script/security-check.sh; then
             print_success "Security check passed"
