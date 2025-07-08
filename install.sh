@@ -66,9 +66,49 @@ check_requirements() {
     print_status "Checking system requirements..."
     
     # Check if running on Proxmox
-    if [[ ! -f "/etc/pve/version" ]] && [[ ! -f "/etc/proxmox-backup/version" ]]; then
+    PVE_DETECTED=false
+    PBS_DETECTED=false
+    
+    # Check for PVE
+    if [[ -f "/etc/pve/version" ]] || [[ -f "/etc/pve/.version" ]] || [[ -d "/etc/pve" ]]; then
+        PVE_DETECTED=true
+        print_success "Proxmox VE detected"
+    fi
+    
+    # Check for PBS
+    if [[ -f "/etc/proxmox-backup/version" ]] || [[ -f "/etc/proxmox-backup/.version" ]] || [[ -d "/etc/proxmox-backup" ]]; then
+        PBS_DETECTED=true
+        print_success "Proxmox Backup Server detected"
+    fi
+    
+    # Additional checks for Proxmox systems
+    if [[ -f "/etc/debian_version" ]] && (grep -q "proxmox" /etc/hostname 2>/dev/null || grep -q "pve\|pbs" /etc/hostname 2>/dev/null); then
+        if [[ "$PVE_DETECTED" == false ]] && [[ "$PBS_DETECTED" == false ]]; then
+            print_warning "Proxmox-like system detected (based on hostname)"
+            PVE_DETECTED=true
+        fi
+    fi
+    
+    # Check for running Proxmox services
+    if systemctl is-active --quiet pveproxy 2>/dev/null || systemctl is-active --quiet pbs 2>/dev/null; then
+        if [[ "$PVE_DETECTED" == false ]] && [[ "$PBS_DETECTED" == false ]]; then
+            print_success "Proxmox services detected as running"
+            PVE_DETECTED=true
+        fi
+    fi
+    
+    # Check for Proxmox packages
+    if dpkg -l | grep -q "proxmox-ve\|proxmox-backup-server" 2>/dev/null; then
+        if [[ "$PVE_DETECTED" == false ]] && [[ "$PBS_DETECTED" == false ]]; then
+            print_success "Proxmox packages detected"
+            PVE_DETECTED=true
+        fi
+    fi
+    
+    if [[ "$PVE_DETECTED" == false ]] && [[ "$PBS_DETECTED" == false ]]; then
         print_warning "This system doesn't appear to be Proxmox VE or PBS"
         print_warning "The backup system may not work correctly"
+        print_warning "You can continue if you're sure this is a Proxmox system"
         read -p "Continue anyway? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
