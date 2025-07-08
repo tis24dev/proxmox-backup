@@ -318,13 +318,25 @@ setup_cron() {
     print_status "Setting up automatic backup schedule..."
     
     # Check if cron job already exists
-    if crontab -l 2>/dev/null | grep -q "proxmox-backup.sh"; then
+    if crontab -l 2>/dev/null | grep -q "proxmox-backup"; then
         print_warning "Cron job already exists, skipping"
         return
     fi
     
-    # Add cron job for daily backup at 2 AM
-    (crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/proxmox-backup >/dev/null 2>&1") | crontab -
+    # Create temporary cron file
+    TEMP_CRON=$(mktemp)
+    
+    # Get existing crontab (if any)
+    crontab -l 2>/dev/null > "$TEMP_CRON" || true
+    
+    # Add new cron job
+    echo "0 2 * * * /usr/local/bin/proxmox-backup >/dev/null 2>&1" >> "$TEMP_CRON"
+    
+    # Install new crontab
+    crontab "$TEMP_CRON"
+    
+    # Clean up
+    rm -f "$TEMP_CRON"
     
     print_success "Cron job added for daily backups at 2 AM"
 }
