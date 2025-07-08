@@ -1396,26 +1396,30 @@ initialize_backup() {
     
     info "Created local directories: $LOCAL_BACKUP_PATH and $LOCAL_LOG_PATH"
     
-    # Create secondary backup directories if configured and parent exists
-    if [ -n "$SECONDARY_BACKUP_PATH" ] && [ -n "$SECONDARY_LOG_PATH" ]; then
-        # Sanitize secondary paths
-        SECONDARY_BACKUP_PATH=$(sanitize_input "$SECONDARY_BACKUP_PATH")
-        SECONDARY_LOG_PATH=$(sanitize_input "$SECONDARY_LOG_PATH")
-        
-        # Check if parent directory exists before attempting creation
-        if [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
-            if retry_operation 2 "mkdir -p '$SECONDARY_BACKUP_PATH' '$SECONDARY_LOG_PATH'" "create secondary directories"; then
-                info "Created secondary directories: $SECONDARY_BACKUP_PATH and $SECONDARY_LOG_PATH"
+    # Create secondary backup directories if secondary backup is enabled and configured
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ]; then
+        if [ -n "$SECONDARY_BACKUP_PATH" ] && [ -n "$SECONDARY_LOG_PATH" ]; then
+            # Sanitize secondary paths
+            SECONDARY_BACKUP_PATH=$(sanitize_input "$SECONDARY_BACKUP_PATH")
+            SECONDARY_LOG_PATH=$(sanitize_input "$SECONDARY_LOG_PATH")
+            
+            # Check if parent directory exists before attempting creation
+            if [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
+                if retry_operation 2 "mkdir -p '$SECONDARY_BACKUP_PATH' '$SECONDARY_LOG_PATH'" "create secondary directories"; then
+                    info "Created secondary directories: $SECONDARY_BACKUP_PATH and $SECONDARY_LOG_PATH"
+                else
+                    warning "Failed to create secondary directories. Secondary backup may fail."
+                    set_exit_code "warning"
+                fi
             else
-                warning "Failed to create secondary directories. Secondary backup may fail."
-                set_exit_code "warning"
+                warning "Secondary backup parent directory doesn't exist: $(dirname "$SECONDARY_BACKUP_PATH")"
+                warning "Secondary backup will be disabled for this session"
             fi
         else
-            warning "Secondary backup parent directory doesn't exist: $(dirname "$SECONDARY_BACKUP_PATH")"
-            warning "Secondary backup will be disabled for this session"
+            debug "Secondary backup paths not configured, skipping secondary directory creation"
         fi
     else
-        debug "Secondary backup paths not configured, skipping secondary directory creation"
+        debug "Secondary backup is disabled, skipping secondary directory creation"
     fi
     
     # Set up log file with sanitized components

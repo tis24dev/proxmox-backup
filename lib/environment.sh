@@ -382,13 +382,19 @@ setup_dirs() {
         exit 1
     }
     
-    # Create secondary backup directories if parent directory exists
-    if [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
-        mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" || {
-            warning "Failed to create secondary directories. Secondary backup may fail."
-        }
+    # Create secondary backup directories if secondary backup is enabled and parent directory exists
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ]; then
+        if [ -n "$SECONDARY_BACKUP_PATH" ] && [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
+            mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" || {
+                warning "Failed to create secondary directories. Secondary backup may fail."
+            }
+        elif [ -n "$SECONDARY_BACKUP_PATH" ]; then
+            warning "Secondary backup parent directory doesn't exist. Secondary backup may fail."
+        else
+            debug "Secondary backup path not configured, skipping secondary directory creation"
+        fi
     else
-        warning "Secondary backup parent directory doesn't exist. Secondary backup may fail."
+        debug "Secondary backup is disabled, skipping secondary directory creation"
     fi
     
     # Set up temporary directory using a predictable naming pattern
