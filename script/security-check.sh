@@ -709,13 +709,13 @@ check_suspicious_processes() {
 update_script_hashes() {
     log_step "Updating MD5 hashes of scripts" 
     
+    # File critici per aggiornamento hash
     local script_files=(
         "$BASE_DIR/script/proxmox-backup.sh"
         "$BASE_DIR/script/fix-permissions.sh"
 		"$BASE_DIR/script/server-id-manager.sh"
         "$BASE_DIR/script/security-check.sh"
         "$BASE_DIR/secure_account/setup_gdrive.sh"
-        "$BASE_DIR/secure_account/pbs1.json"
         "$BASE_DIR/lib/backup_collect.sh"
         "$BASE_DIR/lib/backup_collect_pbspve.sh"
         "$BASE_DIR/lib/backup_create.sh"
@@ -731,9 +731,16 @@ update_script_hashes() {
         "$BASE_DIR/lib/metrics_collect.sh"
     )
     
+    # File opzionali per aggiornamento hash (solo se esistono)
+    local optional_script_files=(
+        "$BASE_DIR/secure_account/pbs1.json"
+        "$BASE_DIR/config/.server_identity"
+    )
+    
+    # Gestisci file critici
     for script in "${script_files[@]}"; do
         if [ ! -f "$script" ]; then
-            log_warning "Script not found: $script"
+            log_warning "Critical script not found: $script"
             continue
         fi
         
@@ -743,7 +750,7 @@ update_script_hashes() {
         if [ -f "$hash_file" ]; then
             local stored_hash=$(cat "$hash_file")
             if [ "$current_hash" != "$stored_hash" ]; then
-                log_warning "Script $script has been modified!"
+                log_warning "Critical script $script has been modified!"
                 log_info "Original hash: $stored_hash"
                 log_info "Current hash: $current_hash"
                 
@@ -761,13 +768,54 @@ update_script_hashes() {
                     fi
                 fi
             else
-                log_info "Hash OK for $script"
+                log_info "Hash OK for critical script: $script"
             fi
         else
             echo "$current_hash" > "$hash_file"
             chmod 600 "$hash_file"
             chown root:root "$hash_file"
-            log_info "Created initial hash file for $script"
+            log_info "Created initial hash file for critical script: $script"
+        fi
+    done
+    
+    # Gestisci file opzionali (solo se esistono)
+    for script in "${optional_script_files[@]}"; do
+        if [ ! -f "$script" ]; then
+            log_info "Optional configuration file not found: $script (skipping hash check)"
+            continue
+        fi
+        
+        local hash_file="${script}.md5"
+        local current_hash=$(md5sum "$script" | awk '{print $1}')
+        
+        if [ -f "$hash_file" ]; then
+            local stored_hash=$(cat "$hash_file")
+            if [ "$current_hash" != "$stored_hash" ]; then
+                log_info "Optional file $script has been modified"
+                log_info "Original hash: $stored_hash"
+                log_info "Current hash: $current_hash"
+                
+                if [ "$AUTO_UPDATE_HASHES" = "true" ]; then
+                    echo "$current_hash" > "$hash_file"
+                    log_info "Hash automatically updated for optional file: $script"
+                else
+                    read -p "Update hash for optional file? (y/n): " -n 1 -r
+                    echo
+                    if [[ $REPLY =~ ^[Yy]$ ]]; then
+                        echo "$current_hash" > "$hash_file"
+                        log_info "Hash updated for optional file: $script"
+                    else
+                        log_info "Hash not updated for optional file: $script"
+                    fi
+                fi
+            else
+                log_info "Hash OK for optional file: $script"
+            fi
+        else
+            echo "$current_hash" > "$hash_file"
+            chmod 600 "$hash_file"
+            chown root:root "$hash_file"
+            log_info "Created initial hash file for optional file: $script"
         fi
     done
     log_success "MD5 hash update completed"
