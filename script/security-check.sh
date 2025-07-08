@@ -408,13 +408,12 @@ check_directory_structure() {
 check_critical_files() {
     log_step "Checking critical files"
     
-    declare -A files=(
+    # File critici che devono sempre esistere
+    declare -A critical_files=(
         ["$BASE_DIR/script/proxmox-backup.sh"]="700:root:root"
-		["$BASE_DIR/config/.server_identity"]="600:root:root"
 		["$BASE_DIR/script/server-id-manager.sh"]="700:root:root"
         ["$BASE_DIR/script/fix-permissions.sh"]="700:root:root"
         ["$BASE_DIR/env/backup.env"]="400:root:root"
-        ["$BASE_DIR/secure_account/pbs1.json"]="400:root:root"
         ["$BASE_DIR/secure_account/setup_gdrive.sh"]="700:root:root"
 		["$BASE_DIR/lib/backup_collect.sh"]="400:root:root"
 		["$BASE_DIR/lib/backup_collect_pbspve.sh"]="400:root:root"
@@ -433,17 +432,24 @@ check_critical_files() {
         ["$BASE_DIR/lib/metrics_collect.sh"]="400:root:root"
     )
     
+    # File opzionali di configurazione
+    declare -A optional_files=(
+        ["$BASE_DIR/config/.server_identity"]="600:root:root"
+        ["$BASE_DIR/secure_account/pbs1.json"]="400:root:root"
+    )
+    
     local missing=0
     local wrong_perms=0
     
-    for file in "${!files[@]}"; do
+    # Controllo file critici
+    for file in "${!critical_files[@]}"; do
         if [ ! -f "$file" ]; then
             log_error "Critical file missing: $file"
             missing=$((missing + 1))
             continue
         fi
         
-        IFS=':' read -r expected_perm expected_owner expected_group <<< "${files[$file]}"
+        IFS=':' read -r expected_perm expected_owner expected_group <<< "${critical_files[$file]}"
         
         local file_perm=$(stat -c '%a' "$file")
         if [ "$file_perm" != "$expected_perm" ]; then
@@ -464,20 +470,53 @@ check_critical_files() {
         fi
         
         if [ "$file_perm" == "$expected_perm" ] && [ "$file_owner" == "$expected_owner" ] && [ "$file_group" == "$expected_group" ]; then
-            log_info "File OK: $file"
+            log_info "Critical file OK: $file"
+        fi
+    done
+    
+    # Controllo file opzionali (solo warning informativi)
+    log_step "Checking optional configuration files"
+    for file in "${!optional_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            log_info "Optional configuration file not found: $file (this is normal if not configured)"
+            continue
+        fi
+        
+        IFS=':' read -r expected_perm expected_owner expected_group <<< "${optional_files[$file]}"
+        
+        local file_perm=$(stat -c '%a' "$file")
+        if [ "$file_perm" != "$expected_perm" ]; then
+            log_warning "Incorrect permissions on optional file $file. Expected: $expected_perm, Found: $file_perm"
+            wrong_perms=$((wrong_perms + 1))
+        fi
+        
+        local file_owner=$(stat -c '%U' "$file")
+        if [ "$file_owner" != "$expected_owner" ]; then
+            log_warning "Incorrect owner on optional file $file. Expected: $expected_owner, Found: $file_owner"
+            wrong_perms=$((wrong_perms + 1))
+        fi
+        
+        local file_group=$(stat -c '%G' "$file")
+        if [ "$file_group" != "$expected_group" ]; then
+            log_warning "Incorrect group on optional file $file. Expected: $expected_group, Found: $file_group"
+            wrong_perms=$((wrong_perms + 1))
+        fi
+        
+        if [ "$file_perm" == "$expected_perm" ] && [ "$file_owner" == "$expected_owner" ] && [ "$file_group" == "$expected_group" ]; then
+            log_info "Optional file OK: $file"
         fi
     done
     
     if [ $missing -gt 0 ]; then
-        log_warning "$missing critical files missing."
+        log_error "$missing critical files missing."
     else
         log_success "All critical files are present!"
     fi
     
     if [ $wrong_perms -gt 0 ]; then
-        log_warning "$wrong_perms incorrect permissions or owners. Fix with chmod and chown."
+        log_warning "$wrong_perms files with incorrect permissions or owners. Fix with chmod and chown or run fix-permissions.sh"
     else
-        log_success "All permissions and owners are correct!"
+        log_success "All file permissions and owners are correct!"
     fi
 }
 
