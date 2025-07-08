@@ -222,6 +222,12 @@ LOCAL_LOG_PATH="${BASE_DIR}/log/"
 MAX_LOCAL_BACKUPS=20
 MAX_LOCAL_LOGS=20
 
+# Secondary Backup Configuration - DISABLED BY DEFAULT
+ENABLE_SECONDARY_BACKUP="false"
+ENABLE_LOG_MANAGEMENT="true"
+SECONDARY_BACKUP_PATH="/mnt/backup-secondary"
+SECONDARY_LOG_PATH="/mnt/backup-secondary/log"
+
 # Compression
 COMPRESSION_TYPE="xz"
 COMPRESSION_LEVEL="9"

@@ -17,7 +17,7 @@ _cloud_backup_enabled=""
 # Helper function to check if secondary backup is enabled
 is_secondary_backup_enabled() {
     if [ -z "$_secondary_backup_enabled" ]; then
-        _secondary_backup_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "true" || echo "false")
+        _secondary_backup_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "true" || echo "false")
     fi
     [ "$_secondary_backup_enabled" = "true" ]
 }
@@ -63,6 +63,13 @@ copy_to_secondary() {
         set_exit_code "warning"
         set_backup_status "secondary_copy" $EXIT_WARNING
         return $EXIT_WARNING
+    fi
+    
+    # Check if secondary backup is enabled
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" != "true" ]; then
+        debug "Secondary backup is disabled, skipping directory creation and copy"
+        set_backup_status "secondary_copy" $EXIT_SUCCESS
+        return $EXIT_SUCCESS
     fi
     
     mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>/dev/null || {
@@ -932,14 +939,16 @@ set_permissions() {
         fi
     fi
     
-    # Create the secondary backup path if it doesn't exist
-    if ! mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>/dev/null; then
-        warning "Failed to create secondary backup paths: $SECONDARY_BACKUP_PATH"
-        set_exit_code "warning"
+    # Create the secondary backup path if secondary backup is enabled
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
+        if ! mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>/dev/null; then
+            warning "Failed to create secondary backup paths: $SECONDARY_BACKUP_PATH"
+            set_exit_code "warning"
+        fi
     fi
     
-    # Set permissions on secondary backup path if it exists
-    if check_directory_exists "$SECONDARY_BACKUP_PATH"; then
+    # Set permissions on secondary backup path if it exists and secondary backup is enabled
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && check_directory_exists "$SECONDARY_BACKUP_PATH"; then
         if id -u "${BACKUP_USER}" &>/dev/null && getent group "${BACKUP_GROUP}" &>/dev/null; then
             debug "Setting ownership of $SECONDARY_BACKUP_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
             if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$SECONDARY_BACKUP_PATH"; then

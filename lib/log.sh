@@ -213,7 +213,7 @@ is_cloud_backup_enabled() {
 # Helper function to check if secondary backup is enabled
 is_secondary_backup_enabled() {
     if [ -z "$_secondary_backup_enabled" ]; then
-        _secondary_backup_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "true" || echo "false")
+        _secondary_backup_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "true" || echo "false")
     fi
     [ "$_secondary_backup_enabled" = "true" ]
 }

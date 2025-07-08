@@ -1335,7 +1335,7 @@ get_status_emoji() {
         echo "EXIT_BACKUP_ROTATION_SECONDARY = ${EXIT_BACKUP_ROTATION_SECONDARY:-not defined}" >> "$EMOJI_LOG_FILE"
 
         # Calculate secondary backup emoji
-        local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "TRUE" || echo "FALSE")
+        local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "TRUE" || echo "FALSE")
         
         # NEW LOGIC: If primary backup failed, secondary must also be ERROR
         if [ "$EMOJI_BACKUP_PRIMARIO" = "$EMOJI_ERROR" ]; then
@@ -1435,7 +1435,7 @@ get_status_emoji() {
         if [ "${ENABLE_LOG_MANAGEMENT:-true}" != "true" ]; then
             EMOJI_LOG_SECONDARIO="$EMOJI_DISABLED"
         else
-            local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "TRUE" || echo "FALSE")
+            local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "TRUE" || echo "FALSE")
             if [ "$secondary_enabled" = "FALSE" ]; then
                 EMOJI_LOG_SECONDARIO="$EMOJI_DISABLED"
             else
@@ -1529,7 +1529,7 @@ get_status_emoji() {
         fi
 
         # SECONDARY BACKUP
-        local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "TRUE" || echo "FALSE")
+        local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "TRUE" || echo "FALSE")
         
         # NEW LOGIC: If primary backup failed, secondary must also be ERROR
         if [ "$EMOJI_BACKUP_PRIMARIO" = "$EMOJI_ERROR" ]; then
@@ -1600,7 +1600,7 @@ get_status_emoji() {
         if [ "${ENABLE_LOG_MANAGEMENT:-true}" != "true" ]; then
             EMOJI_LOG_SECONDARIO="$EMOJI_DISABLED"
         else
-            local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "TRUE" || echo "FALSE")
+            local secondary_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "TRUE" || echo "FALSE")
             if [ "$secondary_enabled" = "FALSE" ]; then
                 EMOJI_LOG_SECONDARIO="$EMOJI_DISABLED"
             else

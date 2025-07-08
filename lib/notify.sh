@@ -116,7 +116,7 @@ build_telegram_message() {
     local secondario_space=""
     
     # Controlla sia che la directory esista sia che il backup secondario sia abilitato
-    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         secondario_space=$(df -h "$SECONDARY_BACKUP_PATH" | tail -1 | awk '{print $4}')
     fi
     
@@ -296,7 +296,7 @@ prepare_email_data() {
     secondary_free="N/A"
     
     # Controlla sia che la directory esista sia che il backup secondario sia abilitato
-    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         local df_output=$(df -h "$SECONDARY_BACKUP_PATH" | tail -1)
         secondary_space=$(echo "$df_output" | awk '{print $2}')
         secondary_used=$(echo "$df_output" | awk '{print $3}')
@@ -643,7 +643,7 @@ create_email_body() {
                     </tr>"
     
     # Aggiungi percorso secondario se configurato
-    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         email_body+="
                     <tr>
                         <td>Secondary Path</td>
