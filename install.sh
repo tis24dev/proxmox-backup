@@ -282,17 +282,25 @@ set_permissions() {
     print_success "Permissions set correctly"
 }
 
+# Function to fix permissions
+run_fix_permissions() {
+    print_status "Fixing file permissions..."
+    
+    cd "$INSTALL_DIR"
+    
+    if [[ -f "script/fix-permissions.sh" ]]; then
+        ./script/fix-permissions.sh
+        print_success "Permissions fixed"
+    else
+        print_warning "Fix permissions script not found, skipping"
+    fi
+}
+
 # Function to run security check
 run_security_check() {
     print_status "Running security check..."
     
     cd "$INSTALL_DIR"
-    
-    # Fix permissions first
-    if [[ -f "script/fix-permissions.sh" ]]; then
-        print_status "Fixing permissions before security check..."
-        ./script/fix-permissions.sh
-    fi
     
     if [[ -f "script/security-check.sh" ]]; then
         if ./script/security-check.sh; then
@@ -397,6 +405,7 @@ main() {
     clone_repository
     setup_configuration
     set_permissions
+    run_fix_permissions
     run_security_check
     setup_cron
     create_symlinks
