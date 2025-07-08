@@ -94,6 +94,8 @@ fix_script_permissions() {
     local scripts=(
         "$BASE_DIR/script/proxmox-backup.sh"
         "$BASE_DIR/script/security-check.sh"
+        "$BASE_DIR/script/server-id-manager.sh"
+        "$BASE_DIR/script/fix-permissions.sh"
         "$BASE_DIR/secure_account/setup_gdrive.sh"
     )
     
@@ -124,6 +126,7 @@ fix_config_permissions() {
         "$BASE_DIR/env/backup.env"
         "$BASE_DIR/secure_account/pbs1.json"
         "$BASE_DIR/lib/backup_collect.sh"
+        "$BASE_DIR/lib/backup_collect_pbspve.sh"
         "$BASE_DIR/lib/backup_create.sh"
         "$BASE_DIR/lib/backup_manager.sh"
         "$BASE_DIR/lib/backup_verify.sh"
@@ -131,6 +134,7 @@ fix_config_permissions() {
         "$BASE_DIR/lib/environment.sh"
         "$BASE_DIR/lib/log.sh"
         "$BASE_DIR/lib/metrics.sh"
+        "$BASE_DIR/lib/metrics_collect.sh"
         "$BASE_DIR/lib/notify.sh"
         "$BASE_DIR/lib/security.sh"
         "$BASE_DIR/lib/storage.sh"
