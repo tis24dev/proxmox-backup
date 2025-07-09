@@ -183,30 +183,34 @@ perform_backup() {
     
     # Collect appropriate configuration based on Proxmox type
     if [ "$PROXMOX_TYPE" == "pve" ]; then
-        local pve_result
-        pve_result=$(collect_pve_configs; echo $?)
-        if [ "$pve_result" -eq "$EXIT_ERROR" ]; then
-            error "Failed to collect PVE configurations"
-            set_exit_code "error"
-            return $EXIT_ERROR
-        elif [ "$pve_result" -eq "$EXIT_WARNING" ]; then
-            warning "PVE configurations collected with warnings (datastore issues are non-critical)"
-            set_exit_code "warning"
-        else
+        # Call function and handle different exit codes properly
+        if collect_pve_configs; then
             info "PVE configurations collected successfully"
+        else
+            local pve_result=$?
+            if [ "$pve_result" -eq "$EXIT_WARNING" ]; then
+                warning "PVE configurations collected with warnings (datastore issues are non-critical)"
+                set_exit_code "warning"
+            else
+                error "Failed to collect PVE configurations"
+                set_exit_code "error"
+                return $EXIT_ERROR
+            fi
         fi
     elif [ "$PROXMOX_TYPE" == "pbs" ]; then
-        local pbs_result
-        pbs_result=$(collect_pbs_configs; echo $?)
-        if [ "$pbs_result" -eq "$EXIT_ERROR" ]; then
-            error "Failed to collect PBS configurations"
-            set_exit_code "error"
-            return $EXIT_ERROR
-        elif [ "$pbs_result" -eq "$EXIT_WARNING" ]; then
-            warning "PBS configurations collected with warnings (datastore issues are non-critical)"
-            set_exit_code "warning"
-        else
+        # Call function and handle different exit codes properly
+        if collect_pbs_configs; then
             info "PBS configurations collected successfully"
+        else
+            local pbs_result=$?
+            if [ "$pbs_result" -eq "$EXIT_WARNING" ]; then
+                warning "PBS configurations collected with warnings (datastore issues are non-critical)"
+                set_exit_code "warning"
+            else
+                error "Failed to collect PBS configurations"
+                set_exit_code "error"
+                return $EXIT_ERROR
+            fi
         fi
     else
         error "Unknown Proxmox type: $PROXMOX_TYPE"
