@@ -383,6 +383,10 @@ _TEST_CLOUD_CONNECTIVITY() {
         return 1
     fi
     
+    # Test rclone configuration (this will show NOTICE messages if config file is missing)
+    debug "Checking rclone configuration..."
+    rclone_with_labels listremotes >/dev/null
+    
     # Check if remote is configured
     if [ -z "${RCLONE_REMOTE:-}" ]; then
         warning "Cloud backup is enabled but RCLONE_REMOTE not configured in backup.env"
