@@ -1412,7 +1412,7 @@ upload_logs_to_cloud() {
     fi
     
     # Check if the configured remote exists
-    if ! rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
+    if ! rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
         warning "rclone remote '${RCLONE_REMOTE}' not configured, skipping cloud upload"
         warning "Configure rclone remote with: rclone config"
         set_backup_status "log_cloud_upload" $EXIT_WARNING

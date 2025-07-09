@@ -551,7 +551,7 @@ verify_backup_consistency() {
     
     # Verify cloud backup
     if [ "$cloud_enabled" == "true" ] && command -v rclone >/dev/null 2>&1 && 
-               [ -n "${RCLONE_REMOTE:-}" ] && rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
+       [ -n "${RCLONE_REMOTE:-}" ] && rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
         
         local cloud_backup="${CLOUD_BACKUP_PATH}/$(basename "$BACKUP_FILE")"
         local temp_hash

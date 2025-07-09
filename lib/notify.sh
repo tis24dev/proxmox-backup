@@ -652,7 +652,7 @@ create_email_body() {
     fi
     
     # Aggiungi percorso cloud se configurato
-    if command -v rclone &> /dev/null && [ -n "${RCLONE_REMOTE:-}" ] && rclone_with_labels listremotes | grep -q "^${RCLONE_REMOTE}:"; then
+    if command -v rclone &> /dev/null && [ -n "${RCLONE_REMOTE:-}" ] && rclone listremotes | grep -q "^${RCLONE_REMOTE}:"; then
         email_body+="
                     <tr>
                         <td>Cloud Storage</td>
