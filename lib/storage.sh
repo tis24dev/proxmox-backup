@@ -176,23 +176,9 @@ upload_backup_file_async() {
     debug "Starting backup file upload to cloud storage"
     
     if timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=10s --stats-one-line 2>&1 | while read -r line; do
-        # Standardize rclone log messages to our logging format
-        if [[ "$line" =~ NOTICE: ]]; then
-            # Extract the message part after "NOTICE: "
-            local notice_msg="${line#*NOTICE: }"
-            warning "Rclone: $notice_msg"
-        elif [[ "$line" =~ ERROR: ]]; then
-            # Extract the message part after "ERROR: "
-            local error_msg="${line#*ERROR: }"
-            error "Rclone: $error_msg"
-        elif [[ "$line" =~ WARN: ]]; then
-            # Extract the message part after "WARN: "
-            local warn_msg="${line#*WARN: }"
-            warning "Rclone: $warn_msg"
-        elif [[ "$line" =~ INFO: ]]; then
-            # Extract the message part after "INFO: "
-            local info_msg="${line#*INFO: }"
-            info "Rclone: $info_msg"
+        # Convert rclone NOTICE messages to WARNING for consistency
+        if [[ "$line" =~ ^[0-9/: ]+NOTICE:.*Config\ file.*not\ found ]]; then
+            warning "Rclone configuration: ${line#*NOTICE: }"
         else
             debug "Backup upload progress: $line"
         fi
@@ -521,23 +507,9 @@ upload_to_cloud() {
         
         # Upload with progress (stats every 5s)
         if ! { set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
-                # Standardize rclone log messages to our logging format
-                if [[ "$line" =~ NOTICE: ]]; then
-                    # Extract the message part after "NOTICE: "
-                    local notice_msg="${line#*NOTICE: }"
-                    warning "Rclone: $notice_msg"
-                elif [[ "$line" =~ ERROR: ]]; then
-                    # Extract the message part after "ERROR: "
-                    local error_msg="${line#*ERROR: }"
-                    error "Rclone: $error_msg"
-                elif [[ "$line" =~ WARN: ]]; then
-                    # Extract the message part after "WARN: "
-                    local warn_msg="${line#*WARN: }"
-                    warning "Rclone: $warn_msg"
-                elif [[ "$line" =~ INFO: ]]; then
-                    # Extract the message part after "INFO: "
-                    local info_msg="${line#*INFO: }"
-                    info "Rclone: $info_msg"
+                # Convert rclone NOTICE messages to WARNING for consistency
+                if [[ "$line" =~ ^[0-9/: ]+NOTICE:.*Config\ file.*not\ found ]]; then
+                    warning "Rclone configuration: ${line#*NOTICE: }"
                 else
                     debug "Progress: $line"
                 fi
