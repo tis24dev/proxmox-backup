@@ -72,8 +72,221 @@ Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Bac
 
 ---
 
+## 🚀 Installation
+
+### Prerequisites
+- **Bash 4.4+** (included in all modern distributions)
+- **Proxmox VE** or **Proxmox Backup Server**
+- **Root access** (required for system configuration)
+- **Internet connection** (for dependency installation and cloud backup)
+
+### Installation Methods
+
+#### 🔄 **Method 1: Update Installation (Recommended)**
+*Preserves existing configuration, backups, and settings*
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+```
+
+**Features:**
+- ✅ **Preserves configuration** (`backup.env`) with all your custom settings
+- ✅ **Preserves server identity** (`.server_identity`) maintaining backup continuity
+- ✅ **Preserves existing backups** and logs in their original locations
+- ✅ **Preserves security settings** (`secure_account/`) including credentials
+- ✅ **Updates code only** while maintaining all data and configurations
+- ✅ **Safe update process** with automatic rollback on errors
+
+**When to use:**
+- For updating existing installations
+- When you want to preserve your current configuration
+- For regular maintenance and security updates
+- When you have important backups and logs to maintain
+
+#### 🆕 **Method 2: Fresh Installation**
+*Completely removes existing installation and starts fresh*
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+```
+
+**⚠️ CRITICAL WARNING:**
+This method will **COMPLETELY REMOVE**:
+- ❌ **All configuration files** (including `backup.env`)
+- ❌ **Server identity** (new backups will have different identity)
+- ❌ **All existing backups** and logs
+- ❌ **All security settings** and credentials
+- ❌ **Everything** in `/opt/proxmox-backup/`
+
+**Safety measures:**
+- Requires typing `REMOVE-EVERYTHING` to confirm
+- Shows detailed warning of what will be removed
+- Removes cron jobs and system symlinks
+- Forces removal of protected files
+- Automatic cleanup of temporary files
+
+**When to use:**
+- For completely new installations
+- When you want to start with default settings
+- For troubleshooting corrupted installations
+- When moving to a new server identity
+
+#### 📥 **Method 3: Manual Installation**
+*For developers or advanced users*
+
+```bash
+# Clone repository
+git clone https://github.com/tis24dev/proxmox-backup.git
+cd proxmox-backup
+
+# Configure system
+cp env/backup.env.example env/backup.env
+nano env/backup.env
+
+# Set permissions
+chmod +x script/*.sh
+chmod +x lib/*.sh
+chmod 600 env/backup.env
+
+# Create directories
+mkdir -p backup log config secure_account
+
+# First run (dry-run recommended)
+./script/proxmox-backup.sh --dry-run
+```
+
+### Post-Installation Steps
+
+#### 1. **Configuration**
+```bash
+# Edit main configuration file
+nano /opt/proxmox-backup/env/backup.env
+
+# Key settings to configure:
+# - Storage paths (LOCAL_BACKUP_PATH, SECONDARY_BACKUP_PATH)
+# - Compression settings (COMPRESSION_TYPE, COMPRESSION_LEVEL)
+# - Cloud backup (ENABLE_CLOUD_BACKUP, RCLONE_REMOTE)
+# - Notifications (TELEGRAM_ENABLED, EMAIL_ENABLED)
+```
+
+#### 2. **Telegram Setup (Optional)**
+```bash
+# Quick Telegram activation (10 seconds)
+proxmox-backup --telegram-setup
+
+# Manual Telegram setup
+# 1. Contact @ProxmoxAN_bot on Telegram
+# 2. Insert your unique server code
+# 3. Verify connection
+```
+
+#### 3. **Test Configuration**
+```bash
+# Test configuration without making changes
+proxmox-backup --dry-run
+
+# Run security checks
+proxmox-backup-security
+
+# Fix any permission issues
+proxmox-backup-permissions
+```
+
+#### 4. **First Backup**
+```bash
+# Run first backup
+proxmox-backup
+
+# Check logs
+tail -f /opt/proxmox-backup/log/*.log
+```
+
+#### 5. **Automated Scheduling**
+The installer automatically creates a cron job for daily backups at 2 AM.
+
+```bash
+# View current cron job
+crontab -l | grep proxmox-backup
+
+# Modify schedule (optional)
+crontab -e
+# Example: 0 2 * * * /usr/local/bin/proxmox-backup >/dev/null 2>&1
+```
+
+### System Commands
+
+After installation, these commands are available system-wide:
+
+```bash
+# Main backup command
+proxmox-backup                 # Run backup
+proxmox-backup --dry-run       # Test mode
+proxmox-backup --verbose       # Detailed output
+proxmox-backup --check-only    # Check configuration only
+
+# Utility commands
+proxmox-backup-security        # Security checks
+proxmox-backup-permissions     # Fix permissions
+```
+
+### Directory Structure After Installation
+
+```
+/opt/proxmox-backup/
+├── backup/                    # Generated backups
+├── log/                       # System logs
+├── config/                    # System configuration
+│   └── .server_identity       # Unique server identity
+├── env/                       # Main configuration
+│   └── backup.env            # Configuration file
+├── secure_account/            # Secure credentials
+├── script/                    # Executable scripts
+└── lib/                       # System libraries
+```
+
+### Troubleshooting Installation
+
+#### Common Issues
+
+1. **Permission Errors**
+   ```bash
+   # Fix permissions
+   proxmox-backup-permissions
+   
+   # Manual fix
+   chown -R root:root /opt/proxmox-backup
+   chmod +x /opt/proxmox-backup/script/*.sh
+   ```
+
+2. **Missing Dependencies**
+   ```bash
+   # Enable automatic installation
+   echo 'INSTALL_PACKAGES="true"' >> /opt/proxmox-backup/env/backup.env
+   ```
+
+3. **Configuration Errors**
+   ```bash
+   # Validate configuration
+   proxmox-backup --check-only
+   
+   # Reset to defaults
+   cp /opt/proxmox-backup/env/backup.env.example /opt/proxmox-backup/env/backup.env
+   ```
+
+4. **Network Issues**
+   ```bash
+   # Test connectivity
+   proxmox-backup --dry-run
+   
+   # Check firewall
+   proxmox-backup-security
+   ```
+
+---
+
 ## 📑 Table of Contents
 
+  - [🚀 Installation](#-installation)
   - [1. Overview](#1-overview)
   - [2. Project Structure](#2-project-structure)
   - [3. Architecture and Functions](#3-architecture-and-functions)

@@ -43,10 +43,40 @@
 - **Proxmox VE** or **Proxmox Backup Server**
 - **rclone** (for cloud backups, automatic installation available)
 
-### Installation
+### Installation Options
+
+#### 🔄 **Update Installation (Recommended)**
+*Preserves existing configuration, backups, and settings*
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+```
+
+**What is preserved:**
+- ✅ Configuration file (`backup.env`)
+- ✅ Server identity and security settings
+- ✅ Existing backups and logs
+- ✅ Custom configurations and credentials
+
+#### 🆕 **Fresh Installation**
+*Completely removes existing installation and starts fresh*
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+```
+
+**⚠️ Warning:** This will remove ALL existing data including:
+- ❌ Configuration files
+- ❌ Backups and logs
+- ❌ Server identity
+- ❌ All custom settings
+
+*Requires typing `REMOVE-EVERYTHING` to confirm*
+
+#### 📥 **Manual Installation**
 ```bash
 # Clone the repository
-git clone https://github.com/tuo-username/proxmox-backup.git
+git clone https://github.com/tis24dev/proxmox-backup.git
 cd proxmox-backup
 
 # Configure the system
@@ -75,11 +105,33 @@ The system uses a main configuration file (`env/backup.env`) with over **90 conf
 - **Users and permissions**
 - **Custom configurations**
 
-### Telegram Configuration (10 seconds)
+### Quick Setup After Installation
+
+#### System-wide Commands
 ```bash
-# Activate Telegram notifications in 10 seconds
-./script/proxmox-backup.sh --telegram-setup
+# Quick Telegram setup (10 seconds)
+proxmox-backup --telegram-setup
+
+# Test configuration
+proxmox-backup --dry-run
+
+# First backup
+proxmox-backup
 ```
+
+#### Installation Method Selection Guide
+
+**Choose Update Installation if:**
+- ✅ You have an existing installation
+- ✅ You want to preserve your configuration
+- ✅ You have important backups to maintain
+- ✅ You're doing regular updates
+
+**Choose Fresh Installation if:**
+- ❌ You want to start completely from scratch
+- ❌ You're troubleshooting a corrupted installation
+- ❌ You're moving to a new server identity
+- ❌ You don't mind losing existing data
 
 ## 📊 Project Structure
 
@@ -101,23 +153,34 @@ proxmox-backup/
 
 ## 🔧 Usage
 
-### Complete Backup
+### System Commands (After Installation)
 ```bash
+# Main backup command
+proxmox-backup                 # Run backup
+proxmox-backup --dry-run       # Test mode
+proxmox-backup --verbose       # Detailed output
+proxmox-backup --check-only    # Check configuration only
+
+# Utility commands
+proxmox-backup-security        # Security checks
+proxmox-backup-permissions     # Fix permissions
+```
+
+### Manual Usage (Development)
+```bash
+# Navigate to installation directory
+cd /opt/proxmox-backup
+
+# Complete backup
 ./script/proxmox-backup.sh
-```
 
-### Test Mode (Dry-run)
-```bash
+# Test mode (dry-run)
 ./script/proxmox-backup.sh --dry-run
-```
 
-### Security Checks
-```bash
+# Security checks
 ./script/security-check.sh
-```
 
-### Permission Management
-```bash
+# Permission management
 ./script/fix-permissions.sh
 ```
 
@@ -172,10 +235,29 @@ This project is distributed under the MIT license. See the `LICENSE` file for mo
 
 ## 📞 Support
 
-- **Complete documentation**: See `proxmox-backup/README.md`
-- **Detailed configuration**: See `proxmox-backup/CONFIGURATION.md`
+- **Complete documentation**: See `doc/README.md`
+- **Detailed configuration**: See `doc/CONFIGURATION.md`
 - **Issues**: Open an issue on GitHub for bugs or feature requests
 - **Discussions**: Use GitHub Discussions for general questions
+
+## 🔄 Quick Reference
+
+### Installation Commands
+```bash
+# Update (preserves data) - RECOMMENDED
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+
+# Fresh installation (removes everything)
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+```
+
+### System Commands
+```bash
+proxmox-backup                 # Run backup
+proxmox-backup --dry-run       # Test mode
+proxmox-backup-security        # Security checks
+proxmox-backup-permissions     # Fix permissions
+```
 
 ## ⭐ Stargazers
 
