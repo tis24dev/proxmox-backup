@@ -572,6 +572,13 @@ manage_backup_rotation() {
         return $EXIT_SUCCESS
     fi
     
+    # If it's secondary and secondary backup is disabled, skip rotation
+    if [ "$location" = "secondary" ] && ! is_secondary_backup_enabled; then
+        info "Secondary backup is disabled, skipping secondary backup rotation"
+        set_backup_status "rotation_secondary" $EXIT_SUCCESS
+        return $EXIT_SUCCESS
+    fi
+    
     # Use counts from unified counting system directly
     case "$location" in
         "primary")

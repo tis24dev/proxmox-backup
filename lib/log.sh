@@ -1500,6 +1500,13 @@ manage_log_rotation() {
         return $EXIT_SUCCESS
     fi
     
+    # Skip secondary rotation if secondary backup is disabled
+    if [ "$location" == "secondary" ] && ! is_secondary_backup_enabled; then
+        info "Secondary backup is disabled, skipping secondary log rotation"
+        set_backup_status "log_rotation_secondary" $EXIT_SUCCESS
+        return $EXIT_SUCCESS
+    fi
+    
     # For cloud, update count only if we need to check rotation
     if [ "$location" == "cloud" ] && [ -z "${COUNT_LOG_CLOUD:-}" ]; then
         debug "Updating cloud log count for rotation check"
