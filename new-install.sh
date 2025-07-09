@@ -172,7 +172,7 @@ run_fresh_installation() {
     print_status "Downloading and executing install.sh..."
     
     if curl -fsSL "$INSTALL_SCRIPT_URL" | bash; then
-        print_success "Fresh installation completed successfully!"
+        print_status "Base installation completed"
     else
         print_error "Fresh installation failed"
         exit 1
@@ -209,10 +209,20 @@ main() {
     run_fresh_installation
     
     echo
-    print_success "🎉 Fresh installation completed successfully!"
+    echo "========================================"
+    print_success "🎉 FRESH INSTALLATION COMPLETED 🎉"
+    echo "========================================"
     echo
     print_status "The system has been completely reinstalled with default settings."
-    print_status "Remember to reconfigure your backup.env file with your settings."
+    print_status "ALL previous data has been removed and the system is now clean."
+    echo
+    print_warning "⚠️  IMPORTANT: You must now reconfigure your backup.env file!"
+    print_status "Configuration file: /opt/proxmox-backup/env/backup.env"
+    echo
+    print_status "Next steps:"
+    print_status "1. Edit configuration: nano /opt/proxmox-backup/env/backup.env"
+    print_status "2. Test configuration: proxmox-backup --dry-run"
+    print_status "3. Run first backup: proxmox-backup"
     echo
 }
 
