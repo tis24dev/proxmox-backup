@@ -1446,7 +1446,7 @@ upload_logs_to_cloud() {
     # Upload con avanzamento (stats ogni 5s)
     if ! { set -o pipefail; rclone copy "$LOG_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
             # Convert rclone NOTICE messages to WARNING for consistency
-            if [[ "$line" =~ ^[0-9/: ]+NOTICE:.*Config\ file.*not\ found ]]; then
+            if [[ "$line" =~ NOTICE:.*Config.file.*not.found ]]; then
                 warning "Rclone configuration: ${line#*NOTICE: }"
             else
                 debug "Progress: $line"
