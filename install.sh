@@ -386,9 +386,9 @@ show_completion() {
     echo
     echo -e "${BOLD}${GREEN}Next steps:${RESET}"
     echo -e "1. ${CYAN}Edit configuration:${RESET} nano $INSTALL_DIR/env/backup.env"
-    echo -e "2. ${CYAN}Run first backup:${RESET} proxmox-backup"
-    echo -e "3. ${CYAN}Check logs:${RESET} tail -f $INSTALL_DIR/log/proxmox-backup.log"
-    echo -e "4. ${CYAN}Security check:${RESET} proxmox-backup-security"
+    echo -e "2. ${CYAN}Run first backup:${RESET} ./$INSTALL_DIR/script/proxmox-backup.sh"
+    echo -e "3. ${CYAN}Check logs:${RESET} tail -f $INSTALL_DIR/log/*.log"
+    echo -e "4. ${CYAN}Telegram:${RESET} Open bot @ProxmoxAN_bot and insert your unique code"
     echo
     echo -e "${BOLD}${YELLOW}Documentation:${RESET}"
     echo -e "- Complete docs: $INSTALL_DIR/doc/README.md"
