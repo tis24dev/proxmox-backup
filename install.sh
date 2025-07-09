@@ -507,10 +507,19 @@ show_completion() {
     echo -e "1. ${CYAN}Edit configuration:${RESET} nano $INSTALL_DIR/env/backup.env"
     echo -e "2. ${CYAN}Run first backup:${RESET} ./$INSTALL_DIR/script/proxmox-backup.sh"
     echo -e "3. ${CYAN}Check logs:${RESET} tail -f $INSTALL_DIR/log/*.log"
-    # Read unique code from .server_identity file
+    # Read and decode unique code from .server_identity file
     UNIQUE_CODE=""
     if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
-        UNIQUE_CODE=$(cat "$INSTALL_DIR/config/.server_identity" 2>/dev/null | tr -d '\n\r')
+        # Extract encoded data from the config-like format
+        local encoded=$(grep "SYSTEM_CONFIG_DATA=" "$INSTALL_DIR/config/.server_identity" 2>/dev/null | cut -d'"' -f2)
+        
+        if [[ -n "$encoded" ]]; then
+            # Decode from base64 and extract server_id (first field)
+            local decoded_data=$(echo "$encoded" | base64 -d 2>/dev/null)
+            if [[ -n "$decoded_data" ]]; then
+                UNIQUE_CODE=$(echo "$decoded_data" | cut -d':' -f1)
+            fi
+        fi
     fi
     
     if [[ -n "$UNIQUE_CODE" ]]; then
