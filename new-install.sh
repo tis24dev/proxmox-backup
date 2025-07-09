@@ -221,21 +221,19 @@ main() {
     echo
     print_status "Next steps:"
     print_status "1. Edit configuration: nano /opt/proxmox-backup/env/backup.env"
-    print_status "2. Run first backup: ./opt/proxmox-backup/script/proxmox-backup.sh"
-    print_status "3. Check logs: tail -f /opt/proxmox-backup/log/*.log"
-    print_status "4. Telegram: Open bot @ProxmoxAN_bot and insert your unique code"
+    print_status "2. Test configuration: proxmox-backup --dry-run"
+    print_status "3. Run first backup: proxmox-backup"
     
-    # Mostra il codice univoco del server
+    # Read unique code from .server_identity file
+    UNIQUE_CODE=""
     if [[ -f "/opt/proxmox-backup/config/.server_identity" ]]; then
-        # Funzione semplice per estrarre il server ID dal file protetto
-        local server_code=$(grep "SYSTEM_CONFIG_DATA=" "/opt/proxmox-backup/config/.server_identity" 2>/dev/null | cut -d'"' -f2 | base64 -d 2>/dev/null | cut -d':' -f1 2>/dev/null)
-        if [[ -n "$server_code" && ${#server_code} -eq 16 && "$server_code" =~ ^[0-9]{16}$ ]]; then
-            echo -e "   ${BOLD}${GREEN}Your unique code:${RESET} $server_code"
-        else
-            echo -e "   ${YELLOW}(Unique code will be shown after first run)${RESET}"
-        fi
+        UNIQUE_CODE=$(cat "/opt/proxmox-backup/config/.server_identity" 2>/dev/null | tr -d '\n\r')
+    fi
+    
+    if [[ -n "$UNIQUE_CODE" ]]; then
+        print_status "4. Telegram: Open bot @ProxmoxAN_bot and insert your unique code: $UNIQUE_CODE"
     else
-        echo -e "   ${YELLOW}(Unique code will be generated on first run)${RESET}"
+        print_status "4. Telegram: Open bot @ProxmoxAN_bot and insert your unique code"
     fi
     echo
 }

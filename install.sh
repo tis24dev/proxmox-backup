@@ -507,19 +507,16 @@ show_completion() {
     echo -e "1. ${CYAN}Edit configuration:${RESET} nano $INSTALL_DIR/env/backup.env"
     echo -e "2. ${CYAN}Run first backup:${RESET} ./$INSTALL_DIR/script/proxmox-backup.sh"
     echo -e "3. ${CYAN}Check logs:${RESET} tail -f $INSTALL_DIR/log/*.log"
-    echo -e "4. ${CYAN}Telegram:${RESET} Open bot @ProxmoxAN_bot and insert your unique code"
-    
-    # Mostra il codice univoco del server
+    # Read unique code from .server_identity file
+    UNIQUE_CODE=""
     if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
-        # Funzione semplice per estrarre il server ID dal file protetto
-        local server_code=$(grep "SYSTEM_CONFIG_DATA=" "$INSTALL_DIR/config/.server_identity" 2>/dev/null | cut -d'"' -f2 | base64 -d 2>/dev/null | cut -d':' -f1 2>/dev/null)
-        if [[ -n "$server_code" && ${#server_code} -eq 16 && "$server_code" =~ ^[0-9]{16}$ ]]; then
-            echo -e "   ${BOLD}${GREEN}Your unique code:${RESET} $server_code"
-        else
-            echo -e "   ${YELLOW}(Unique code will be shown after first run)${RESET}"
-        fi
+        UNIQUE_CODE=$(cat "$INSTALL_DIR/config/.server_identity" 2>/dev/null | tr -d '\n\r')
+    fi
+    
+    if [[ -n "$UNIQUE_CODE" ]]; then
+        echo -e "4. ${CYAN}Telegram:${RESET} Open bot @ProxmoxAN_bot and insert your unique code: ${BOLD}${YELLOW}$UNIQUE_CODE${RESET}"
     else
-        echo -e "   ${YELLOW}(Unique code will be generated on first run)${RESET}"
+        echo -e "4. ${CYAN}Telegram:${RESET} Open bot @ProxmoxAN_bot and insert your unique code"
     fi
     echo
     echo -e "${BOLD}${YELLOW}Documentation:${RESET}"
