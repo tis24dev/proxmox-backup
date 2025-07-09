@@ -508,6 +508,19 @@ show_completion() {
     echo -e "2. ${CYAN}Run first backup:${RESET} ./$INSTALL_DIR/script/proxmox-backup.sh"
     echo -e "3. ${CYAN}Check logs:${RESET} tail -f $INSTALL_DIR/log/*.log"
     echo -e "4. ${CYAN}Telegram:${RESET} Open bot @ProxmoxAN_bot and insert your unique code"
+    
+    # Mostra il codice univoco del server
+    if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
+        # Funzione semplice per estrarre il server ID dal file protetto
+        local server_code=$(grep "SYSTEM_CONFIG_DATA=" "$INSTALL_DIR/config/.server_identity" 2>/dev/null | cut -d'"' -f2 | base64 -d 2>/dev/null | cut -d':' -f1 2>/dev/null)
+        if [[ -n "$server_code" && ${#server_code} -eq 16 && "$server_code" =~ ^[0-9]{16}$ ]]; then
+            echo -e "   ${BOLD}${GREEN}Your unique code:${RESET} $server_code"
+        else
+            echo -e "   ${YELLOW}(Unique code will be shown after first run)${RESET}"
+        fi
+    else
+        echo -e "   ${YELLOW}(Unique code will be generated on first run)${RESET}"
+    fi
     echo
     echo -e "${BOLD}${YELLOW}Documentation:${RESET}"
     echo -e "- Complete docs: $INSTALL_DIR/doc/README.md"
