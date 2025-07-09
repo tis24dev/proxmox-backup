@@ -448,13 +448,10 @@ log() {
     local tag=""
     
     # Determine color and tag based on message content and level
-    # Special handling for specific message content
+    # Special handling for disabled/skipping messages
     if [[ "$message" == *"disabled"* ]] || [[ "$message" == *"skipping"* ]]; then
         color="${PINK:-}"
         tag="[SKIP]"
-    elif [[ "$message" == *"NOTICE"* ]]; then
-        color="${BLUE:-}"
-        tag="[INFO]"
     else
         # Standard level-based color and tag assignment
         case "$level" in
