@@ -185,11 +185,24 @@ safe_remove_installation() {
     # Remove installation directory completely after preserving files
     print_status "Removing installation directory completely..."
     
+    # Remove immutable attributes from protected files before deletion
+    if command -v chattr >/dev/null 2>&1; then
+        print_status "Removing immutable attributes from protected files..."
+        find "$INSTALL_DIR" -type f -exec chattr -i {} \; 2>/dev/null || true
+    fi
+    
     # Remove the entire installation directory
     if rm -rf "$INSTALL_DIR" 2>/dev/null; then
         print_success "Installation directory removed successfully"
     else
         print_warning "Could not remove installation directory completely, trying alternative method"
+        
+        # Try to remove immutable attributes again if first attempt failed
+        if command -v chattr >/dev/null 2>&1; then
+            print_status "Force removing immutable attributes..."
+            find "$INSTALL_DIR" -name ".server_identity" -exec chattr -i {} \; 2>/dev/null || true
+            find "$INSTALL_DIR" -type f -exec chattr -i {} \; 2>/dev/null || true
+        fi
         
         # Alternative removal method for stubborn files
         find "$INSTALL_DIR" -type f -delete 2>/dev/null || true
@@ -201,6 +214,7 @@ safe_remove_installation() {
             rm -rf "$INSTALL_DIR" || {
                 print_error "Could not remove $INSTALL_DIR completely"
                 print_error "Manual removal may be required"
+                print_error "Try manually: chattr -i $INSTALL_DIR/config/.server_identity && rm -rf $INSTALL_DIR"
                 exit 1
             }
         fi
