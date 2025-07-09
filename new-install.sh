@@ -216,26 +216,6 @@ main() {
     print_status "The system has been completely reinstalled with default settings."
     print_status "ALL previous data has been removed and the system is now clean."
     echo
-    print_warning "⚠️  IMPORTANT: You must now reconfigure your backup.env file!"
-    print_status "Configuration file: /opt/proxmox-backup/env/backup.env"
-    echo
-    print_status "Next steps:"
-    print_status "1. Edit configuration: nano /opt/proxmox-backup/env/backup.env"
-    print_status "2. Test configuration: proxmox-backup --dry-run"
-    print_status "3. Run first backup: proxmox-backup"
-    
-    # Read unique code from .server_identity file
-    UNIQUE_CODE=""
-    if [[ -f "/opt/proxmox-backup/config/.server_identity" ]]; then
-        UNIQUE_CODE=$(cat "/opt/proxmox-backup/config/.server_identity" 2>/dev/null | tr -d '\n\r')
-    fi
-    
-    if [[ -n "$UNIQUE_CODE" ]]; then
-        print_status "4. Telegram: Open bot @ProxmoxAN_bot and insert your unique code: $UNIQUE_CODE"
-    else
-        print_status "4. Telegram: Open bot @ProxmoxAN_bot and insert your unique code"
-    fi
-    echo
 }
 
 # Run main function
