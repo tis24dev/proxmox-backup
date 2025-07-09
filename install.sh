@@ -500,7 +500,9 @@ show_completion() {
             if [[ -f /tmp/proxmox_backup_was_update ]]; then
             print_success "Update completed successfully!"
         else
-            print_success "Installation completed successfully!"
+            echo "========================================"
+			print_success "🎉 FRESH INSTALLATION COMPLETED 🎉"
+			echo "========================================"
         fi
     echo
     echo -e "${BOLD}${GREEN}Next steps:${RESET}"
