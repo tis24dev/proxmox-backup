@@ -8,7 +8,7 @@
 # Features:
 # - Show current server ID and related information
 # - Validate server ID format and consistency
-# - Reset/regenerate server ID when needed
+# - Reset/regenerate server ID when needed (includes date/time for maximum uniqueness)
 # - Test server ID stability
 #
 # Usage:
@@ -79,7 +79,7 @@ EXAMPLES:
 NOTES:
     - The server ID is used for Telegram bot registration in centralized mode
     - Resetting the server ID may require re-registering with the Telegram bot
-    - The server ID is stored in: ${SCRIPT_DIR}/../config/server_id
+    - The server ID is stored in: ${SCRIPT_DIR}/../config/.server_identity (protected format)
 
 EOF
 }
@@ -94,6 +94,7 @@ main() {
     case "$action" in
         "show")
             step "Displaying Server ID Information"
+            info "Server ID includes: machine-id, MAC addresses, hostname, system UUID, date/time, and timestamp"
             show_server_info
             ;;
         "validate")
@@ -109,6 +110,7 @@ main() {
         "reset")
             step "Resetting Server ID"
             echo "WARNING: This will generate a new server ID!"
+            echo "The new ID will include: machine-id, MAC addresses, hostname, system UUID, date/time, and timestamp"
             echo "If you are using centralized Telegram configuration, you will need to re-register with the bot."
             echo ""
             read -p "Are you sure you want to continue? (y/N): " -n 1 -r
@@ -135,6 +137,7 @@ main() {
             ;;
         "test")
             step "Testing Server ID Stability"
+            info "Testing ID generation with: machine-id, MAC addresses, hostname, system UUID, date/time, and timestamp"
             get_server_id
             info "Current server ID: $SERVER_ID"
             echo ""
