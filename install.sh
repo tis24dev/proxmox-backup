@@ -431,7 +431,13 @@ run_fix_permissions() {
     cd "$INSTALL_DIR"
     
     if [[ -f "script/fix-permissions.sh" ]]; then
-        ./script/fix-permissions.sh
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            # Verbose mode: show all output
+            ./script/fix-permissions.sh
+        else
+            # Silent mode: hide all output
+            ./script/fix-permissions.sh >/dev/null 2>&1
+        fi
         print_success "Permissions fixed"
     else
         print_warning "Fix permissions script not found, skipping"
@@ -445,10 +451,20 @@ run_security_check() {
     cd "$INSTALL_DIR"
     
     if [[ -f "script/security-check.sh" ]]; then
-        if ./script/security-check.sh; then
-            print_success "Security check passed"
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            # Verbose mode: show all output
+            if ./script/security-check.sh; then
+                print_success "Security check passed"
+            else
+                print_warning "Security check found issues, but continuing installation"
+            fi
         else
-            print_warning "Security check found issues, but continuing installation"
+            # Silent mode: hide all output
+            if ./script/security-check.sh >/dev/null 2>&1; then
+                print_success "Security check passed"
+            else
+                print_warning "Security check found issues, but continuing installation"
+            fi
         fi
     else
         print_warning "Security check script not found, skipping"
