@@ -228,11 +228,24 @@ restore_preserved_files() {
         print_success "Critical files restored successfully"
     fi
     
-    # --- Step 5: Clean up the temporary backup directory and tracker file ---
-    print_status "Cleaning up temporary backup directory..."
+    # Clean up the temporary backup directory and tracker file
+    print_status "Cleaning up temporary backup files..."
     rm -rf "$TEMP_PRESERVE" 2>/dev/null || true
     rm -f /tmp/proxmox_backup_preserve_path 2>/dev/null || true
     print_success "Cleanup complete"
+}
+
+# Function to protect the server identity file
+protect_identity_file() {
+    local identity_file="$INSTALL_DIR/config/.server_identity"
+    if [[ -f "$identity_file" ]] && command -v chattr >/dev/null 2>&1; then
+        print_status "Protecting server identity file..."
+        if chattr +i "$identity_file"; then
+            print_success "Server identity file is now protected (immutable)."
+        else
+            print_warning "Failed to set immutable attribute on server identity file."
+        fi
+    fi
 }
 
 # Function to clone repository
@@ -561,6 +574,10 @@ main() {
     setup_cron
     create_symlinks
     run_first_backup
+    
+    # Protect the identity file at the very end, after all permissions are set
+    protect_identity_file
+    
     show_completion
     
     # Clean up temporary markers
