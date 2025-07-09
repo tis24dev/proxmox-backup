@@ -587,7 +587,7 @@ get_compression_data() {
 
 # FUNCTION FOR SERVER UNIQUE IDENTIFICATION
 # Generates a unique 16-digit numeric ID for each installation
-# Uses multiple system characteristics to ensure uniqueness and stability
+# Uses multiple system characteristics plus timestamp to ensure uniqueness
 # The ID is saved to a persistent file with protection against tampering
 get_server_id() {
     [[ -n "${SERVER_ID:-}" ]] && return 0
@@ -624,60 +624,64 @@ get_server_id() {
         debug "Config directory already exists: $server_id_dir"
     fi
     
-    # Try to load existing server ID from protected file
+    # Check if server ID file exists and is readable
     if [ -f "$server_id_file" ] && [ -r "$server_id_file" ]; then
+        debug "Server ID file found, reading existing code..."
         local stored_data=$(cat "$server_id_file" 2>/dev/null)
         local decoded_id=$(decode_protected_server_id "$stored_data")
         
         # Validate decoded ID format
         if [ ${#decoded_id} -eq 16 ] && [[ "$decoded_id" =~ ^[0-9]{16}$ ]]; then
             SERVER_ID="$decoded_id"
-            debug "Loaded existing server ID from protected file"
+            debug "Loaded existing server ID from protected file: $SERVER_ID"
             return 0
         else
-            warning "Invalid or corrupted server ID found in file, regenerating..."
+            warning "Invalid or corrupted server ID found in file"
+            # Remove corrupted file to allow regeneration
             rm -f "$server_id_file" 2>/dev/null || true
         fi
     fi
     
-    debug "Generating new server ID..."
+    debug "No valid server ID file found, generating new server ID..."
     
     # Collect multiple system identifiers for maximum uniqueness
     local system_data=""
     
-    # 1. Machine ID (most stable identifier)
+    # 1. Current timestamp with full precision (date and time complete with seconds)
+    local generation_timestamp=$(date +"%Y%m%d%H%M%S")
+    system_data+="$generation_timestamp"
+    
+    # 2. Machine ID (most stable identifier)
     if [ -f "/etc/machine-id" ]; then
         system_data+=$(cat /etc/machine-id 2>/dev/null || echo "")
     elif [ -f "/var/lib/dbus/machine-id" ]; then
         system_data+=$(cat /var/lib/dbus/machine-id 2>/dev/null || echo "")
     fi
     
-    # 2. All MAC addresses (sorted for consistency)
+    # 3. All MAC addresses (sorted for consistency)
     local mac_addresses=$(ip link show 2>/dev/null | awk '/ether/ {print $2}' | sort | tr '\n' ':' | sed 's/:$//')
     system_data+="$mac_addresses"
     
-    # 3. Hostname as additional identifier
+    # 4. Hostname as additional identifier
     system_data+=$(hostname 2>/dev/null || echo "unknown")
     
-    # 4. System UUID if available
+    # 5. System UUID if available
     if [ -f "/sys/class/dmi/id/product_uuid" ]; then
         system_data+=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null || echo "")
     fi
     
-    # 5. Kernel version for additional entropy
+    # 6. System version info for additional entropy
     if [ -f "/proc/version" ]; then
         system_data+=$(cat /proc/version 2>/dev/null | head -c 100 || echo "")
     fi
     
-    # 6. Date and time with full seconds precision for maximum uniqueness
-    local current_datetime=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
-    system_data+="$current_datetime"
-    
-    # Fallback: if no system data collected, use current timestamp and process info
+    # Fallback: if no system data collected, use timestamp and process info
     if [ -z "$system_data" ]; then
         system_data="fallback-$(date +%s)-$$-$(hostname)"
         warning "Using fallback method for server ID generation"
     fi
+    
+    debug "Generated system_data includes timestamp: $generation_timestamp"
     
     # Generate SHA256 hash of all collected data
     local hash=$(echo -n "$system_data" | sha256sum | cut -d' ' -f1)
@@ -792,14 +796,14 @@ get_server_id() {
             debug "chattr not available, skipping immutable attribute"
         fi
         
-        success "Server ID successfully saved and protected"
+        success "Server ID successfully generated and saved: $SERVER_ID"
     else
         warning "Failed to save server ID to file: $server_id_file"
         warning "Check directory permissions and disk space"
         warning "Server ID may change between executions"
     fi
     
-    debug "Generated server ID: $SERVER_ID (based on: machine-id, MAC addresses, hostname, system UUID, date/time)"
+    debug "Generated server ID: $SERVER_ID (based on: timestamp, machine-id, MAC addresses, hostname, system UUID)"
 }
 
 # Function to encode server ID with protection against tampering
