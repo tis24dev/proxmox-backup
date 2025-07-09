@@ -7,8 +7,10 @@
 #
 
 # ======= Base variables BEFORE set -u =======
-export SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # script directory determination
-export BASE_DIR="$(dirname "$SCRIPT_DIR")" # script directory location
+# Risolve il symlink per ottenere il percorso reale dello script
+SCRIPT_REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+export SCRIPT_DIR="$(dirname "$SCRIPT_REAL_PATH")"
+export BASE_DIR="$(dirname "$SCRIPT_DIR")"
 export ENV_FILE="${BASE_DIR}/env/backup.env"
 
 # ==========================================

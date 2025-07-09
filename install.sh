@@ -51,6 +51,9 @@ print_header() {
     echo -e "${BOLD}${CYAN}  $SCRIPT_NAME v$SCRIPT_VERSION${RESET}"
     echo -e "${BOLD}${CYAN}================================${RESET}"
     echo
+    echo -e "${BOLD}${GREEN}This script preserves your existing configuration and data${RESET}"
+    echo -e "${BOLD}${GREEN}For a complete fresh installation, use new-install.sh instead${RESET}"
+    echo
 }
 
 # Function to check if running as root
@@ -148,19 +151,128 @@ install_dependencies() {
     print_success "Dependencies installed successfully"
 }
 
+# Function to safely remove existing installation preserving protected files
+safe_remove_installation() {
+    print_status "Safely removing existing installation..."
+    
+    # Create temporary directory to preserve protected files
+    TEMP_PRESERVE=$(mktemp -d)
+    
+    # List of files/directories to preserve
+    PRESERVE_PATHS=(
+        "config/.server_identity"
+        "config/server_id"
+        "env/backup.env"
+        "secure_account"
+        "backup"
+        "log"
+    )
+    
+    # Save protected files
+    for path in "${PRESERVE_PATHS[@]}"; do
+        if [[ -e "$INSTALL_DIR/$path" ]]; then
+            print_status "Preserving $path..."
+            # Create parent directory structure in temp location
+            mkdir -p "$TEMP_PRESERVE/$(dirname "$path")"
+            # Copy with attributes preserved
+            cp -a "$INSTALL_DIR/$path" "$TEMP_PRESERVE/$path" 2>/dev/null || {
+                print_warning "Could not preserve $path (may be protected)"
+                continue
+            }
+        fi
+    done
+    
+    # Remove installation directory safely
+    # First try to remove files that aren't protected
+    find "$INSTALL_DIR" -type f \
+        -not -path "*/config/.server_identity" \
+        -not -path "*/config/server_id" \
+        -not -path "*/env/backup.env" \
+        -delete 2>/dev/null || true
+    
+    # Remove empty directories
+    find "$INSTALL_DIR" -type d -empty -delete 2>/dev/null || true
+    
+    # If directory still exists, create new structure
+    if [[ -d "$INSTALL_DIR" ]]; then
+        print_status "Installation directory partially preserved"
+    else
+        # Create fresh installation directory
+        mkdir -p "$INSTALL_DIR"
+    fi
+    
+    # Restore preserved files after cloning
+    echo "$TEMP_PRESERVE" > /tmp/proxmox_backup_preserve_path
+    
+    print_success "Existing installation safely processed"
+}
+
+# Function to restore preserved files
+restore_preserved_files() {
+    if [[ -f /tmp/proxmox_backup_preserve_path ]]; then
+        TEMP_PRESERVE=$(cat /tmp/proxmox_backup_preserve_path)
+        
+        if [[ -d "$TEMP_PRESERVE" ]]; then
+            print_status "Restoring preserved files..."
+            
+            # Restore all preserved files
+            if [[ -d "$TEMP_PRESERVE/config" ]]; then
+                mkdir -p "$INSTALL_DIR/config"
+                cp -a "$TEMP_PRESERVE/config"/* "$INSTALL_DIR/config/" 2>/dev/null || true
+            fi
+            
+            if [[ -f "$TEMP_PRESERVE/env/backup.env" ]]; then
+                mkdir -p "$INSTALL_DIR/env"
+                cp -a "$TEMP_PRESERVE/env/backup.env" "$INSTALL_DIR/env/" 2>/dev/null || true
+                print_success "Configuration file backup.env restored"
+            fi
+            
+            if [[ -d "$TEMP_PRESERVE/secure_account" ]]; then
+                cp -a "$TEMP_PRESERVE/secure_account" "$INSTALL_DIR/" 2>/dev/null || true
+            fi
+            
+            if [[ -d "$TEMP_PRESERVE/backup" ]]; then
+                cp -a "$TEMP_PRESERVE/backup" "$INSTALL_DIR/" 2>/dev/null || true
+            fi
+            
+            if [[ -d "$TEMP_PRESERVE/log" ]]; then
+                cp -a "$TEMP_PRESERVE/log" "$INSTALL_DIR/" 2>/dev/null || true
+            fi
+            
+            # Clean up temporary directory
+            rm -rf "$TEMP_PRESERVE" 2>/dev/null || true
+            rm -f /tmp/proxmox_backup_preserve_path
+            
+            print_success "Protected files restored successfully"
+        fi
+    fi
+}
+
 # Function to clone repository
 clone_repository() {
     print_status "Cloning repository..."
     
-    # Remove existing installation if present
+    # Handle existing installation safely
     if [[ -d "$INSTALL_DIR" ]]; then
         print_warning "Existing installation found at $INSTALL_DIR"
-        read -p "Remove existing installation? (y/N): " -n 1 -r
+        echo
+        echo -e "${BOLD}${GREEN}This script will UPDATE preserving your data:${RESET}"
+        echo -e "${GREEN}  ✓ Configuration (backup.env) will be preserved${RESET}"
+        echo -e "${GREEN}  ✓ Server identity will be preserved${RESET}"
+        echo -e "${GREEN}  ✓ Existing backups and logs will be preserved${RESET}"
+        echo -e "${GREEN}  ✓ Custom security settings will be preserved${RESET}"
+        echo
+        echo -e "${BOLD}${RED}For a complete fresh installation instead, use:${RESET}"
+        echo -e "${RED}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)\"${RESET}"
+        echo
+        read -p "Continue with update (preserving data)? (y/N): " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$INSTALL_DIR"
+            # Mark this as an update
+            touch /tmp/proxmox_backup_was_update
+            safe_remove_installation
         else
-            print_error "Installation aborted"
+            print_error "Update cancelled"
             exit 1
         fi
     fi
@@ -173,6 +285,9 @@ clone_repository() {
         exit 1
     fi
     
+    # Restore preserved files
+    restore_preserved_files
+    
     print_success "Repository cloned successfully"
 }
 
@@ -182,11 +297,11 @@ setup_configuration() {
     
     cd "$INSTALL_DIR"
     
-    # Create configuration from repository
+    # Create configuration from repository or restored from previous installation
     if [[ -f "env/backup.env" ]]; then
-        print_success "Configuration file found in repository"
+        print_success "Configuration file found (preserved from previous installation or in repository)"
     else
-        print_warning "Configuration file not found in repository, creating basic config"
+        print_warning "Configuration file not found, creating basic config"
         mkdir -p env
         cat > env/backup.env << 'EOF'
 #!/bin/bash
@@ -382,7 +497,11 @@ run_first_backup() {
 # Function to display completion message
 show_completion() {
     echo
-    print_success "Installation completed successfully!"
+            if [[ -f /tmp/proxmox_backup_was_update ]]; then
+            print_success "Update completed successfully!"
+        else
+            print_success "Installation completed successfully!"
+        fi
     echo
     echo -e "${BOLD}${GREEN}Next steps:${RESET}"
     echo -e "1. ${CYAN}Edit configuration:${RESET} nano $INSTALL_DIR/env/backup.env"
@@ -399,6 +518,12 @@ show_completion() {
     echo -e "- Test mode: ${CYAN}proxmox-backup --dry-run${RESET}"
     echo -e "- Security: ${CYAN}proxmox-backup-security${RESET}"
     echo -e "- Permissions: ${CYAN}proxmox-backup-permissions${RESET}"
+    echo
+    echo -e "${BOLD}${BLUE}Installation Options:${RESET}"
+    echo -e "- ${GREEN}Update (preserves settings):${RESET}"
+    echo -e "  ${CYAN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)\"${RESET}"
+    echo -e "- ${RED}Fresh install (removes everything):${RESET}"
+    echo -e "  ${CYAN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)\"${RESET}"
     echo
 }
 
@@ -429,6 +554,9 @@ main() {
     create_symlinks
     run_first_backup
     show_completion
+    
+    # Clean up temporary markers
+    rm -f /tmp/proxmox_backup_was_update 2>/dev/null || true
 }
 
 # Run main function
