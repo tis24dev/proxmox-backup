@@ -151,107 +151,100 @@ install_dependencies() {
     print_success "Dependencies installed successfully"
 }
 
-# Function to safely handle the update process
-safe_update_handler() {
-    print_status "Starting safe update process..."
-
-    # 1. Create a temporary directory for the full backup
-    local TEMP_BACKUP_DIR
-    TEMP_BACKUP_DIR=$(mktemp -d)
-    if [[ ! -d "$TEMP_BACKUP_DIR" ]]; then
-        print_error "Failed to create temporary backup directory. Aborting update."
-        exit 1
-    fi
-    print_status "Created temporary backup directory at: $TEMP_BACKUP_DIR"
-
-    # 2. Remove immutable attribute from protected files before backup
-    print_status "Removing immutable attribute from protected files..."
+# Function to safely remove existing installation preserving protected files
+safe_remove_installation() {
+    print_status "Safely preparing for update..."
+    
+    # Create a temporary directory for the full backup
+    TEMP_PRESERVE=$(mktemp -d)
+    
+    print_status "Removing immutable attributes from protected files..."
     if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
-        if chattr -i "$INSTALL_DIR/config/.server_identity" 2>/dev/null; then
-            print_status "Removed immutable attribute from .server_identity."
-        else
-            print_warning "Could not remove immutable attribute from .server_identity. This may not be a critical issue."
-        fi
+        chattr -i "$INSTALL_DIR/config/.server_identity" 2>/dev/null || true
+        print_status "Immutable attribute removed from .server_identity"
     fi
-
-    # 3. Copy the entire current installation to the temporary directory
-    print_status "Backing up the entire current installation..."
-    if ! cp -a "$INSTALL_DIR/." "$TEMP_BACKUP_DIR/"; then
-        print_error "Failed to back up the current installation. Aborting update."
-        rm -rf "$TEMP_BACKUP_DIR"
+    
+    print_status "Creating full backup of existing installation in $TEMP_PRESERVE..."
+    if ! cp -a "$INSTALL_DIR" "$TEMP_PRESERVE/backup"; then
+        print_error "Failed to create a backup of the existing installation."
+        print_error "Update cannot proceed safely. Please check permissions for $INSTALL_DIR"
         exit 1
     fi
-    print_success "Current installation backed up successfully."
-
-    # 4. Remove the old installation directory to make way for the new one
+    print_success "Full backup created successfully."
+    
+    # Remove the entire old installation directory
     print_status "Removing old installation directory..."
     if ! rm -rf "$INSTALL_DIR"; then
-        print_error "Failed to remove the old installation directory."
-        print_error "Your old installation is safe in: $TEMP_BACKUP_DIR"
-        print_error "Please perform a manual cleanup and try again."
+        print_error "Failed to remove the old installation directory at $INSTALL_DIR."
+        print_error "Manual intervention might be required. Check for protected files or permissions."
         exit 1
     fi
-    print_success "Old installation directory removed."
-
-    # Save the path to the backup for the restore function
-    echo "$TEMP_BACKUP_DIR" > /tmp/proxmox_backup_preserve_path
+    
+    # Verify that the directory is gone
+    if [[ -d "$INSTALL_DIR" ]]; then
+        print_error "Failed to remove directory, it still exists."
+        exit 1
+    fi
+    print_success "Old installation directory completely removed."
+    
+    # Save the path to the temporary backup for the restore function
+    echo "$TEMP_PRESERVE" > /tmp/proxmox_backup_preserve_path
 }
 
-# Function to restore critical files after the new version is cloned
+# Function to restore preserved files
 restore_preserved_files() {
     if [[ ! -f /tmp/proxmox_backup_preserve_path ]]; then
-        return 0 # Not an update, nothing to restore
-    fi
-
-    local TEMP_BACKUP_DIR
-    TEMP_BACKUP_DIR=$(cat /tmp/proxmox_backup_preserve_path)
-
-    if [[ -z "$TEMP_BACKUP_DIR" ]] || [[ ! -d "$TEMP_BACKUP_DIR" ]]; then
-        print_warning "Could not find the temporary backup directory. Skipping file restoration."
         return
     fi
-
-    print_status "Restoring critical files from backup..."
-
-    # 5. Restore critical files and directories
+    
+    local TEMP_PRESERVE=$(cat /tmp/proxmox_backup_preserve_path)
+    local BACKUP_SOURCE_DIR="$TEMP_PRESERVE/backup"
+    
+    if [[ ! -d "$BACKUP_SOURCE_DIR" ]]; then
+        print_warning "Backup source directory not found, skipping restore."
+        return
+    fi
+    
+    print_status "Restoring critical files from temporary backup..."
+    
+    # Define the critical files and directories to restore
     local PRESERVE_PATHS=(
         "config/.server_identity"
-        "config/server_id"
         "env/backup.env"
         "secure_account"
         "backup"
         "log"
     )
-
+    
     for path in "${PRESERVE_PATHS[@]}"; do
-        local source_path="$TEMP_BACKUP_DIR/$path"
-        if [[ -e "$source_path" ]]; then
-            # Ensure parent directory exists in the new installation
-            mkdir -p "$INSTALL_DIR/$(dirname "$path")"
-            if cp -a "$source_path" "$INSTALL_DIR/$path"; then
-                print_status "  ✓ Restored $path"
-            else
-                print_warning "  ✗ Failed to restore $path"
+        local source_item="$BACKUP_SOURCE_DIR/$path"
+        local dest_item="$INSTALL_DIR/$path"
+        
+        if [[ -e "$source_item" ]]; then
+            print_status "Restoring $path..."
+            # Ensure the parent directory exists in the new installation
+            mkdir -p "$(dirname "$dest_item")"
+            # Copy the file or directory
+            if ! cp -a "$source_item" "$dest_item"; then
+                print_warning "Failed to restore $path"
             fi
         fi
     done
+    
     print_success "Critical files restored."
-
-    # 6. Restore immutable attribute on the unique ID file
-    print_status "Re-applying immutable attribute to server identity file..."
+    
+    # Restore the immutable attribute to the server identity file
+    print_status "Restoring immutable attribute for .server_identity..."
     if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
-        if chattr +i "$INSTALL_DIR/config/.server_identity" 2>/dev/null; then
-            print_status "  ✓ Immutable attribute re-applied to .server_identity."
-        else
-            print_warning "  ✗ Failed to re-apply immutable attribute."
-        fi
+        chattr +i "$INSTALL_DIR/config/.server_identity" 2>/dev/null || print_warning "Failed to set immutable flag on .server_identity"
+        print_success "Server identity file protected."
     fi
-
-    # 7. Delete the temporary backup directory
-    print_status "Cleaning up temporary backup directory..."
-    rm -rf "$TEMP_BACKUP_DIR"
+    
+    # Clean up the temporary backup directory
+    print_status "Cleaning up temporary backup files..."
+    rm -rf "$TEMP_PRESERVE"
     rm -f /tmp/proxmox_backup_preserve_path
-    print_success "Update cleanup complete."
+    print_success "Cleanup complete."
 }
 
 # Function to clone repository
@@ -276,7 +269,7 @@ clone_repository() {
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             # Mark this as an update
             touch /tmp/proxmox_backup_was_update
-            safe_update_handler
+            safe_remove_installation
         else
             print_error "Update cancelled"
             exit 1
