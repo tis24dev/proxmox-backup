@@ -185,24 +185,11 @@ safe_remove_installation() {
     # Remove installation directory completely after preserving files
     print_status "Removing installation directory completely..."
     
-    # Remove immutable attributes from protected files before deletion
-    if command -v chattr >/dev/null 2>&1; then
-        print_status "Removing immutable attributes from protected files..."
-        find "$INSTALL_DIR" -type f -exec chattr -i {} \; 2>/dev/null || true
-    fi
-    
     # Remove the entire installation directory
     if rm -rf "$INSTALL_DIR" 2>/dev/null; then
         print_success "Installation directory removed successfully"
     else
         print_warning "Could not remove installation directory completely, trying alternative method"
-        
-        # Try to remove immutable attributes again if first attempt failed
-        if command -v chattr >/dev/null 2>&1; then
-            print_status "Force removing immutable attributes..."
-            find "$INSTALL_DIR" -name ".server_identity" -exec chattr -i {} \; 2>/dev/null || true
-            find "$INSTALL_DIR" -type f -exec chattr -i {} \; 2>/dev/null || true
-        fi
         
         # Alternative removal method for stubborn files
         find "$INSTALL_DIR" -type f -delete 2>/dev/null || true
@@ -214,7 +201,6 @@ safe_remove_installation() {
             rm -rf "$INSTALL_DIR" || {
                 print_error "Could not remove $INSTALL_DIR completely"
                 print_error "Manual removal may be required"
-                print_error "Try manually: chattr -i $INSTALL_DIR/config/.server_identity && rm -rf $INSTALL_DIR"
                 exit 1
             }
         fi
@@ -295,7 +281,52 @@ clone_repository() {
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             # Mark this as an update
             touch /tmp/proxmox_backup_was_update
+            # Dopo la conferma di aggiornamento, PRIMA di safe_remove_installation
+            TMP_UPDATE_BACKUP=$(mktemp -d)
+
+            # 2. Rimozione attributo immutabile dal file protetto (se esiste)
+            if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
+                chattr -i "$INSTALL_DIR/config/.server_identity" 2>/dev/null || true
+            fi
+
+            # 3. Copia della cartella di installazione nella cartella temporanea
+            cp -a "$INSTALL_DIR/." "$TMP_UPDATE_BACKUP/" 2>/dev/null || {
+                print_error "Impossibile copiare la cartella di installazione nella cartella temporanea"
+                exit 1
+            }
+
+            # 4. Procedura di safe_remove_installation e installazione come già presente
+            # (safe_remove_installation, git clone, ecc.)
             safe_remove_installation
+            # ... codice esistente ...
+
+            # 5. Ripristino file critici dalla cartella temporanea
+            # (solo i file critici, non tutto)
+            if [[ -f "$TMP_UPDATE_BACKUP/config/.server_identity" ]]; then
+                mkdir -p "$INSTALL_DIR/config"
+                cp -a "$TMP_UPDATE_BACKUP/config/.server_identity" "$INSTALL_DIR/config/"
+            fi
+            if [[ -f "$TMP_UPDATE_BACKUP/env/backup.env" ]]; then
+                mkdir -p "$INSTALL_DIR/env"
+                cp -a "$TMP_UPDATE_BACKUP/env/backup.env" "$INSTALL_DIR/env/"
+            fi
+            if [[ -d "$TMP_UPDATE_BACKUP/secure_account" ]]; then
+                cp -a "$TMP_UPDATE_BACKUP/secure_account" "$INSTALL_DIR/"
+            fi
+            if [[ -d "$TMP_UPDATE_BACKUP/backup" ]]; then
+                cp -a "$TMP_UPDATE_BACKUP/backup" "$INSTALL_DIR/"
+            fi
+            if [[ -d "$TMP_UPDATE_BACKUP/log" ]]; then
+                cp -a "$TMP_UPDATE_BACKUP/log" "$INSTALL_DIR/"
+            fi
+
+            # 6. Ripristino attributo immutabile al file codice univoco
+            if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
+                chattr +i "$INSTALL_DIR/config/.server_identity" 2>/dev/null || true
+            fi
+
+            # 7. Cancellazione cartella temporanea
+            rm -rf "$TMP_UPDATE_BACKUP" 2>/dev/null || true
         else
             print_error "Update cancelled"
             exit 1
