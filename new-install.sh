@@ -122,7 +122,6 @@ complete_removal() {
         rm -f /usr/local/bin/proxmox-backup 2>/dev/null || true
         rm -f /usr/local/bin/proxmox-backup-security 2>/dev/null || true
         rm -f /usr/local/bin/proxmox-backup-permissions 2>/dev/null || true
-        rm -f /usr/local/bin/proxmox-restore 2>/dev/null || true
         
         # Force removal of all files, including protected ones
         print_status "Forcing removal of all files (including protected ones)..."

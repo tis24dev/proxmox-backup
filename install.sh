@@ -507,7 +507,6 @@ create_symlinks() {
     ln -sf "$INSTALL_DIR/script/proxmox-backup.sh" /usr/local/bin/proxmox-backup
     ln -sf "$INSTALL_DIR/script/security-check.sh" /usr/local/bin/proxmox-backup-security
     ln -sf "$INSTALL_DIR/script/fix-permissions.sh" /usr/local/bin/proxmox-backup-permissions
-    ln -sf "$INSTALL_DIR/proxmox-restore.sh" /usr/local/bin/proxmox-restore
     
     print_success "System symlinks created"
 }
@@ -588,7 +587,6 @@ show_completion() {
     echo -e "${BOLD}${PURPLE}Quick commands:${RESET}"
     echo -e "- Backup: ${CYAN}proxmox-backup${RESET}"
     echo -e "- Test mode: ${CYAN}proxmox-backup --dry-run${RESET}"
-    echo -e "- Restore: ${CYAN}proxmox-restore${RESET}"
     echo -e "- Security: ${CYAN}proxmox-backup-security${RESET}"
     echo -e "- Permissions: ${CYAN}proxmox-backup-permissions${RESET}"
     echo
