@@ -1445,9 +1445,23 @@ upload_logs_to_cloud() {
     
     # Upload con avanzamento (stats ogni 5s)
     if ! { set -o pipefail; rclone copy "$LOG_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
-            # Standardize rclone NOTICE messages as WARNING
-            if [[ "$line" == *"NOTICE: Config file"*"not found"* ]]; then
-                warning "Rclone configuration not found - using defaults (consider running: rclone config)"
+            # Standardize rclone log messages to our logging format
+            if [[ "$line" =~ NOTICE: ]]; then
+                # Extract the message part after "NOTICE: "
+                local notice_msg="${line#*NOTICE: }"
+                warning "Rclone: $notice_msg"
+            elif [[ "$line" =~ ERROR: ]]; then
+                # Extract the message part after "ERROR: "
+                local error_msg="${line#*ERROR: }"
+                error "Rclone: $error_msg"
+            elif [[ "$line" =~ WARN: ]]; then
+                # Extract the message part after "WARN: "
+                local warn_msg="${line#*WARN: }"
+                warning "Rclone: $warn_msg"
+            elif [[ "$line" =~ INFO: ]]; then
+                # Extract the message part after "INFO: "
+                local info_msg="${line#*INFO: }"
+                info "Rclone: $info_msg"
             else
                 debug "Progress: $line"
             fi
