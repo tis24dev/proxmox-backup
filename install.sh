@@ -391,8 +391,8 @@ show_completion() {
     echo -e "4. ${CYAN}Security check:${RESET} proxmox-backup-security"
     echo
     echo -e "${BOLD}${YELLOW}Documentation:${RESET}"
-    echo -e "- Complete docs: $INSTALL_DIR/README.md"
-    echo -e "- Configuration: $INSTALL_DIR/CONFIGURATION.md"
+    echo -e "- Complete docs: $INSTALL_DIR/doc/README.md"
+    echo -e "- Configuration: $INSTALL_DIR/doc/CONFIGURATION.md"
     echo
     echo -e "${BOLD}${PURPLE}Quick commands:${RESET}"
     echo -e "- Backup: ${CYAN}proxmox-backup${RESET}"
