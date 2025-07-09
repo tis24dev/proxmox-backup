@@ -182,23 +182,34 @@ safe_remove_installation() {
         fi
     done
     
-    # Remove installation directory safely
-    # First try to remove files that aren't protected
-    find "$INSTALL_DIR" -type f \
-        -not -path "*/config/.server_identity" \
-        -not -path "*/config/server_id" \
-        -not -path "*/env/backup.env" \
-        -delete 2>/dev/null || true
+    # Remove installation directory completely after preserving files
+    print_status "Removing installation directory completely..."
     
-    # Remove empty directories
-    find "$INSTALL_DIR" -type d -empty -delete 2>/dev/null || true
-    
-    # If directory still exists, create new structure
-    if [[ -d "$INSTALL_DIR" ]]; then
-        print_status "Installation directory partially preserved"
+    # Remove the entire installation directory
+    if rm -rf "$INSTALL_DIR" 2>/dev/null; then
+        print_success "Installation directory removed successfully"
     else
-        # Create fresh installation directory
-        mkdir -p "$INSTALL_DIR"
+        print_warning "Could not remove installation directory completely, trying alternative method"
+        
+        # Alternative removal method for stubborn files
+        find "$INSTALL_DIR" -type f -delete 2>/dev/null || true
+        find "$INSTALL_DIR" -type d -delete 2>/dev/null || true
+        
+        # If still exists, force removal
+        if [[ -d "$INSTALL_DIR" ]]; then
+            print_warning "Using force removal..."
+            rm -rf "$INSTALL_DIR" || {
+                print_error "Could not remove $INSTALL_DIR completely"
+                print_error "Manual removal may be required"
+                exit 1
+            }
+        fi
+    fi
+    
+    # Ensure directory is completely gone before cloning
+    if [[ -d "$INSTALL_DIR" ]]; then
+        print_error "Installation directory still exists after removal attempt"
+        exit 1
     fi
     
     # Restore preserved files after cloning
