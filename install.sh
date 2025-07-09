@@ -7,11 +7,26 @@
 # This script handles the complete installation process
 #
 # Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+# Usage with verbose: bash install.sh --verbose
 #
 # Version: 0.1.0
 # ============================================================================
 
 set -euo pipefail
+
+# Parse command line arguments
+VERBOSE_MODE=false
+for arg in "$@"; do
+    case $arg in
+        --verbose)
+            VERBOSE_MODE=true
+            shift
+            ;;
+        *)
+            # Unknown option
+            ;;
+    esac
+done
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,6 +68,12 @@ print_header() {
     echo
     echo -e "${BOLD}${GREEN}This script preserves your existing configuration and data${RESET}"
     echo -e "${BOLD}${GREEN}For a complete fresh installation, use new-install.sh instead${RESET}"
+    echo
+    if [[ "$VERBOSE_MODE" == "true" ]]; then
+        echo -e "${BOLD}${YELLOW}Running in VERBOSE mode - showing all output${RESET}"
+    else
+        echo -e "${BOLD}${BLUE}Running in SILENT mode - use --verbose to show backup script output${RESET}"
+    fi
     echo
 }
 
@@ -482,11 +503,22 @@ run_first_backup() {
     
     # Only run test if main script exists
     if [[ -f "script/proxmox-backup.sh" ]]; then
-        if ./script/proxmox-backup.sh --dry-run 2>/dev/null; then
-            print_success "First backup test completed successfully"
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            # Verbose mode: show all output
+            if ./script/proxmox-backup.sh --dry-run; then
+                print_success "First backup test completed successfully"
+            else
+                print_warning "First backup test had issues, but installation completed"
+                print_warning "This is normal for a fresh installation - configure backup.env and try again"
+            fi
         else
-            print_warning "First backup test had issues, but installation completed"
-            print_warning "This is normal for a fresh installation - configure backup.env and try again"
+            # Silent mode: hide all output
+            if ./script/proxmox-backup.sh --dry-run >/dev/null 2>&1; then
+                print_success "First backup test completed successfully"
+            else
+                print_warning "First backup test had issues, but installation completed"
+                print_warning "This is normal for a fresh installation - configure backup.env and try again"
+            fi
         fi
     else
         print_warning "Main backup script not found in repository"
@@ -498,7 +530,9 @@ run_first_backup() {
 show_completion() {
     echo
             if [[ -f /tmp/proxmox_backup_was_update ]]; then
-            print_success "Update completed successfully!"
+			echo "========================================"
+            print_success "🎉 UPDATE COMPLETED SUCCESSFULLY 🎉"
+			echo "========================================"
         else
             echo "========================================"
 			print_success "🎉 FRESH INSTALLATION COMPLETED 🎉"
