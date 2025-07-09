@@ -151,100 +151,88 @@ install_dependencies() {
     print_success "Dependencies installed successfully"
 }
 
-# Function to safely remove existing installation preserving protected files
+# Function to safely remove existing installation by creating a full temporary backup
 safe_remove_installation() {
-    print_status "Safely preparing for update..."
+    print_status "Safely backing up and removing existing installation..."
     
-    # Create a temporary directory for the full backup
+    # Create temporary directory to hold the full backup
     TEMP_PRESERVE=$(mktemp -d)
     
-    print_status "Removing immutable attributes from protected files..."
-    if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
-        chattr -i "$INSTALL_DIR/config/.server_identity" 2>/dev/null || true
-        print_status "Immutable attribute removed from .server_identity"
+    # --- Step 1: Remove immutable attributes before backup and deletion ---
+    print_status "Removing immutable attributes from existing installation..."
+    if command -v chattr >/dev/null 2>&1; then
+        chattr -R -i "$INSTALL_DIR" 2>/dev/null || true
     fi
     
-    print_status "Creating full backup of existing installation in $TEMP_PRESERVE..."
-    if ! cp -a "$INSTALL_DIR" "$TEMP_PRESERVE/backup"; then
-        print_error "Failed to create a backup of the existing installation."
-        print_error "Update cannot proceed safely. Please check permissions for $INSTALL_DIR"
-        exit 1
-    fi
-    print_success "Full backup created successfully."
-    
-    # Remove the entire old installation directory
-    print_status "Removing old installation directory..."
-    if ! rm -rf "$INSTALL_DIR"; then
-        print_error "Failed to remove the old installation directory at $INSTALL_DIR."
-        print_error "Manual intervention might be required. Check for protected files or permissions."
+    # --- Step 2: Create a full backup of the existing installation ---
+    print_status "Creating a full backup in a temporary directory..."
+    if cp -a "$INSTALL_DIR" "$TEMP_PRESERVE/backup"; then
+        print_success "Full backup created successfully at $TEMP_PRESERVE/backup"
+    else
+        print_error "Failed to create a full backup of the installation directory"
+        rm -rf "$TEMP_PRESERVE" # Clean up temp dir on failure
         exit 1
     fi
     
-    # Verify that the directory is gone
-    if [[ -d "$INSTALL_DIR" ]]; then
-        print_error "Failed to remove directory, it still exists."
+    # --- Step 3: Completely remove the original installation directory ---
+    print_status "Removing original installation directory..."
+    if rm -rf "$INSTALL_DIR"; then
+        print_success "Original installation directory removed successfully"
+    else
+        print_error "Failed to remove the installation directory. Manual removal may be required."
         exit 1
     fi
-    print_success "Old installation directory completely removed."
     
-    # Save the path to the temporary backup for the restore function
+    # --- Step 4: Save the path of the temporary backup for the restore function ---
     echo "$TEMP_PRESERVE" > /tmp/proxmox_backup_preserve_path
+    
+    print_success "Existing installation safely backed up and removed"
 }
 
-# Function to restore preserved files
+# Function to restore critical files from the temporary backup
 restore_preserved_files() {
     if [[ ! -f /tmp/proxmox_backup_preserve_path ]]; then
         return
     fi
     
-    local TEMP_PRESERVE=$(cat /tmp/proxmox_backup_preserve_path)
-    local BACKUP_SOURCE_DIR="$TEMP_PRESERVE/backup"
+    TEMP_PRESERVE=$(cat /tmp/proxmox_backup_preserve_path)
+    local backup_source_dir="$TEMP_PRESERVE/backup"
     
-    if [[ ! -d "$BACKUP_SOURCE_DIR" ]]; then
-        print_warning "Backup source directory not found, skipping restore."
-        return
-    fi
-    
-    print_status "Restoring critical files from temporary backup..."
-    
-    # Define the critical files and directories to restore
-    local PRESERVE_PATHS=(
-        "config/.server_identity"
-        "env/backup.env"
-        "secure_account"
-        "backup"
-        "log"
-    )
-    
-    for path in "${PRESERVE_PATHS[@]}"; do
-        local source_item="$BACKUP_SOURCE_DIR/$path"
-        local dest_item="$INSTALL_DIR/$path"
+    if [[ -d "$backup_source_dir" ]]; then
+        print_status "Restoring critical files from temporary backup..."
         
-        if [[ -e "$source_item" ]]; then
-            print_status "Restoring $path..."
-            # Ensure the parent directory exists in the new installation
-            mkdir -p "$(dirname "$dest_item")"
-            # Copy the file or directory
-            if ! cp -a "$source_item" "$dest_item"; then
-                print_warning "Failed to restore $path"
+        # List of critical files/directories to restore
+        local PRESERVE_PATHS=(
+            "config/.server_identity"
+            "config/server_id"
+            "env/backup.env"
+            "secure_account"
+            "backup"
+            "log"
+        )
+        
+        for path in "${PRESERVE_PATHS[@]}"; do
+            local source_path="$backup_source_dir/$path"
+            if [[ -e "$source_path" ]]; then
+                # Ensure the parent directory exists in the new installation
+                mkdir -p "$INSTALL_DIR/$(dirname "$path")"
+                # Copy the file/directory back
+                if cp -a "$source_path" "$INSTALL_DIR/$path"; then
+                    print_status "Restored: $path"
+                else
+                    print_warning "Failed to restore: $path"
+                fi
             fi
-        fi
-    done
-    
-    print_success "Critical files restored."
-    
-    # Restore the immutable attribute to the server identity file
-    print_status "Restoring immutable attribute for .server_identity..."
-    if [[ -f "$INSTALL_DIR/config/.server_identity" ]]; then
-        chattr +i "$INSTALL_DIR/config/.server_identity" 2>/dev/null || print_warning "Failed to set immutable flag on .server_identity"
-        print_success "Server identity file protected."
+        done
+        
+        print_success "Critical files restored successfully"
     fi
     
-    # Clean up the temporary backup directory
-    print_status "Cleaning up temporary backup files..."
-    rm -rf "$TEMP_PRESERVE"
-    rm -f /tmp/proxmox_backup_preserve_path
-    print_success "Cleanup complete."
+    # --- Step 5: Clean up the temporary backup directory and tracker file ---
+    print_status "Cleaning up temporary backup directory..."
+    rm -rf "$TEMP_PRESERVE" 2>/dev/null || true
+    rm -f /tmp/proxmox_backup_preserve_path 2>/dev/null || true
+    print_success "Cleanup complete"
 }
 
 # Function to clone repository
