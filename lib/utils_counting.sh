@@ -393,7 +393,7 @@ _TEST_CLOUD_CONNECTIVITY() {
     fi
     
     # Check if the specified remote exists in rclone configuration
-    if ! rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
+    if ! rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
         warning "Cloud backup is enabled but rclone remote '${RCLONE_REMOTE}' not configured"
         warning "Configure rclone remote with: rclone config"
         warning "Or disable cloud backup by setting ENABLE_CLOUD_BACKUP=\"false\" in backup.env"
@@ -507,7 +507,7 @@ _COUNT_BACKUPS_AUTONOMOUS() {
                 debug "Cloud backup disabled, count set to 0"
             else
                 if command -v rclone &> /dev/null; then
-                    if rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE:-}:"; then
+                    if rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE:-}:"; then
                         local cloud_backups=$(mktemp)
                         if timeout "${CLOUD_LIST_TIMEOUT}" rclone lsl --fast-list "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null | grep "${PROXMOX_TYPE:-}-backup.*\.tar" | grep -v "\.sha256$" | grep -v "\.metadata$" > "$cloud_backups"; then
                             count=$(wc -l < "$cloud_backups")
@@ -600,7 +600,7 @@ _COUNT_LOGS_AUTONOMOUS() {
                 debug "Cloud backup disabled, log count set to 0"
             else
                 if command -v rclone &> /dev/null; then
-                    if rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE:-}:"; then
+                    if rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE:-}:"; then
                         local cloud_logs=$(mktemp)
                         if timeout "${CLOUD_LIST_TIMEOUT}" rclone lsl --fast-list "${RCLONE_REMOTE}:${CLOUD_LOG_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null | grep "${PROXMOX_TYPE:-}-backup.*\.log$" > "$cloud_logs"; then
                             count=$(wc -l < "$cloud_logs")

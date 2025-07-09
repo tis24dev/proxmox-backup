@@ -1412,7 +1412,7 @@ upload_logs_to_cloud() {
     fi
     
     # Check if the configured remote exists
-    if ! rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
+    if ! rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
         warning "rclone remote '${RCLONE_REMOTE}' not configured, skipping cloud upload"
         warning "Configure rclone remote with: rclone config"
         set_backup_status "log_cloud_upload" $EXIT_WARNING
@@ -1445,12 +1445,7 @@ upload_logs_to_cloud() {
     
     # Upload con avanzamento (stats ogni 5s)
     if ! { set -o pipefail; rclone copy "$LOG_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
-            # Convert rclone NOTICE messages to WARNING for consistency
-            if [[ "$line" =~ NOTICE:.*Config.file.*not.found ]]; then
-                warning "Rclone configuration: ${line#*NOTICE: }"
-            else
-                debug "Progress: $line"
-            fi
+            debug "Progress: $line"
         done; }; then
         error "Failed to upload log file to cloud storage"
         set_exit_code "warning"

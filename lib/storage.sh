@@ -176,12 +176,7 @@ upload_backup_file_async() {
     debug "Starting backup file upload to cloud storage"
     
     if timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=10s --stats-one-line 2>&1 | while read -r line; do
-        # Convert rclone NOTICE messages to WARNING for consistency
-        if [[ "$line" =~ NOTICE:.*Config.file.*not.found ]]; then
-            warning "Rclone configuration: ${line#*NOTICE: }"
-        else
-            debug "Backup upload progress: $line"
-        fi
+        debug "Backup upload progress: $line"
     done; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
@@ -462,7 +457,7 @@ upload_to_cloud() {
         return $EXIT_WARNING
     fi
 
-    if ! timeout $RCLONE_TIMEOUT_SHORT rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
+    if ! timeout $RCLONE_TIMEOUT_SHORT rclone_with_labels listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
         warning "rclone remote '${RCLONE_REMOTE}' not configured, skipping cloud upload"
         warning "Configure rclone remote with: rclone config"
         set_exit_code "warning"
@@ -506,13 +501,8 @@ upload_to_cloud() {
         debug "Destination: $remote_file_path"
         
         # Upload with progress (stats every 5s)
-        if ! { set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
-                # Convert rclone NOTICE messages to WARNING for consistency
-                if [[ "$line" =~ NOTICE:.*Config.file.*not.found ]]; then
-                    warning "Rclone configuration: ${line#*NOTICE: }"
-                else
-                    debug "Progress: $line"
-                fi
+        if ! { set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone_with_labels copy "$BACKUP_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
+                debug "Progress: $line"
             done; }; then
             error "Failed to upload backup to cloud storage"
             set_exit_code "warning"
