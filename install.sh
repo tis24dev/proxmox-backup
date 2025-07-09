@@ -546,13 +546,13 @@ run_first_backup() {
 show_completion() {
     echo
             if [[ -f /tmp/proxmox_backup_was_update ]]; then
-			echo "========================================"
+			echo "================================================"
             print_success "🎉 UPDATE COMPLETED SUCCESSFULLY 🎉"
-			echo "========================================"
+			echo "================================================"
         else
-            echo "========================================"
+            echo "================================================"
 			print_success "🎉 FRESH INSTALLATION COMPLETED 🎉"
-			echo "========================================"
+			echo "================================================"
         fi
     echo
     echo -e "${BOLD}${GREEN}Next steps:${RESET}"
