@@ -209,9 +209,9 @@ main() {
     run_fresh_installation
     
     echo
-    echo "========================================"
+    echo "================================================"
     print_success "🎉 FRESH INSTALLATION COMPLETED 🎉"
-    echo "========================================"
+    echo "================================================"
     echo
     print_status "The system has been completely reinstalled with default settings."
     print_status "ALL previous data has been removed and the system is now clean."
