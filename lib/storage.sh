@@ -176,7 +176,12 @@ upload_backup_file_async() {
     debug "Starting backup file upload to cloud storage"
     
     if timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=10s --stats-one-line 2>&1 | while read -r line; do
-        debug "Backup upload progress: $line"
+        # Standardize rclone NOTICE messages as WARNING
+        if [[ "$line" == *"NOTICE: Config file"*"not found"* ]]; then
+            warning "Rclone configuration not found - using defaults (consider running: rclone config)"
+        else
+            debug "Backup upload progress: $line"
+        fi
     done; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
@@ -502,7 +507,12 @@ upload_to_cloud() {
         
         # Upload with progress (stats every 5s)
         if ! { set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
-                debug "Progress: $line"
+                # Standardize rclone NOTICE messages as WARNING
+                if [[ "$line" == *"NOTICE: Config file"*"not found"* ]]; then
+                    warning "Rclone configuration not found - using defaults (consider running: rclone config)"
+                else
+                    debug "Progress: $line"
+                fi
             done; }; then
             error "Failed to upload backup to cloud storage"
             set_exit_code "warning"
