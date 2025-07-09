@@ -588,6 +588,7 @@ get_compression_data() {
 # FUNCTION FOR SERVER UNIQUE IDENTIFICATION
 # Generates a unique 16-digit numeric ID for each installation
 # Uses multiple system characteristics to ensure uniqueness and stability
+# Includes date/time with full seconds for maximum uniqueness
 # The ID is saved to a persistent file with protection against tampering
 get_server_id() {
     [[ -n "${SERVER_ID:-}" ]] && return 0
@@ -664,11 +665,18 @@ get_server_id() {
         system_data+=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null || echo "")
     fi
     
-    # 5. Boot ID for additional entropy (but not the current one, use a fixed seed)
-    # Instead of boot_id which changes every boot, use a more stable identifier
+    # 5. Kernel version for additional entropy
     if [ -f "/proc/version" ]; then
         system_data+=$(cat /proc/version 2>/dev/null | head -c 100 || echo "")
     fi
+    
+    # 6. Date and time with full seconds for maximum uniqueness
+    local current_datetime=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date '+%Y%m%d%H%M%S' 2>/dev/null || echo "")
+    system_data+="$current_datetime"
+    
+    # 7. Unix timestamp for additional precision
+    local unix_timestamp=$(date +%s 2>/dev/null || echo "")
+    system_data+="$unix_timestamp"
     
     # Fallback: if no system data collected, use current timestamp and process info
     if [ -z "$system_data" ]; then
@@ -796,7 +804,7 @@ get_server_id() {
         warning "Server ID may change between executions"
     fi
     
-    debug "Generated server ID: $SERVER_ID (based on: machine-id, MAC addresses, hostname, system UUID)"
+    debug "Generated server ID: $SERVER_ID (based on: machine-id, MAC addresses, hostname, system UUID, date/time, timestamp)"
 }
 
 # Function to encode server ID with protection against tampering
@@ -894,6 +902,10 @@ generate_system_key() {
     
     # Add first MAC address
     key_data+=$(ip link show 2>/dev/null | awk '/ether/ {print $2; exit}' | tr -d ':')
+    
+    # Add date and time for additional uniqueness
+    local current_datetime=$(date '+%Y%m%d%H%M%S' 2>/dev/null || echo "")
+    key_data+="$current_datetime"
     
     # Generate hash of the key data
     echo -n "$key_data" | sha256sum | cut -c1-16
