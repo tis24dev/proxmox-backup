@@ -6,11 +6,15 @@
 
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS)** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
-**First Install & Upgrade** = 
+**First Install & Upgrade**
+```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+```
 
-**Remove & Clean Install**  = 
+**Remove & Clean Install**
+```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+```
 
 ## ✨ Key Features
 
