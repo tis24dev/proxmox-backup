@@ -183,16 +183,30 @@ perform_backup() {
     
     # Collect appropriate configuration based on Proxmox type
     if [ "$PROXMOX_TYPE" == "pve" ]; then
-        if ! collect_pve_configs; then
+        local pve_result
+        pve_result=$(collect_pve_configs; echo $?)
+        if [ "$pve_result" -eq "$EXIT_ERROR" ]; then
             error "Failed to collect PVE configurations"
             set_exit_code "error"
             return $EXIT_ERROR
+        elif [ "$pve_result" -eq "$EXIT_WARNING" ]; then
+            warning "PVE configurations collected with warnings (datastore issues are non-critical)"
+            set_exit_code "warning"
+        else
+            info "PVE configurations collected successfully"
         fi
     elif [ "$PROXMOX_TYPE" == "pbs" ]; then
-        if ! collect_pbs_configs; then
+        local pbs_result
+        pbs_result=$(collect_pbs_configs; echo $?)
+        if [ "$pbs_result" -eq "$EXIT_ERROR" ]; then
             error "Failed to collect PBS configurations"
             set_exit_code "error"
             return $EXIT_ERROR
+        elif [ "$pbs_result" -eq "$EXIT_WARNING" ]; then
+            warning "PBS configurations collected with warnings (datastore issues are non-critical)"
+            set_exit_code "warning"
+        else
+            info "PBS configurations collected successfully"
         fi
     else
         error "Unknown Proxmox type: $PROXMOX_TYPE"
