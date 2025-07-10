@@ -54,7 +54,8 @@ All options, files to be saved, and script functions are fully configurable and 
 - **Cron jobs** - Scheduled system tasks
 - **Service configurations** - Custom services and modifications
 
-### 🚨 **Result**: With these backups you can **completely restore** your Proxmox environment on a new server, maintaining all configurations, VMs, containers and settings exactly as they were!
+#### 🚨 **Result**: 
+With these backups you can **completely restore** your Proxmox environment on a new server, maintaining all configurations, VMs, containers and settings exactly as they were!
 
 ## ✨ Key Features
 
