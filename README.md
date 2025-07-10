@@ -221,13 +221,8 @@ The system automatically exports metrics for Prometheus:
 ### Minimum
 - **Bash 4.4+**
 - **Proxmox VE** or **Proxmox Backup Server**
-- **2GB RAM** (for compression operations)
-- **10GB free space** (for temporary backups)
-
-### Recommended
-- **4GB+ RAM** (for parallel operations)
-- **50GB+ free space** (for multiple backups)
-- **Stable internet connection** (for cloud backups)
+- **512MB RAM** (for compression operations)
+- **1GB free space** (for temporary backups)
 
 ## 🤝 Contributing
 
