@@ -6,8 +6,6 @@
 
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
-(The script backs up critical, personal, and important files from the Proxmox system, allowing you to restore or reinstall the system with peace of mind in case of a disaster.)
-
 
 **First Install & Upgrade**
 ```bash
@@ -18,6 +16,45 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
 ```
+
+## 🎯 What does this script do?
+
+This backup system **automatically saves all critical files** from your Proxmox environment, allowing you to completely restore the system in case of disaster recovery or migration.
+All options, files to be saved, and script functions are fully configurable and can be enabled or disabled as desired.
+
+### 📂 Files and configurations backed up:
+
+#### **🔧 Proxmox System Configurations**
+- **PVE/PBS configurations** - All Proxmox VE and Backup Server configuration files
+- **Cluster configurations** - Cluster setup, nodes, quorum, corosync
+- **Storage configurations** - All datastores, mount points, remote storage
+- **Network configurations** - Interfaces, bridges, VLANs, firewall, routing
+
+#### **🏗️ Virtual Machines and Containers**
+- **VM/CT configurations** - All VM and container `.conf` files
+- **Templates and snippets** - Custom templates and configuration snippets
+- **VZDump configurations** - Backup jobs, schedules, retention policies
+- **Replication configurations** - Replication jobs between nodes
+
+#### **🔐 Security and Certificates**
+- **SSL/TLS certificates** - Web interface, API, cluster certificates
+- **SSH keys** - System public/private keys
+- **User configurations** - Users, groups, permissions, authentication
+- **Firewall configurations** - Datacenter, node, VM/CT rules
+
+#### **🗄️ Database and Logs**
+- **Proxmox database** - Configurations stored in internal database
+- **System logs** - Critical logs for troubleshooting
+- **Ceph configurations** - Ceph setup (if present)
+- **ZFS configurations** - Pools, datasets, snapshot policies
+
+#### **📦 Operating System**
+- **Installed package list** - For identical reinstallation
+- **Custom configurations** - Modified files in `/etc/`
+- **Cron jobs** - Scheduled system tasks
+- **Service configurations** - Custom services and modifications
+
+### 🚨 **Result**: With these backups you can **completely restore** your Proxmox environment on a new server, maintaining all configurations, VMs, containers and settings exactly as they were!
 
 ## ✨ Key Features
 
