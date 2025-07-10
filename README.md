@@ -1,10 +1,13 @@
-# 🔄 Proxmox Backup System PBS & PVE
+# 🔄 Proxmox Backup PBS & PVE System
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Bash](https://img.shields.io/badge/Bash-4.4+-blue.svg)](https://www.gnu.org/software/bash/)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-green.svg)](https://www.proxmox.com/)
 
-**Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS)** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
+**Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
+
+(The script backs up critical, personal, and important files from the Proxmox system, allowing you to restore or reinstall the system with peace of mind in case of a disaster.)
+
 
 **First Install & Upgrade**
 ```bash
