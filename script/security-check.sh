@@ -411,14 +411,14 @@ check_critical_files() {
     # File critici che devono sempre esistere
     declare -A critical_files=(
         ["$BASE_DIR/script/proxmox-backup.sh"]="700:root:root"
-		["$BASE_DIR/script/server-id-manager.sh"]="700:root:root"
+	["$BASE_DIR/script/server-id-manager.sh"]="700:root:root"
         ["$BASE_DIR/script/fix-permissions.sh"]="700:root:root"
         ["$BASE_DIR/env/backup.env"]="400:root:root"
         ["$BASE_DIR/secure_account/setup_gdrive.sh"]="700:root:root"
-		["$BASE_DIR/lib/backup_collect.sh"]="400:root:root"
-		["$BASE_DIR/lib/backup_collect_pbspve.sh"]="400:root:root"
+	["$BASE_DIR/lib/backup_collect.sh"]="400:root:root"
+	["$BASE_DIR/lib/backup_collect_pbspve.sh"]="400:root:root"
         ["$BASE_DIR/lib/backup_create.sh"]="400:root:root"
-		["$BASE_DIR/lib/backup_manager.sh"]="400:root:root"
+	["$BASE_DIR/lib/backup_manager.sh"]="400:root:root"
         ["$BASE_DIR/lib/backup_verify.sh"]="400:root:root"
         ["$BASE_DIR/lib/core.sh"]="400:root:root"
         ["$BASE_DIR/lib/environment.sh"]="400:root:root"
@@ -524,7 +524,7 @@ check_unauthorized_files() {
     log_step "Checking for unauthorized files"
     
     local secure_dirs=("$BASE_DIR/script" "$BASE_DIR/secure_account" "$BASE_DIR/lib")
-    local authorized_files=("proxmox-backup.sh" "security-check.sh" "fix-permissions.sh" "gdrive.conf" "get_gdrive_token.sh" "setup_gdrive.sh" "README.md" "pbs1.json" "backup_collect.sh" "backup_create.sh" "backup_manager.sh" "backup_verify.sh" "core.sh" "environment.sh" "log.sh" "metrics.sh" "notify.sh" "security.sh" "storage.sh" "utils.sh" "server-id-manager.sh" "utils_counting.sh" "metrics_collect.sh" "backup_collect_pbspve.sh")
+    local authorized_files=("proxmox-backup.sh" "security-check.sh" "fix-permissions.sh" "proxmox-restore.sh" "gdrive.conf" "get_gdrive_token.sh" "setup_gdrive.sh" "README.md" "pbs1.json" "backup_collect.sh" "backup_create.sh" "backup_manager.sh" "backup_verify.sh" "core.sh" "environment.sh" "log.sh" "metrics.sh" "notify.sh" "security.sh" "storage.sh" "utils.sh" "server-id-manager.sh" "utils_counting.sh" "metrics_collect.sh" "backup_collect_pbspve.sh")
     local unauthorized=0
     
     for dir in "${secure_dirs[@]}"; do
@@ -713,7 +713,7 @@ update_script_hashes() {
     local script_files=(
         "$BASE_DIR/script/proxmox-backup.sh"
         "$BASE_DIR/script/fix-permissions.sh"
-		"$BASE_DIR/script/server-id-manager.sh"
+	"$BASE_DIR/script/server-id-manager.sh"
         "$BASE_DIR/script/security-check.sh"
         "$BASE_DIR/secure_account/setup_gdrive.sh"
         "$BASE_DIR/lib/backup_collect.sh"
