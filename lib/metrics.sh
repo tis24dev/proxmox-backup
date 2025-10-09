@@ -473,7 +473,7 @@ if [ "$PROMETHEUS_ENABLED" != "true" ]; then
     fi
 
     # Get available space for secondary backup
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         local free_bytes=$(get_free_space "$SECONDARY_BACKUP_PATH")
         update_prometheus_metrics "proxmox_backup_disk_free_bytes" "gauge" "Free disk space in bytes" "$free_bytes" "location=\"secondary\""
     fi
@@ -484,7 +484,7 @@ if [ "$PROMETHEUS_ENABLED" != "true" ]; then
         update_prometheus_metrics "proxmox_backup_count" "gauge" "Number of backup files" "$count" "location=\"local\""
     fi
 
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         local count=$(count_files_in_dir "$SECONDARY_BACKUP_PATH" "${PROXMOX_TYPE}-backup-*.tar*" "*.sha256")
         update_prometheus_metrics "proxmox_backup_count" "gauge" "Number of backup files" "$count" "location=\"secondary\""
     fi
@@ -1055,7 +1055,7 @@ validate_proxmox_environment() {
         validation_errors=$((validation_errors + 1))
     fi
     
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -n "$SECONDARY_BACKUP_PATH" ] && [ ! -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -n "$SECONDARY_BACKUP_PATH" ] && [ ! -d "$SECONDARY_BACKUP_PATH" ]; then
         report_metrics_error "validation" "Secondary backup path does not exist: $SECONDARY_BACKUP_PATH" "warning"
         validation_errors=$((validation_errors + 1))
     fi

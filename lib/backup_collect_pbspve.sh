@@ -255,18 +255,8 @@ detect_all_datastores() {
         done
         
         if [ ${#datastores_found[@]} -eq 0 ]; then
-            # CRITICAL: Ensure this only generates WARNING (exit code 1), never ERROR (exit code 2)
-            warning "No datastores found - neither auto-detected nor in custom paths. Using default fallback."
-            warning "This is expected behavior when no Proxmox datastores are available."
-            
-            # Set warning exit code explicitly to ensure we never generate critical error
-            set_exit_code "warning"
-            
-            # Use default fallback to ensure backup can still proceed
+            warning "No datastores found - using default fallback"
             datastores_found+=("FALLBACK|default|/var/lib/proxmox-backup/datastore|Default fallback")
-            
-            info "Using fallback datastore path: /var/lib/proxmox-backup/datastore"
-            info "You can configure a custom path in the env file using PBS_DATASTORE_PATH"
         fi
     fi
     

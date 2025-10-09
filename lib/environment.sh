@@ -383,10 +383,8 @@ setup_dirs() {
     }
     
     # Create secondary backup directories if secondary backup is enabled and parent directory exists
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
-        if [ "${DRY_RUN_MODE:-false}" = "true" ]; then
-            debug "Dry run mode: Would create secondary backup directories"
-        elif [ -n "$SECONDARY_BACKUP_PATH" ] && [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ]; then
+        if [ -n "$SECONDARY_BACKUP_PATH" ] && [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
             mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" || {
                 warning "Failed to create secondary directories. Secondary backup may fail."
             }

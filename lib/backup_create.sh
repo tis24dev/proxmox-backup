@@ -1397,10 +1397,8 @@ initialize_backup() {
     info "Created local directories: $LOCAL_BACKUP_PATH and $LOCAL_LOG_PATH"
     
     # Create secondary backup directories if secondary backup is enabled and configured
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
-        if [ "${DRY_RUN_MODE:-false}" = "true" ]; then
-            debug "Dry run mode: Would create secondary backup directories"
-        elif [ -n "$SECONDARY_BACKUP_PATH" ] && [ -n "$SECONDARY_LOG_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ]; then
+        if [ -n "$SECONDARY_BACKUP_PATH" ] && [ -n "$SECONDARY_LOG_PATH" ]; then
             # Sanitize secondary paths
             SECONDARY_BACKUP_PATH=$(sanitize_input "$SECONDARY_BACKUP_PATH")
             SECONDARY_LOG_PATH=$(sanitize_input "$SECONDARY_LOG_PATH")

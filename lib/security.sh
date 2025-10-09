@@ -1,10 +1,10 @@
 #!/bin/bash
-# Basic security functions for backup
+# Funzioni di sicurezza base per il backup
 
-# Cache for command -v to avoid redundant calls
+# Cache per command -v per evitare chiamate ridondanti
 declare -A COMMAND_CACHE
 
-# Function to check if a command exists (with cache)
+# Funzione per verificare se un comando esiste (con cache)
 command_exists() {
     local cmd="$1"
     if [[ -z "${COMMAND_CACHE[$cmd]:-}" ]]; then
@@ -17,28 +17,28 @@ command_exists() {
     [[ "${COMMAND_CACHE[$cmd]}" == "true" ]]
 }
 
-# Function to invalidate command cache
+# Funzione per invalidare la cache dei comandi
 clear_command_cache() {
     local cmd="$1"
     if [[ -n "$cmd" ]]; then
-        # Clear specific command
+        # Cancella un comando specifico
         unset COMMAND_CACHE["$cmd"]
         debug "Cleared cache for command: $cmd"
     else
-        # Clear entire cache
+        # Cancella tutta la cache
         COMMAND_CACHE=()
         debug "Cleared entire command cache"
     fi
 }
 
-# Function to force refresh of command cache
+# Funzione per forzare un refresh della cache di un comando
 refresh_command_cache() {
     local cmd="$1"
     clear_command_cache "$cmd"
-    command_exists "$cmd"  # This will rebuild the cache
+    command_exists "$cmd"  # Questo ricostruirà la cache
 }
 
-# Function to detect available package manager
+# Funzione per rilevare il package manager disponibile
 detect_package_manager() {
     if command_exists "apt-get"; then
         echo "apt-get"
@@ -51,7 +51,7 @@ detect_package_manager() {
     fi
 }
 
-# Function to install packages using detected package manager
+# Funzione per installare pacchetti usando il package manager rilevato
 install_packages() {
     local packages=("$@")
     local pkg_manager
@@ -99,7 +99,7 @@ install_packages() {
     return $EXIT_SUCCESS
 }
 
-# Verify script security
+# Verifica la sicurezza dello script
 verify_script_security() {
     step "Verifying script security"
     local security_status=$EXIT_SUCCESS
@@ -114,7 +114,7 @@ verify_script_security() {
         return $EXIT_SUCCESS
     fi
 
-    # Decide whether to run full check or script check only
+    # Decide se eseguire controllo completo o solo script check
     debug "Running security check (FULL_SECURITY_CHECK=${FULL_SECURITY_CHECK:-false})"
     local check_result=0
     if [[ "${FULL_SECURITY_CHECK:-false}" == "true" ]]; then
@@ -135,7 +135,7 @@ verify_script_security() {
                 error "Aborting due to security issues (ABORT_ON_SECURITY_ISSUES=true)"
                 return $EXIT_ERROR
             else
-                warning "Continuing despite security warnings (ABORT_ON_SECURITY_ISSUES=false)"
+                warning "Continuazione nonostante warning di sicurezza (ABORT_ON_SECURITY_ISSUES=false)"
                 set_exit_code "warning"
             fi
             ;;
@@ -145,7 +145,7 @@ verify_script_security() {
                 error "Aborting due to security issues (ABORT_ON_SECURITY_ISSUES=true)"
                 return $EXIT_ERROR
             else
-                warning "Continuing despite security errors (ABORT_ON_SECURITY_ISSUES=false)"
+                warning "Continuazione nonostante errori di sicurezza (ABORT_ON_SECURITY_ISSUES=false)"
                 set_exit_code "warning"
             fi
             ;;
@@ -154,7 +154,7 @@ verify_script_security() {
     return $security_status
 }
 
-# System dependencies check
+# Controllo delle dipendenze del sistema
 check_dependencies() {
     step "Checking dependencies"
     
@@ -194,7 +194,7 @@ check_dependencies() {
         fi
     fi
     
-    # Verify compression tools
+    # Verifica degli strumenti di compressione
     if ! check_compression_tools; then
         error "Compression tools check failed"
         set_exit_code "error"
@@ -204,7 +204,7 @@ check_dependencies() {
     success "All dependencies are satisfied"
 }
 
-# Install missing packages
+# Installazione pacchetti mancanti
 install_missing_packages() {
     local packages=("$@")
     
@@ -215,7 +215,7 @@ install_missing_packages() {
     
     info "Attempting to install missing required packages: ${packages[*]}"
     
-    # Use unified function to install packages
+    # Usa la funzione unificata per installare i pacchetti
     if ! install_packages "${packages[@]}"; then
         error "Failed to install required packages"
         set_exit_code "error"
@@ -250,27 +250,27 @@ install_missing_packages() {
     fi
 }
 
-# Improved version comparison function
+# Version comparison function migliorata
 check_version() {
     local version="$1"
     local required_version="$2"
     
-    # Input validation
+    # Validazione input
     if [[ -z "$version" || -z "$required_version" ]]; then
         debug "Invalid version parameters: version='$version', required='$required_version'"
         return 1
     fi
     
-    # Normalize versions by removing non-numeric characters except dots
+    # Normalizza le versioni rimuovendo caratteri non numerici eccetto punti
     version=$(echo "$version" | sed 's/[^0-9.]//g')
     required_version=$(echo "$required_version" | sed 's/[^0-9.]//g')
     
-    # Use sort -V for semantic version comparison
+    # Usa sort -V per comparazione semantica delle versioni
     if [[ "$version" == "$required_version" ]]; then
         return 0
     fi
     
-    # Check if current version is greater than or equal to required
+    # Controlla se la versione corrente è maggiore o uguale a quella richiesta
     local older_version
     older_version=$(printf '%s\n%s\n' "$version" "$required_version" | sort -V | head -n1)
     
@@ -281,10 +281,10 @@ check_version() {
     fi
 }
 
-# Compression tools checking - FIXED to avoid infinite recursion
+# Compression tools checking - CORRETTA per evitare ricorsione infinita
 check_compression_tools() {
     local tools_missing=false
-    local required_tools=()  # Array instead of string
+    local required_tools=()  # Array invece di stringa
     local compression_type="${COMPRESSION_TYPE:-gzip}"
 
     case "$compression_type" in
@@ -353,7 +353,7 @@ check_compression_tools() {
         done
     fi
 
-    # Handle missing tools - REMOVED infinite recursion
+    # Gestione strumenti mancanti - RIMOSSA la ricorsione infinita
     if [[ "$tools_missing" == "true" ]]; then
         if [[ "${AUTO_INSTALL_DEPENDENCIES:-false}" == "true" ]]; then
             info "Installing missing compression tools: ${required_tools[*]}"
@@ -371,7 +371,7 @@ check_compression_tools() {
             # Also clear bash's command hash to ensure fresh PATH lookup
             hash -r 2>/dev/null || true
             
-            # Verify that installation was successful
+            # Verifica che l'installazione sia andata a buon fine
             local tool
             for tool in "${required_tools[@]}"; do
                 if ! command_exists "$tool"; then

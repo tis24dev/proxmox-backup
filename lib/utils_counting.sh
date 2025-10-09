@@ -191,7 +191,7 @@ CHECK_COUNT() {
             _UPDATE_PROMETHEUS_METRICS
             if [ "$silent" != "true" ]; then
                 echo "COUNT_BACKUP_SECONDARY=$COUNT_BACKUP_SECONDARY"
-                if [ "${ENABLE_SECONDARY_BACKUP:-false}" != "true" ]; then
+                if [ "${ENABLE_SECONDARY_BACKUP:-true}" != "true" ]; then
                     echo "STATUS=DISABLED"
                 fi
             fi
@@ -237,7 +237,7 @@ CHECK_COUNT() {
             _UPDATE_PROMETHEUS_METRICS
             if [ "$silent" != "true" ]; then
                 echo "COUNT_LOG_SECONDARY=$COUNT_LOG_SECONDARY"
-                if [ "${ENABLE_LOG_MANAGEMENT:-true}" != "true" ] || [ "${ENABLE_SECONDARY_BACKUP:-false}" != "true" ]; then
+                if [ "${ENABLE_LOG_MANAGEMENT:-true}" != "true" ] || [ "${ENABLE_SECONDARY_BACKUP:-true}" != "true" ]; then
                     echo "STATUS=DISABLED"
                 fi
             fi
@@ -487,7 +487,7 @@ _COUNT_BACKUPS_AUTONOMOUS() {
             ;;
         "secondary")
             # Check if secondary backup is enabled
-            if [ "${ENABLE_SECONDARY_BACKUP:-false}" != "true" ]; then
+            if [ "${ENABLE_SECONDARY_BACKUP:-true}" != "true" ]; then
                 count=0
             else
                 local backup_path="${SECONDARY_BACKUP_PATH:-}"
@@ -579,7 +579,7 @@ _COUNT_LOGS_AUTONOMOUS() {
             ;;
         "secondary")
             # Check if secondary backup is enabled
-            if [ "${ENABLE_SECONDARY_BACKUP:-false}" != "true" ]; then
+            if [ "${ENABLE_SECONDARY_BACKUP:-true}" != "true" ]; then
                 count=0
                 debug "Secondary backup disabled, log count set to 0"
             else

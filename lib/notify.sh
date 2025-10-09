@@ -1,7 +1,7 @@
 #!/bin/bash
-# Proxmox backup notification system
+# Sistema di notifica per il backup Proxmox
 
-# Central management of all notifications
+# Gestione centrale di tutte le notifiche
 send_notifications() {
     step "Sending completion notifications"
     
@@ -14,7 +14,7 @@ send_notifications() {
         *) status=failure; message="Backup failed with code $EXIT_CODE.";;
     esac
 
-    # Email notifications management
+    # Gestione email notifications
     if [ "${EMAIL_ENABLED:-false}" = "true" ]; then
         notification_method_enabled=true
         if $force_notifications || [ "${EMAIL_ENABLED:-false}" = "true" ]; then
@@ -24,27 +24,27 @@ send_notifications() {
         info "Email notifications are disabled, skipping email notification"
     fi
 
-    # Update email emoji after completion of email process
-    get_status_emoji "email" "email" > /dev/null  # Update EMOJI_EMAIL directly
+    # Aggiorna l'emoji email dopo il completamento del processo email
+    get_status_emoji "email" "email" > /dev/null  # Aggiorna direttamente EMOJI_EMAIL
 
-    # Telegram notifications management with modification to respect disabling from setup_telegram_if_needed
+    # Gestione notifiche Telegram con modifica per rispettare la disabilitazione da setup_telegram_if_needed
     if [ "${TELEGRAM_ENABLED:-false}" = "true" ]; then
         notification_method_enabled=true
-        # If Telegram is enabled, attempt to send notification
+        # Se Telegram è abilitato, tenta di inviare la notifica
         if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
             send_telegram_notification "$status" "$message" && notification_sent=true || warning "Telegram notify failed"
         else
             warning "Telegram notify failed - missing token or chat_id"
         fi
     elif $force_notifications; then
-        # If Telegram is disabled but force_notifications is true, log a special message
+        # Se Telegram è disabilitato ma force_notifications è true, log un messaggio speciale
         info "Telegram notifications were disabled by centralized configuration, skipping"
     else
-        # Telegram notifications normally disabled
+        # Notifiche Telegram disabilitate normalmente
         info "Telegram notifications are disabled, skipping"
     fi
 
-    # Modify condition to show message only if at least one method was enabled but failed
+    # Modifica alla condizione per mostrare il messaggio solo se almeno un metodo era abilitato ma ha fallito
     if $notification_method_enabled && ! $notification_sent && [ $EXIT_CODE -ne 0 ]; then
         warning "All notify methods failed."
         command -v wall &>/dev/null && echo "BACKUP ERROR: $message" | wall
@@ -83,7 +83,7 @@ send_telegram_notification() {
     
     step "Sending Telegram notification"
     
-    # Emoji for overall backup status
+    # Emoji per lo stato di backup complessivo
     local status_emoji
     case "$status" in
         "success") status_emoji="✅" ;;
@@ -91,10 +91,10 @@ send_telegram_notification() {
         *) status_emoji="❌" ;;
     esac
     
-    # Building Telegram message using global variables
+    # Costruzione del messaggio Telegram usando le variabili globali
     build_telegram_message "$status_emoji"
     
-    # Send the message 
+    # Invia il messaggio 
     if curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
          -d "chat_id=${TELEGRAM_CHAT_ID}" \
          -d "text=${telegram_message}" > /dev/null; then
@@ -110,17 +110,17 @@ send_telegram_notification() {
 build_telegram_message() {
     local status_emoji="$1"
     
-    # Use global variables calculated by collect_metrics
-    # Available space using centralized functions
+    # Usa le variabili globali calcolate da collect_metrics
+    # Spazio disponibile usando le funzioni centralizzate
     local primario_space=$(df -h "$LOCAL_BACKUP_PATH" | tail -1 | awk '{print $4}')
     local secondario_space=""
     
-    # Check both that directory exists and secondary backup is enabled
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    # Controlla sia che la directory esista sia che il backup secondario sia abilitato
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         secondario_space=$(df -h "$SECONDARY_BACKUP_PATH" | tail -1 | awk '{print $4}')
     fi
     
-    # Padding for alignment
+    # Padding per allineamento
     local padding_primario="      "  
     local padding_secondario=" "     
     local padding_cloud="          "     
@@ -138,7 +138,7 @@ ${EMOJI_EMAIL} Email
 💾 Available space:
 🔹 Local: ${primario_space}"
 
-    # Add secondary line only if it has a value
+    # Aggiungi la riga del secondario solo se ha un valore
     if [ -n "$secondario_space" ]; then
         telegram_message+="
 🔹 Secondary: ${secondario_space}"
@@ -152,85 +152,85 @@ ${EMOJI_EMAIL} Email
 🔢 Exit code: $EXIT_CODE"
 }
 
-# Send an email notification with complete details
+# Invia una notifica email con dettagli completi
 send_email_notification() {
     local status="$1"
     local message="$2"
     
     if [ "$EMAIL_ENABLED" != "true" ]; then
-        debug "Email notifications not configured, skipping"
-        EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS  # Not an error if disabled
+        debug "Notifiche email non configurate, salto"
+        EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS  # Non è un errore se è disabilitato
         return 0
     fi
     
-    step "Sending email notification"
+    step "Invio notifica email"
     
-    # Determine recipient address
+    # Determina l'indirizzo del destinatario
     local recipient="$EMAIL_RECIPIENT"
     if [ -z "$recipient" ]; then
-        # Try to get root email from Proxmox
-        debug "EMAIL_RECIPIENT is empty, trying to get root email from Proxmox"
+        # Prova a ottenere l'email di root da Proxmox
+        debug "EMAIL_RECIPIENT è vuoto, provo a ottenere l'email di root da Proxmox"
         
         if [ "$PROXMOX_TYPE" == "pve" ] && command -v pveum &> /dev/null; then
             recipient=$(pveum user list --output-format=json | jq -r '.[] | select(.userid=="root@pam") | .email' 2>/dev/null)
             if [ -n "$recipient" ]; then
-                debug "Found root email from PVE: $recipient"
+                debug "Trovata email di root da PVE: $recipient"
             fi
         elif [ "$PROXMOX_TYPE" == "pbs" ] && command -v proxmox-backup-manager &> /dev/null; then
             recipient=$(proxmox-backup-manager user list --output-format=json | jq -r '.[] | select(.userid=="root@pam") | .email' 2>/dev/null)
             if [ -n "$recipient" ]; then
-                debug "Found root email from PBS: $recipient"
+                debug "Trovata email di root da PBS: $recipient"
             fi
         fi
         
-        # If still empty, use default value
+        # Se ancora vuoto, usa un valore predefinito
         if [ -z "$recipient" ]; then
-            warning "Unable to determine email recipient from Proxmox, using default value: root@localhost"
+            warning "Impossibile determinare il destinatario email da Proxmox, uso il valore predefinito: root@localhost"
             recipient="root@localhost"
-            EXIT_EMAIL_NOTIFICATION=$EXIT_WARNING  # Warning because using default value
+            EXIT_EMAIL_NOTIFICATION=$EXIT_WARNING  # Warning perché usiamo un valore predefinito
         fi
     fi
     
-    # Verify email address format
+    # Verifica il formato dell'indirizzo email
     if ! echo "$recipient" | grep -q -E '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
-        warning "Email address format appears invalid: $recipient"
-        EXIT_EMAIL_NOTIFICATION=$EXIT_WARNING  # Warning for invalid email format
+        warning "Il formato dell'indirizzo email sembra non valido: $recipient"
+        EXIT_EMAIL_NOTIFICATION=$EXIT_WARNING  # Warning per formato email non valido
     fi
     
-    # Prepare email data using global variables
+    # Prepara i dati per l'email usando le variabili globali
     prepare_email_data "$status"
     
-    # Create email content
+    # Crea il contenuto dell'email
     create_email_body "$status_color"
 
-    # Function to encode email subject (as in working script)
+    # Funzione per codificare l'oggetto email (come nello script funzionante)
     encode_subject() {
         local subject="$1"
         local encoded=$(printf '%s' "$subject" | base64 | tr -d '\n')
         echo "=?UTF-8?B?${encoded}?="
     }
     
-    # Encode subject
+    # Codifica l'oggetto
     local encoded_subject=$(encode_subject "$subject")
     
-    # Send email using sendmail with working script format
+    # Invia l'email usando sendmail con il formato dello script funzionante
     if command -v /usr/sbin/sendmail >/dev/null 2>&1; then
-        info "Send email to $recipient"
+        info "Invio email a $recipient"
         if echo -e "Subject: ${encoded_subject}\nTo: ${recipient}\nMIME-Version: 1.0\nContent-Type: text/html; charset=UTF-8\n\n$email_body" | /usr/sbin/sendmail -t "$recipient"; then
-            success "Email notification sent successfully to $recipient"
+            success "Email di notifica inviata con successo a $recipient"
             EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS
             return 0
         else
-            warning "Unable to send email notification to $recipient (sendmail error)"
-            debug "Checking mail configuration..."
+            warning "Impossibile inviare email di notifica a $recipient (errore sendmail)"
+            debug "Controllo configurazione mail..."
             if [ ! -f "/etc/mail/sendmail.cf" ] && [ ! -f "/etc/postfix/main.cf" ]; then
-                warning "Email configuration files not found. Mail server might not be configured"
+                warning "File di configurazione email non trovati. Il server mail potrebbe non essere configurato"
             fi
             EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
             return 1
         fi
     else
-        warning "sendmail command not found. Install sendmail or postfix"
+        warning "Comando sendmail non trovato. Installa sendmail o postfix"
         EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
         return 1
     fi
@@ -240,10 +240,10 @@ send_email_notification() {
 prepare_email_data() {
     local status="$1"
     
-    # Ensure Server ID is available
+    # Assicurati che il Server ID sia disponibile
     get_server_id
     
-    # Emoji for subject based on overall status
+    # Emoji per l'oggetto basato sullo stato complessivo
     status_emoji=""
     if [ "$status" == "success" ]; then
         status_emoji="✅"
@@ -253,20 +253,20 @@ prepare_email_data() {
         status_emoji="⚠️"
     fi
     
-    # Format subject with emoji, date and time
-    subject="${status_emoji} ${PROXMOX_TYPE^^} Backup on ${HOSTNAME} - $(date '+%Y-%m-%d %H:%M')"
+    # Formatta l'oggetto con emoji, data e ora
+    subject="${status_emoji} ${PROXMOX_TYPE^^} Backup su ${HOSTNAME} - $(date '+%Y-%m-%d %H:%M')"
     
-    # Format HTML email body with status-dependent color
+    # Formatta il corpo dell'email HTML con colore dipendente dallo stato
     status_color="blue"
     if [ "$status" == "success" ]; then
-        status_color="#4CAF50"  # Green
+        status_color="#4CAF50"  # Verde
     elif [ "$status" == "failure" ]; then
-        status_color="#F44336"  # Red
+        status_color="#F44336"  # Rosso
     elif [ "$status" == "warning" ]; then
-        status_color="#FF9800"  # Orange
+        status_color="#FF9800"  # Arancione
     fi
     
-    # Use global variables already calculated by collect_metrics
+    # Usa le variabili globali già calcolate da collect_metrics
     backup_size="${BACKUP_SIZE_HUMAN:-N/A}"
     backup_date=$(date '+%Y-%m-%d %H:%M:%S')
     compression_ratio="${COMPRESSION_RATIO:-N/A}"
@@ -276,7 +276,7 @@ prepare_email_data() {
         backup_file_name=$(basename "$BACKUP_FILE")
     fi
     
-    # Get disk space information using global variables
+    # Ottieni informazioni sullo spazio su disco usando le variabili globali
     local_space="N/A"
     local_used="N/A"
     local_percent="N/A"
@@ -295,8 +295,8 @@ prepare_email_data() {
     secondary_percent="N/A"
     secondary_free="N/A"
     
-    # Check both that directory exists and secondary backup is enabled
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    # Controlla sia che la directory esista sia che il backup secondario sia abilitato
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         local df_output=$(df -h "$SECONDARY_BACKUP_PATH" | tail -1)
         secondary_space=$(echo "$df_output" | awk '{print $2}')
         secondary_used=$(echo "$df_output" | awk '{print $3}')
@@ -309,39 +309,39 @@ prepare_email_data() {
 create_email_body() {
     local status_color="$1"
     
-    # SIDEBAR COLOR LOGIC:
-    # - Header (PBS BACKUP REPORT): reflects global script status (status_color)
-    # - Backup Paths section: reflects backup path status
-    # - Total Issues section: reflects presence of errors/warnings in logs
+    # LOGICA COLORI BARRE LATERALI:
+    # - Header (PBS BACKUP REPORT): riflette lo stato globale dello script (status_color)
+    # - Sezione Backup Paths: riflette lo stato dei path di backup
+    # - Sezione Total Issues: riflette la presenza di errori/warning nei log
     
-    # Determine sidebar color for backup paths section
-    local backup_paths_color="#4CAF50"  # Green by default (all paths OK)
+    # Determina il colore della barra laterale per la sezione backup paths
+    local backup_paths_color="#4CAF50"  # Verde di default (tutti i path OK)
     
-    # Check backup path status via emojis
+    # Controlla lo stato dei path di backup tramite le emoji
     if [[ "$EMOJI_PRI" == "❌" ]] || [[ "$EMOJI_SEC" == "❌" ]] || [[ "$EMOJI_CLO" == "❌" ]]; then
-        backup_paths_color="#F44336"  # Red if at least one in error
+        backup_paths_color="#F44336"  # Rosso se almeno uno in errore
     elif [[ "$EMOJI_PRI" == "⚠️" ]] || [[ "$EMOJI_SEC" == "⚠️" ]] || [[ "$EMOJI_CLO" == "⚠️" ]]; then
-        backup_paths_color="#FF9800"  # Orange if at least one in warning
+        backup_paths_color="#FF9800"  # Arancione se almeno uno in warning
     fi
     
-    # Determine sidebar color for errors section
-    local error_summary_color="#4CAF50"  # Green by default (no issues)
+    # Determina il colore della barra laterale per la sezione errori
+    local error_summary_color="#4CAF50"  # Verde di default (nessun problema)
     if [ -f "$LOG_FILE" ]; then
         local error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null || echo "0")
         local warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null || echo "0")
         
-        # Ensure values are numeric
+        # Assicurati che i valori siano numerici
         [[ "$error_count" =~ ^[0-9]+$ ]] || error_count=0
         [[ "$warning_count" =~ ^[0-9]+$ ]] || warning_count=0
         
         if [ "$error_count" -gt 0 ]; then
-            error_summary_color="#F44336"  # Red if there are errors
+            error_summary_color="#F44336"  # Rosso se ci sono errori
         elif [ "$warning_count" -gt 0 ]; then
-            error_summary_color="#FF9800"  # Orange if there are warnings
+            error_summary_color="#FF9800"  # Arancione se ci sono warning
         fi
     fi
 	
-    # Create a clean and modern HTML email template
+    # Crea un modello di email HTML pulito e moderno
     email_body="<!DOCTYPE html>
 <html>
 <head>
@@ -530,23 +530,13 @@ create_email_body() {
                         <span class=\"emoji\">${EMOJI_PRI}</span> ${BACKUP_PRI_STATUS_STR} backups
                     </div>"
     
-    # Add space information for local storage
+    # Aggiungi informazioni di spazio per lo storage locale
     if [ "$local_free" != "N/A" ]; then
-        # Extract numeric percentage without % symbol
-        local percent_num=${local_percent/\%/}
-        local color_class="normal"
-        
-        if [ "$percent_num" -gt 85 ]; then
-            color_class="critical"
-        elif [ "$percent_num" -gt 70 ]; then
-            color_class="warning"
-        fi
-        
         email_body+="
                     <div class=\"storage-info\">
                         <span>${local_used}</span>
                         <div class=\"space-bar\">
-                            <div class=\"space-used ${color_class}\" style=\"width: ${local_percent};\"></div>
+                            <div class=\"space-used\" style=\"width: ${local_percent};\"></div>
                         </div>
                         <span>${local_free} free (${local_percent} used)</span>
                     </div>"
@@ -561,23 +551,13 @@ create_email_body() {
                         <span class=\"emoji\">${EMOJI_SEC}</span> ${BACKUP_SEC_STATUS_STR} backups
                     </div>"
     
-    # Add space information for secondary storage
+    # Aggiungi informazioni di spazio per lo storage secondario
     if [ "$secondary_free" != "N/A" ]; then
-        # Extract numeric percentage without % symbol
-        local percent_num=${secondary_percent/\%/}
-        local color_class="normal"
-        
-        if [ "$percent_num" -gt 85 ]; then
-            color_class="critical"
-        elif [ "$percent_num" -gt 70 ]; then
-            color_class="warning"
-        fi
-        
         email_body+="
                     <div class=\"storage-info\">
                         <span>${secondary_used}</span>
                         <div class=\"space-bar\">
-                            <div class=\"space-used ${color_class}\" style=\"width: ${secondary_percent};\"></div>
+                            <div class=\"space-used\" style=\"width: ${secondary_percent};\"></div>
                         </div>
                         <span>${secondary_free} free (${secondary_percent} used)</span>
                     </div>"
@@ -642,8 +622,8 @@ create_email_body() {
                         <td>${LOCAL_BACKUP_PATH}</td>
                     </tr>"
     
-    # Add secondary path if configured
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    # Aggiungi percorso secondario se configurato
+    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         email_body+="
                     <tr>
                         <td>Secondary Path</td>
@@ -651,7 +631,7 @@ create_email_body() {
                     </tr>"
     fi
     
-    # Add cloud path if configured
+    # Aggiungi percorso cloud se configurato
     if command -v rclone &> /dev/null && [ -n "${RCLONE_REMOTE:-}" ] && rclone listremotes | grep -q "^${RCLONE_REMOTE}:"; then
         email_body+="
                     <tr>
@@ -664,13 +644,13 @@ create_email_body() {
                 </table>
             </div>"
     
-    # Add error/warning summary
+    # Aggiungi riepilogo errori/avvisi
     add_error_summary_to_email "$error_summary_color"
     
-    # Add system recommendations if needed
+    # Aggiungi suggerimenti di sistema se necessario
     add_system_recommendations_to_email
     
-    # Add footer
+    # Aggiungi footer
     email_body+="
         </div>
         <div class=\"footer\">
@@ -687,11 +667,11 @@ add_error_summary_to_email() {
     local error_summary_color="$1"
     
     if [ -f "$LOG_FILE" ]; then
-        # Count errors and warnings
+        # Conta errori e avvisi
         local error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null || echo "0")
         local warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null || echo "0")
         
-        # Ensure values are numeric
+        # Assicurati che i valori siano numerici
         [[ "$error_count" =~ ^[0-9]+$ ]] || error_count=0
         [[ "$warning_count" =~ ^[0-9]+$ ]] || warning_count=0
         
@@ -699,7 +679,7 @@ add_error_summary_to_email() {
             <div class=\"section\">
                 <h2>Error and Warning Summary</h2>"
         
-        # Add summary box with counts and colored sidebar
+        # Aggiungi box di riepilogo con conteggi e barra laterale colorata
         email_body+="
                 <div style=\"padding:15px; background-color:#F5F5F5; border-radius:6px; margin-bottom:15px; border-left:4px solid ${error_summary_color};\">
                     <p style=\"margin:0;\"><strong>Total Issues:</strong> $((error_count + warning_count))</p>
@@ -707,9 +687,9 @@ add_error_summary_to_email() {
                     <p style=\"margin:5px 0 0 0;\"><strong>Warnings:</strong> $warning_count</p>
                 </div>"
         
-        # If there are errors or warnings, list them by category
+        # Se ci sono errori o avvisi, elencali per categoria
         if [ $((error_count + warning_count)) -gt 0 ]; then
-            # Create table for error categories
+            # Crea una tabella per categorie di errori
             email_body+="
                 <table class=\"info-table\">
                     <tr>
@@ -718,38 +698,38 @@ add_error_summary_to_email() {
                         <th style=\"text-align:left; padding:10px; background-color:#f2f2f2;\">Count</th>
                     </tr>"
             
-            # Extract error categories and count them
+            # Estrai categorie di errori e contale
             local categories=()
             local category_counts_error=()
             local category_counts_warning=()
             local category_examples_error=()
             local category_examples_warning=()
             
-            # Search for patterns like [ERROR] Failed to create directory or [WARNING] Missing configuration
-            # Extract these patterns to identify common categories
+            # Cerca pattern come [ERROR] Failed to create directory o [WARNING] Missing configuration
+            # Estrai questi pattern per identificare categorie comuni
             
-            # Process errors
+            # Elabora errori
             while read -r line; do
-                # Extract category (first words after [ERROR])
+                # Estrai la categoria (prime parole dopo [ERROR])
                 local category=$(echo "$line" | sed -n 's/.*\[ERROR\] \([^:]*\).*/\1/p')
                 if [ -n "$category" ]; then
-                    # Check if this category is already in our array
+                    # Verifica se questa categoria è già nel nostro array
                     local found=0
                     for i in "${!categories[@]}"; do
                         if [ "${categories[$i]}" = "$category" ]; then
-                            # Increment count
+                            # Incrementa il conteggio
                             category_counts_error[$i]=$((category_counts_error[$i] + 1))
                             found=1
                             break
                         fi
                     done
                     
-                    # If not found, add new category
+                    # Se non trovata, aggiungi una nuova categoria
                     if [ $found -eq 0 ]; then
                         categories+=("$category")
                         category_counts_error+=("1")
                         category_counts_warning+=("0")
-                        # Extract example based on presence of colon
+                        # Estrai l'esempio in base alla presenza dei due punti
                         local example=""
                         if echo "$line" | grep -q "\[ERROR\] [^:]*:"; then
                             example=$(echo "$line" | sed 's/.*\[ERROR\] [^:]*: \(.*\)/\1/' | cut -c 1-50)
@@ -762,32 +742,32 @@ add_error_summary_to_email() {
                 fi
             done < <(grep "\[ERROR\]" "$LOG_FILE")
             
-            # Process warnings
+            # Elabora avvisi
             while read -r line; do
-			echo "DEBUG: Processing line: $line" >> /tmp/debug_email.log
-			echo "DEBUG: Extracted category: '$category'" >> /tmp/debug_email.log
-                # Extract category (first words after [WARNING])
-                # Handle both cases with and without colon
+			echo "DEBUG: Processando riga: $line" >> /tmp/debug_email.log
+			echo "DEBUG: Categoria estratta: '$category'" >> /tmp/debug_email.log
+                # Estrai la categoria (prime parole dopo [WARNING])
+                # Gestisce sia il caso con i due punti che senza
                 local category=""
                 if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
-                    # Case with colon
+                    # Caso con i due punti
                     category=$(echo "$line" | sed -n 's/.*\[WARNING\] \([^:]*\):.*/\1/p')
                 else
-                    # Case without colon - take entire message
+                    # Caso senza i due punti - prendi tutto il messaggio
                     category=$(echo "$line" | sed -n 's/.*\[WARNING\] \(.*\)/\1/p')
                 fi
                 
                 if [ -n "$category" ]; then
-                    # Check if this category is already in our array
+                    # Verifica se questa categoria è già nel nostro array
                     local found=0
                     for i in "${!categories[@]}"; do
                         if [ "${categories[$i]}" = "$category" ]; then
-                            # Increment count
+                            # Incrementa il conteggio
                             category_counts_warning[$i]=$((category_counts_warning[$i] + 1))
                             
-                            # If this is the first warning in this category, save an example
+                            # Se questo è il primo avviso in questa categoria, salva un esempio
                             if [ "${category_counts_warning[$i]}" -eq 1 ]; then
-                                # Extract example based on presence of colon
+                                # Estrai l'esempio in base alla presenza dei due punti
                                 local example=""
                                 if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
                                     example=$(echo "$line" | sed 's/.*\[WARNING\] [^:]*: \(.*\)/\1/' | cut -c 1-50)
@@ -802,13 +782,13 @@ add_error_summary_to_email() {
                         fi
                     done
                     
-                    # If not found, add new category
+                    # Se non trovata, aggiungi una nuova categoria
                     if [ $found -eq 0 ]; then
                         categories+=("$category")
                         category_counts_error+=("0")
                         category_counts_warning+=("1")
                         category_examples_error+=("")
-                        # Extract example based on presence of colon
+                        # Estrai l'esempio in base alla presenza dei due punti
                         local example=""
                         if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
                             example=$(echo "$line" | sed 's/.*\[WARNING\] [^:]*: \(.*\)/\1/' | cut -c 1-50)
@@ -820,9 +800,9 @@ add_error_summary_to_email() {
                 fi
             done < <(grep "\[WARNING\]" "$LOG_FILE")
             
-            # If no categorized errors/warnings found, use simple counts
+            # Se non sono stati trovati errori/avvisi categorizzati, utilizza conteggi semplici
             if [ ${#categories[@]} -eq 0 ]; then
-                # Add generic errors and warnings if present
+                # Aggiungi errori e avvisi generici se presenti
                 if [ $error_count -gt 0 ]; then
                     email_body+="
                     <tr>
@@ -841,7 +821,7 @@ add_error_summary_to_email() {
                     </tr>"
                 fi
             else
-                # Add each category to table
+                # Aggiungi ogni categoria alla tabella
                 for i in "${!categories[@]}"; do
                     if [ "${category_counts_error[$i]}" -gt 0 ]; then
                         email_body+="
@@ -866,7 +846,7 @@ add_error_summary_to_email() {
             email_body+="
                 </table>"
         else
-            # No errors or warnings
+            # Nessun errore o avviso
             email_body+="
                 <div style=\"padding:15px; background-color:#E8F5E9; border-radius:6px; border-left:4px solid #4CAF50;\">
                     <p style=\"margin:0;\">✅ <strong>No errors or warnings were found in the backup log.</strong></p>
@@ -881,7 +861,7 @@ add_error_summary_to_email() {
 
 # Add system recommendations to email
 add_system_recommendations_to_email() {
-    # Extract numeric values from percentages, handling "N/A" case
+    # Estrai valori numerici dalle percentuali, gestendo il caso "N/A"
     local local_percent_num=""
     local secondary_percent_num=""
     
@@ -893,12 +873,16 @@ add_system_recommendations_to_email() {
         secondary_percent_num="${secondary_percent/\%/}"
     fi
     
-    # Check if at least one value exceeds 85%
+    # Usa le soglie configurabili per determinare quando mostrare i suggerimenti
+    local primary_warning="${STORAGE_WARNING_THRESHOLD_PRIMARY:-90}"
+    local secondary_warning="${STORAGE_WARNING_THRESHOLD_SECONDARY:-90}"
+    
+    # Controlla se almeno uno dei valori supera la soglia di warning
     local show_recommendations=false
-    if [ -n "$local_percent_num" ] && [ "$local_percent_num" -gt 85 ]; then
+    if [ -n "$local_percent_num" ] && [ "$local_percent_num" -gt "$primary_warning" ]; then
         show_recommendations=true
     fi
-    if [ -n "$secondary_percent_num" ] && [ "$secondary_percent_num" -gt 85 ]; then
+    if [ -n "$secondary_percent_num" ] && [ "$secondary_percent_num" -gt "$secondary_warning" ]; then
         show_recommendations=true
     fi
     
@@ -908,14 +892,14 @@ add_system_recommendations_to_email() {
                 <h2>System Recommendations</h2>
                 <div style=\"padding:15px; background-color:#FFF3E0; border-radius:6px; border-left:4px solid #FF9800;\">"
         
-        if [ -n "$local_percent_num" ] && [ "$local_percent_num" -gt 85 ]; then
+        if [ -n "$local_percent_num" ] && [ "$local_percent_num" -gt "$primary_warning" ]; then
             email_body+="
-                    <p>⚠️ <strong>Local storage is nearly full (${local_percent})</strong> - Consider cleaning up older backups or adding more storage.</p>"
+                    <p>⚠️ <strong>Local storage is nearly full (${local_percent})</strong> - Consider cleaning up older backups or adding more storage. (Threshold: ${primary_warning}%)</p>"
         fi
         
-        if [ -n "$secondary_percent_num" ] && [ "$secondary_percent_num" -gt 85 ]; then
+        if [ -n "$secondary_percent_num" ] && [ "$secondary_percent_num" -gt "$secondary_warning" ]; then
             email_body+="
-                    <p>⚠️ <strong>Secondary storage is nearly full (${secondary_percent})</strong> - Consider cleaning up older backups or adding more storage.</p>"
+                    <p>⚠️ <strong>Secondary storage is nearly full (${secondary_percent})</strong> - Consider cleaning up older backups or adding more storage. (Threshold: ${secondary_warning}%)</p>"
         fi
         
         email_body+="

@@ -213,7 +213,7 @@ is_cloud_backup_enabled() {
 # Helper function to check if secondary backup is enabled
 is_secondary_backup_enabled() {
     if [ -z "$_secondary_backup_enabled" ]; then
-        _secondary_backup_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && echo "true" || echo "false")
+        _secondary_backup_enabled=$([ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && echo "true" || echo "false")
     fi
     [ "$_secondary_backup_enabled" = "true" ]
 }
@@ -1497,13 +1497,6 @@ manage_log_rotation() {
     if [ "$location" == "cloud" ] && ! is_cloud_backup_enabled; then
         info "Cloud backup is disabled, skipping cloud log rotation"
         set_backup_status "log_rotation_cloud" $EXIT_SUCCESS
-        return $EXIT_SUCCESS
-    fi
-    
-    # Skip secondary rotation if secondary backup is disabled
-    if [ "$location" == "secondary" ] && ! is_secondary_backup_enabled; then
-        info "Secondary backup is disabled, skipping secondary log rotation"
-        set_backup_status "log_rotation_secondary" $EXIT_SUCCESS
         return $EXIT_SUCCESS
     fi
     
