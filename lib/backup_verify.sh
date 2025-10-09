@@ -512,7 +512,7 @@ verify_backup_consistency() {
     local start_time=$(date +%s)
     
     # Set defaults efficiently
-    local secondary_enabled="${ENABLE_SECONDARY_BACKUP:-true}"
+    local secondary_enabled="${ENABLE_SECONDARY_BACKUP:-false}"
     local cloud_enabled="${CLOUD_BACKUP_ENABLED:-false}"
     local timeout="${CONSISTENCY_TIMEOUT:-600}"
     

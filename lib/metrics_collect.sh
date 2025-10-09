@@ -171,7 +171,7 @@ collect_metrics() {
     fi
 
     # Count secondary backups using new counting system
-    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         # Use new counting system instead of centralized count_backups function
         CHECK_COUNT "BACKUP_SECONDARY" true  # Silent mode
         BACKUP_SEC_COUNT=$COUNT_BACKUP_SECONDARY
@@ -200,7 +200,7 @@ collect_metrics() {
 
     # Calculate disk space for secondary path
     # Check both that the directory exists and that secondary backup is enabled
-    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
         local disk_info=$(get_disk_info "$SECONDARY_BACKUP_PATH" "text")
         if [ $? -eq 0 ]; then
             DISK_SPACE_SECONDARY_TOTAL=$(echo "$disk_info" | grep -o "total=[0-9]*" | cut -d= -f2)
@@ -324,7 +324,7 @@ collect_metrics() {
 
     # Log secondari - usa variabile dal sistema unificato
     LOG_SEC_COUNT=$COUNT_LOG_SECONDARY
-    if [ "${ENABLE_SECONDARY_BACKUP:-true}" = "true" ] && [ -d "$SECONDARY_LOG_PATH" ] && [ "$LOG_SEC_COUNT" -gt 0 ]; then
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_LOG_PATH" ] && [ "$LOG_SEC_COUNT" -gt 0 ]; then
         # Calculate secondary log age
         # Find oldest log
         local oldest_log=$(find "$SECONDARY_LOG_PATH" -maxdepth 1 -type f -name "$log_pattern" -not -name "*.log.*" -printf "%T@ %p\n" | sort -n | head -1)
@@ -416,19 +416,15 @@ collect_metrics() {
     fi
 
     # Verificare lo spazio libero su disco primario
-    local primary_threshold="${STORAGE_WARNING_THRESHOLD_PRIMARY:-90}"
-    if [ "$DISK_SPACE_PRIMARY_PERC" -gt "$primary_threshold" ]; then
+    if [ "$DISK_SPACE_PRIMARY_PERC" -gt 90 ]; then
         BACKUP_PRI_STATUS="WARNING"
-        warning "Primary storage almost full: ${DISK_SPACE_PRIMARY_PERC}% used (threshold: ${primary_threshold}%)"
-        set_exit_code "warning"
+        warning "Primary storage almost full: ${DISK_SPACE_PRIMARY_PERC}% used"
     fi
 
     # Verificare lo spazio libero su disco secondario
-    local secondary_threshold="${STORAGE_WARNING_THRESHOLD_SECONDARY:-90}"
-    if [ "$DISK_SPACE_SECONDARY_PERC" -gt "$secondary_threshold" ]; then
+    if [ "$DISK_SPACE_SECONDARY_PERC" -gt 90 ]; then
         BACKUP_SEC_STATUS="WARNING"
-        warning "Secondary storage almost full: ${DISK_SPACE_SECONDARY_PERC}% used (threshold: ${secondary_threshold}%)"
-        set_exit_code "warning"
+        warning "Secondary storage almost full: ${DISK_SPACE_SECONDARY_PERC}% used"
     fi
 
     # Calcola dimensione del backup corrente se disponibile
