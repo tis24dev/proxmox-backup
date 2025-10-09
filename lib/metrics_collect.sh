@@ -3,6 +3,7 @@
 # Funzione per raccogliere tutte le metriche del backup
 collect_metrics() {
     step "Collecting system metrics"
+    debug "=== collect_metrics() started - Initial EXIT_CODE: ${EXIT_CODE} ==="
 
     # Collect system statistics (now variables are already declared)
     SYSTEM_LOAD_AVG=$(cat /proc/loadavg 2>/dev/null | awk '{print $1" "$2" "$3}' || echo "N/A")
@@ -416,15 +417,29 @@ collect_metrics() {
     fi
 
     # Verificare lo spazio libero su disco primario
-    if [ "$DISK_SPACE_PRIMARY_PERC" -gt 90 ]; then
+    local primary_threshold=${STORAGE_WARNING_THRESHOLD_PRIMARY:-90}
+    debug "Checking primary storage: ${DISK_SPACE_PRIMARY_PERC}% used, threshold: ${primary_threshold}%, current EXIT_CODE: ${EXIT_CODE}"
+    if [ "$DISK_SPACE_PRIMARY_PERC" -gt "$primary_threshold" ]; then
         BACKUP_PRI_STATUS="WARNING"
-        warning "Primary storage almost full: ${DISK_SPACE_PRIMARY_PERC}% used"
+        warning "Primary storage almost full: ${DISK_SPACE_PRIMARY_PERC}% used (threshold: ${primary_threshold}%)"
+        debug "Setting EXIT_CODE to warning due to primary storage threshold exceeded"
+        set_exit_code "warning"
+        debug "After set_exit_code, EXIT_CODE is now: ${EXIT_CODE}"
+    else
+        debug "Primary storage usage is within threshold (${DISK_SPACE_PRIMARY_PERC}% <= ${primary_threshold}%)"
     fi
 
     # Verificare lo spazio libero su disco secondario
-    if [ "$DISK_SPACE_SECONDARY_PERC" -gt 90 ]; then
+    local secondary_threshold=${STORAGE_WARNING_THRESHOLD_SECONDARY:-90}
+    debug "Checking secondary storage: ${DISK_SPACE_SECONDARY_PERC}% used, threshold: ${secondary_threshold}%, current EXIT_CODE: ${EXIT_CODE}"
+    if [ "$DISK_SPACE_SECONDARY_PERC" -gt "$secondary_threshold" ]; then
         BACKUP_SEC_STATUS="WARNING"
-        warning "Secondary storage almost full: ${DISK_SPACE_SECONDARY_PERC}% used"
+        warning "Secondary storage almost full: ${DISK_SPACE_SECONDARY_PERC}% used (threshold: ${secondary_threshold}%)"
+        debug "Setting EXIT_CODE to warning due to secondary storage threshold exceeded"
+        set_exit_code "warning"
+        debug "After set_exit_code, EXIT_CODE is now: ${EXIT_CODE}"
+    else
+        debug "Secondary storage usage is within threshold (${DISK_SPACE_SECONDARY_PERC}% <= ${secondary_threshold}%)"
     fi
 
     # Calcola dimensione del backup corrente se disponibile
@@ -597,6 +612,7 @@ collect_metrics() {
     # Raccolta informazioni sui file di backup
     count_backup_files
 
+    debug "=== collect_metrics() completed - Final EXIT_CODE: ${EXIT_CODE} ==="
     success "Metrics collection completed"
 }
 
