@@ -256,6 +256,38 @@ restore_preserved_files() {
     print_success "Cleanup complete"
 }
 
+# Function to add storage monitoring configuration
+add_storage_monitoring_config() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+    
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+    
+    # Check if storage monitoring section is already present
+    if grep -q "STORAGE_WARNING_THRESHOLD_PRIMARY" "$config_file"; then
+        print_status "Storage monitoring configuration already present"
+        return 0
+    fi
+    
+    print_status "Adding storage monitoring configuration section..."
+    
+    # Create backup
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Use sed to insert before the "END OF CONFIGURATION" section
+    sed -i '/^# END OF CONFIGURATION$/i\
+\
+# ---------- Storage Monitoring ----------\
+# Warning thresholds for storage space usage (percentage)\
+# Script will generate warnings and set EXIT_CODE=1 when storage usage exceeds these thresholds\
+STORAGE_WARNING_THRESHOLD_PRIMARY="90"\
+STORAGE_WARNING_THRESHOLD_SECONDARY="90"\
+' "$config_file"
+    
+    print_success "Storage monitoring configuration added successfully"
+}
+
 # Function to protect the server identity file
 protect_identity_file() {
     local identity_file="$INSTALL_DIR/config/.server_identity"
@@ -321,6 +353,11 @@ setup_configuration() {
     # Create configuration from repository or restored from previous installation
     if [[ -f "env/backup.env" ]]; then
         print_success "Configuration file found (preserved from previous installation or in repository)"
+        
+        # Add storage monitoring configuration if this is an update
+        if [[ -f /tmp/proxmox_backup_was_update ]]; then
+            add_storage_monitoring_config
+        fi
     else
         print_warning "Configuration file not found, creating basic config"
         mkdir -p env
@@ -396,6 +433,21 @@ GRAY='\033[0;37m'
 PINK='\033[38;5;213m'
 BOLD='\033[1m'
 RESET='\033[0m'
+
+# ---------- Storage Monitoring ----------
+# Warning thresholds for storage space usage (percentage)
+# Script will generate warnings and set EXIT_CODE=1 when storage usage exceeds these thresholds
+STORAGE_WARNING_THRESHOLD_PRIMARY="90"
+STORAGE_WARNING_THRESHOLD_SECONDARY="90"
+
+# ============================================================================
+# END OF CONFIGURATION
+# ============================================================================
+# For additional support and documentation, consult:
+# - Project README.md
+# - Official Proxmox documentation
+# - rclone documentation for cloud configurations
+# ============================================================================
 EOF
     fi
     
