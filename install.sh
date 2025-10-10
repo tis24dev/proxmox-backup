@@ -616,7 +616,7 @@ show_completion() {
     echo
     echo -e "${BOLD}${GREEN}Next steps:${RESET}"
     echo -e "1. ${CYAN}Edit configuration:${RESET} nano $INSTALL_DIR/env/backup.env"
-    echo -e "2. ${CYAN}Run first backup:${RESET} ./$INSTALL_DIR/script/proxmox-backup.sh"
+    echo -e "2. ${CYAN}Run first backup:${RESET} $INSTALL_DIR/script/proxmox-backup.sh"
     echo -e "3. ${CYAN}Check logs:${RESET} tail -f $INSTALL_DIR/log/*.log"
     # Read and decode unique code from .server_identity file
     UNIQUE_CODE=""
