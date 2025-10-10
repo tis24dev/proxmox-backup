@@ -275,15 +275,22 @@ add_storage_monitoring_config() {
     # Create backup
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
     
-    # Use sed to insert after the "PATHS AND STORAGE CONFIGURATION" section
-    sed -i '/^# ============================================================================$/a\
-\
-# ---------- Storage Monitoring ----------\
-# Warning thresholds for storage space usage (percentage)\
-# Script will generate warnings and set EXIT_CODE=1 when storage usage exceeds these thresholds\
-STORAGE_WARNING_THRESHOLD_PRIMARY="90"\
-STORAGE_WARNING_THRESHOLD_SECONDARY="90"\
-' "$config_file"
+    # Use awk to insert after the section separator following "PATHS AND STORAGE CONFIGURATION"
+    awk '
+        /^# 3\. PATHS AND STORAGE CONFIGURATION$/ { found=1 }
+        found && /^# =+$/ && !inserted {
+            print
+            print ""
+            print "# ---------- Storage Monitoring ----------"
+            print "# Warning thresholds for storage space usage (percentage)"
+            print "# Script will generate warnings and set EXIT_CODE=1 when storage usage exceeds these thresholds"
+            print "STORAGE_WARNING_THRESHOLD_PRIMARY=\"90\""
+            print "STORAGE_WARNING_THRESHOLD_SECONDARY=\"90\""
+            inserted=1
+            next
+        }
+        { print }
+    ' "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
     
     print_success "Storage monitoring configuration added successfully"
 }
