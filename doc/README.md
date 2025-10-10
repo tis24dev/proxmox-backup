@@ -1,4 +1,5 @@
-# Proxmox Backup System - Complete Documentation
+# Proxmox Backup System - Complete Documentation 
+# Version: 0.2.1
 
 Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 

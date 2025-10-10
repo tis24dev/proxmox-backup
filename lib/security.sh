@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 # Basic security functions for backup
 
 # Cache for command -v to avoid redundant calls

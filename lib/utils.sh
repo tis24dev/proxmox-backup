@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 # Centralized utility functions for common operations
 
 # ======= Functions for disk space management =======

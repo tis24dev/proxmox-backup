@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 # ==========================================
 # BACKUP MANAGER STORAGE (AUTOMATIC PARALLEL/SEQUENTIAL MANAGEMENT)
 # ==========================================

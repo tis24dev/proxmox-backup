@@ -3,6 +3,7 @@
 # Script to verify backup security
 # This script verifies permissions and ownership of files and folders
 #
+# Version: 0.2.1
 
 set -e
 

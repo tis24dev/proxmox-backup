@@ -3,6 +3,7 @@
 # Script per applicare i permessi corretti a tutti i file del sistema di backup
 # Questo script deve essere eseguito come root
 #
+# Version: 0.2.1
 
 set -e
 

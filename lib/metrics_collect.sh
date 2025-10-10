@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 
 # Funzione per raccogliere tutte le metriche del backup
 collect_metrics() {

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - FRESH INSTALLATION
@@ -8,7 +9,6 @@
 #
 # Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
 #
-# Version: 0.1.0
 # ============================================================================
 
 set -euo pipefail

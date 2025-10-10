@@ -1,4 +1,5 @@
 # Proxmox Backup System - Configuration Guide
+# Version: 0.2.1
 
 Complete configuration guide for the Proxmox backup system through the `backup.env` file.
 

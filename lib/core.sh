@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 # ==========================================
 # CORE FUNCTIONALITY FOR PROXMOX BACKUP SYSTEM
 # ==========================================

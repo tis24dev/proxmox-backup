@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - AUTOMATIC INSTALLER
@@ -9,7 +10,6 @@
 # Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 # Usage with verbose: bash install.sh --verbose
 #
-# Version: 0.2.0
 # ============================================================================
 
 set -euo pipefail

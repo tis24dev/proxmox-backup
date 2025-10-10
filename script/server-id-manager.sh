@@ -22,6 +22,7 @@
 #   help      - Show this help message
 #
 # Author: Proxmox Backup System
+# Version: 0.2.1
 
 # ==========================================
 

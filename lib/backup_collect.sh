@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 # Functions for backup data collection
 
 # Global counters for monitoring

@@ -5,6 +5,7 @@
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.
 #
+# Version: 0.2.1
 
 # ======= Base variables BEFORE set -u =======
 # Risolve il symlink per ottenere il percorso reale dello script

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 0.2.1
 # Proxmox backup notification system
 
 # Central management of all notifications

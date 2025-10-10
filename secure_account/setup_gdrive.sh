@@ -3,6 +3,8 @@
 # Script di configurazione per Google Drive con rclone usando service account JSON
 # Include assistenza per la creazione del file JSON
 #
+# Version: 0.2.1
+#
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

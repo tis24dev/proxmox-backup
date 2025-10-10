@@ -5,6 +5,7 @@
 # This script performs restoration of Proxmox configurations from backup files
 # created by the Proxmox Backup System
 #
+# Version: 0.2.1
 
 # ======= Base variables BEFORE set -u =======
 # Risolve il symlink per ottenere il percorso reale dello script
