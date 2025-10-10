@@ -275,8 +275,8 @@ add_storage_monitoring_config() {
     # Create backup
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
     
-    # Use sed to insert before the "END OF CONFIGURATION" section
-    sed -i '/^# END OF CONFIGURATION$/i\
+    # Use sed to insert after the "PATHS AND STORAGE CONFIGURATION" section
+    sed -i '/^# ============================================================================$/a\
 \
 # ---------- Storage Monitoring ----------\
 # Warning thresholds for storage space usage (percentage)\
