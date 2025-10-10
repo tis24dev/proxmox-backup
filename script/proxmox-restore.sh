@@ -146,6 +146,52 @@ get_storage_path() {
     esac
 }
 
+# Function to validate backup file integrity
+validate_backup_file() {
+    local backup_file="$1"
+    local storage_type="$2"
+    
+    # Check if checksum file exists
+    local checksum_file="${backup_file}.sha256"
+    local metadata_file="${backup_file}.metadata"
+    
+    case "$storage_type" in
+        "local"|"secondary")
+            # Check if checksum file exists
+            if [ ! -f "$checksum_file" ]; then
+                return 1  # No checksum file
+            fi
+            
+            # Verify checksum
+            if command -v sha256sum >/dev/null 2>&1; then
+                if ! sha256sum -c "$checksum_file" >/dev/null 2>&1; then
+                    return 1  # Checksum verification failed
+                fi
+            fi
+            
+            # Check if metadata file exists
+            if [ ! -f "$metadata_file" ]; then
+                return 1  # No metadata file
+            fi
+            
+            return 0  # File is valid
+            ;;
+        "cloud")
+            # For cloud storage, we can't easily verify checksums
+            # Just check if both files exist
+            if command -v rclone >/dev/null 2>&1; then
+                local checksum_exists=$(rclone ls "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/$(basename "$checksum_file")" 2>/dev/null | wc -l)
+                local metadata_exists=$(rclone ls "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/$(basename "$metadata_file")" 2>/dev/null | wc -l)
+                
+                if [ "$checksum_exists" -gt 0 ] && [ "$metadata_exists" -gt 0 ]; then
+                    return 0  # Both files exist
+                fi
+            fi
+            return 1  # Files don't exist or can't verify
+            ;;
+    esac
+}
+
 # Function to list backup files in a location
 list_backup_files() {
     local storage_type="$1"
@@ -154,12 +200,48 @@ list_backup_files() {
     case "$storage_type" in
         "local"|"secondary")
             if [ -d "$storage_path" ]; then
-                find "$storage_path" -name "*-backup-*.tar*" -type f 2>/dev/null | sort -r
+                # Find backup files excluding checksum and metadata files
+                local all_files=()
+                while IFS= read -r file; do
+                    [ -n "$file" ] && all_files+=("$file")
+                done < <(find "$storage_path" -name "*-backup-*.tar*" -type f 2>/dev/null | \
+                        grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
+                        sort -r)
+                
+                # Filter only valid backup files
+                local valid_files=()
+                for file in "${all_files[@]}"; do
+                    if validate_backup_file "$file" "$storage_type"; then
+                        valid_files+=("$file")
+                    fi
+                done
+                
+                # Output valid files
+                printf '%s\n' "${valid_files[@]}"
             fi
             ;;
         "cloud")
             if command -v rclone >/dev/null 2>&1; then
-                rclone ls "$storage_path" 2>/dev/null | grep -E ".*-backup-.*\.tar.*" | awk '{print $2}' | sort -r
+                # Get all backup files
+                local all_files=()
+                while IFS= read -r file; do
+                    [ -n "$file" ] && all_files+=("$file")
+                done < <(rclone ls "$storage_path" 2>/dev/null | \
+                        grep -E ".*-backup-.*\.tar.*" | \
+                        awk '{print $2}' | \
+                        grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
+                        sort -r)
+                
+                # Filter only valid backup files
+                local valid_files=()
+                for file in "${all_files[@]}"; do
+                    if validate_backup_file "$file" "$storage_type"; then
+                        valid_files+=("$file")
+                    fi
+                done
+                
+                # Output valid files
+                printf '%s\n' "${valid_files[@]}"
             fi
             ;;
     esac
