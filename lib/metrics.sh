@@ -826,7 +826,21 @@ calculate_transfer_speed() {
 
     # Rimuovi eventuali decimali per il formato bytes
     if [ "$format" = "bytes" ]; then
-        speed=$(printf "%.0f" "$speed")
+        speed=$(printf "%.0f" "$speed" 2>/dev/null)
+    fi
+
+    # Assicurati che speed sia un numero intero valido
+    speed=${speed%.*}
+    speed=${speed// /}
+
+    # Verifica che sia un numero valido prima delle comparazioni
+    if ! [[ "$speed" =~ ^[0-9]+$ ]]; then
+        if [ "$format" = "human" ]; then
+            echo "0 MB/s"
+        else
+            echo "0"
+        fi
+        return 1
     fi
 
     if [ "$format" = "human" ]; then
@@ -865,8 +879,21 @@ calculate_eta() {
     local eta
     eta=$(echo "scale=0; $remaining_size / $speed" | bc 2>/dev/null || echo "0")
 
-    # Assicurati che eta sia un numero intero
-    eta=$(printf "%.0f" "$eta")
+    # Assicurati che eta sia un numero intero valido
+    eta=$(printf "%.0f" "$eta" 2>/dev/null)
+    # Rimuovi eventuali decimali residui e spazi
+    eta=${eta%.*}
+    eta=${eta// /}
+
+    # Verifica che sia un numero valido prima delle comparazioni
+    if ! [[ "$eta" =~ ^[0-9]+$ ]]; then
+        if [ "$format" = "human" ]; then
+            echo "0s"
+        else
+            echo "0"
+        fi
+        return 1
+    fi
 
     if [ "$format" = "human" ]; then
         # Converti in formato human-readable
