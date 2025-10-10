@@ -327,8 +327,15 @@ create_email_body() {
     # Determine sidebar color for errors section
     local error_summary_color="#4CAF50"  # Green by default (no issues)
     if [ -f "$LOG_FILE" ]; then
-        local error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null || echo "0")
-        local warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null || echo "0")
+        local error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            error_count=0
+        fi
+        
+        local warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            warning_count=0
+        fi
         
         # Ensure values are numeric
         [[ "$error_count" =~ ^[0-9]+$ ]] || error_count=0
@@ -688,8 +695,15 @@ add_error_summary_to_email() {
     
     if [ -f "$LOG_FILE" ]; then
         # Count errors and warnings
-        local error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null || echo "0")
-        local warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null || echo "0")
+        local error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            error_count=0
+        fi
+        
+        local warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            warning_count=0
+        fi
         
         # Ensure values are numeric
         [[ "$error_count" =~ ^[0-9]+$ ]] || error_count=0
@@ -764,8 +778,6 @@ add_error_summary_to_email() {
             
             # Process warnings
             while read -r line; do
-			echo "DEBUG: Processing line: $line" >> /tmp/debug_email.log
-			echo "DEBUG: Extracted category: '$category'" >> /tmp/debug_email.log
                 # Extract category (first words after [WARNING])
                 # Handle both cases with and without colon
                 local category=""

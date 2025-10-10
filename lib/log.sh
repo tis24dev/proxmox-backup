@@ -480,12 +480,11 @@ log() {
             echo "${timestamp} ${tag} ${message}"
         fi
         
-        # Add to log file buffer if file logging is enabled
-        # Use buffered I/O to optimize file write operations
+        # Add to log file if file logging is enabled
         if [ -n "${LOG_FILE:-}" ] && [ "${ENABLE_LOG_MANAGEMENT:-true}" == "true" ]; then
             # Format message for file (always without colors)
             local file_message="${timestamp} ${tag} ${message}"
-            add_to_log_buffer "$file_message"
+            echo "$file_message" >> "$LOG_FILE"
         fi
         
         return 0
