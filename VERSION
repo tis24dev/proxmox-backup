@@ -1,0 +1,11 @@
+# Proxmox Backup System Version
+VERSION_MAJOR=0
+VERSION_MINOR=2
+VERSION_PATCH=1
+
+# Versione completa
+SCRIPT_VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
+
+# Ultimo aggiornamento
+LAST_UPDATE="2025-10-11"
+

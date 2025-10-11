@@ -1,6 +1,11 @@
 #!/bin/bash
-# Version: 0.2.1
-
+##
+# Proxmox Backup System - Fresh Installer
+# File: new-install.sh
+# Version: 1.0.0
+# Last Modified: 2025-10-11
+# Changes: Installer per nuova installazione
+##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - FRESH INSTALLATION
 # ============================================================================
@@ -25,7 +30,7 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Fresh Installer"
-SCRIPT_VERSION="0.1.0"
+NEW_INSTALLER_VERSION="1.0.0"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh"
@@ -53,7 +58,7 @@ print_critical() {
 
 print_header() {
     echo -e "${BOLD}${RED}================================${RESET}"
-    echo -e "${BOLD}${RED}  $SCRIPT_NAME v$SCRIPT_VERSION${RESET}"
+    echo -e "${BOLD}${RED}  $SCRIPT_NAME v$NEW_INSTALLER_VERSION${RESET}"
     echo -e "${BOLD}${RED}================================${RESET}"
     echo
 }

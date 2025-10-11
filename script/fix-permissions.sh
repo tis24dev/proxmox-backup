@@ -1,15 +1,26 @@
 #!/bin/bash
-#
+##
+# Proxmox Backup System - Fix Permissions Script
+# File: fix-permissions.sh
+# Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Applicazione permessi corretti
+##
 # Script per applicare i permessi corretti a tutti i file del sistema di backup
 # Questo script deve essere eseguito come root
-#
-# Version: 0.2.1
+##
 
 set -e
+
+# Script version (autonomo)
+FIX_PERMISSIONS_VERSION="0.2.0"
 
 # Directory di base
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Mostra versione
+echo "Fix Permissions Script Version: $FIX_PERMISSIONS_VERSION"
 
 # Colori per output
 RED='\033[0;31m'
@@ -81,7 +92,6 @@ check_root() {
 load_config() {
     if [ -f "$BASE_DIR/env/backup.env" ]; then
         source "$BASE_DIR/env/backup.env"
-        echo "Fix Permissions Script Version: $SCRIPT_VERSION"
     else
         log_error "File di configurazione non trovato: $BASE_DIR/env/backup.env"
         exit 1

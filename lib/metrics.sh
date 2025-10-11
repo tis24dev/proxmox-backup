@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Metrics Library
+# File: metrics.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Sistema di metriche per backup
+##
 
 # DEPENDENCY VALIDATION
 # =====================

@@ -1,6 +1,11 @@
 #!/bin/bash
-# Version: 0.2.1
-
+##
+# Proxmox Backup System - Automatic Installer
+# File: install.sh
+# Version: 1.0.0
+# Last Modified: 2025-10-11
+# Changes: Installer automatico del sistema
+##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - AUTOMATIC INSTALLER
 # ============================================================================
@@ -40,7 +45,7 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Installer"
-SCRIPT_VERSION="0.1.0"
+INSTALLER_VERSION="1.0.0"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 
@@ -63,7 +68,7 @@ print_error() {
 
 print_header() {
     echo -e "${BOLD}${CYAN}================================${RESET}"
-    echo -e "${BOLD}${CYAN}  $SCRIPT_NAME v$SCRIPT_VERSION${RESET}"
+    echo -e "${BOLD}${CYAN}  $SCRIPT_NAME v$INSTALLER_VERSION${RESET}"
     echo -e "${BOLD}${CYAN}================================${RESET}"
     echo
     echo -e "${BOLD}${GREEN}This script preserves your existing configuration and data${RESET}"
@@ -295,6 +300,92 @@ add_storage_monitoring_config() {
     print_success "Storage monitoring configuration added successfully"
 }
 
+# Function to update configuration header if needed
+update_config_header() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+    
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+    
+    # Check if the new header format is already present
+    if grep -q "Version: 1.0.1" "$config_file" && grep -q "configurazione iniziale con sistema di versioning" "$config_file"; then
+        print_status "Configuration header already up to date"
+        return 0
+    fi
+    
+    # Check if the file has the configuration section marker
+    if ! grep -q "# 1. GENERAL SYSTEM CONFIGURATION" "$config_file"; then
+        print_warning "Configuration file format not recognized, skipping header update"
+        return 0
+    fi
+    
+    print_status "Updating configuration file header to new format..."
+    
+    # Create backup
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Extract everything from "# 1. GENERAL SYSTEM CONFIGURATION" onwards
+    awk '
+        /^# ============================================================================$/ {
+            if (getline next_line > 0) {
+                if (next_line ~ /^# 1\. GENERAL SYSTEM CONFIGURATION$/) {
+                    found=1
+                    print
+                    print next_line
+                } else {
+                    if (found) print
+                    if (found) print next_line
+                }
+            }
+            next
+        }
+        found {print}
+    ' "$config_file" > "${config_file}.body.tmp"
+    
+    # Check if we successfully extracted the body
+    if [[ ! -s "${config_file}.body.tmp" ]]; then
+        print_error "Failed to extract configuration body"
+        rm -f "${config_file}.body.tmp"
+        return 1
+    fi
+    
+    # Create the new header and append the body
+    cat > "${config_file}.tmp" << 'HEADER_EOF'
+#!/bin/bash
+# ============================================================================
+# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
+# File: backup.env
+# Version: 1.0.1
+# Last Modified: 2025-10-11
+# Changes: Configurazione iniziale con sistema di versioning
+# ============================================================================
+# Main configuration file for Proxmox backup system
+# This file contains all configurations needed for automated backup
+# of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
+#
+# IMPORTANT: 
+# - This file must have 600 permissions and be owned by root
+# - Always verify configuration before running backups in production
+# - Keep backup copies of this configuration file
+# - La versione del SISTEMA viene caricata dal file VERSION
+# - La versione QUI indica la versione del formato di configurazione
+# ============================================================================
+
+HEADER_EOF
+    
+    # Append the body
+    cat "${config_file}.body.tmp" >> "${config_file}.tmp"
+    
+    # Replace the original file
+    mv "${config_file}.tmp" "$config_file"
+    
+    # Clean up temporary file
+    rm -f "${config_file}.body.tmp"
+    
+    print_success "Configuration header updated successfully"
+}
+
 # Function to protect the server identity file
 protect_identity_file() {
     local identity_file="$INSTALL_DIR/config/.server_identity"
@@ -361,8 +452,9 @@ setup_configuration() {
     if [[ -f "env/backup.env" ]]; then
         print_success "Configuration file found (preserved from previous installation or in repository)"
         
-        # Add storage monitoring configuration if this is an update
+        # Update configuration file if this is an update
         if [[ -f /tmp/proxmox_backup_was_update ]]; then
+            update_config_header
             add_storage_monitoring_config
         fi
     else
@@ -370,8 +462,17 @@ setup_configuration() {
         mkdir -p env
         cat > env/backup.env << 'EOF'
 #!/bin/bash
+# ============================================================================
+# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
+# File: backup.env
+# Version: 1.0.0
+# Last Modified: 2025-10-11
+# Changes: Configurazione base generata dall'installer
+# ============================================================================
 # Basic Proxmox Backup System Configuration - Generated by installer
-SCRIPT_VERSION="0.1.0"
+# La versione del SISTEMA viene caricata dal file VERSION
+# La versione QUI indica la versione del formato di configurazione
+# ============================================================================
 
 # General Configuration
 DEBUG_LEVEL="standard"

@@ -1,11 +1,14 @@
 #!/bin/bash
 ##
 # Proxmox Backup Script for PVE and PBS
+# File: proxmox-backup.sh
+# Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Aggiunto sistema di versioning centralizzato
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.
-#
-# Version: 0.2.1
+##
 
 # ======= Base variables BEFORE set -u =======
 # Risolve il symlink per ottenere il percorso reale dello script
@@ -22,11 +25,8 @@ export ENV_FILE="${BASE_DIR}/env/backup.env"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ======= Timezone setting (cron-safe) =======
-# export TZ="Europe/Rome"
-# Apply timezone also via tzset to ensure cron compatibility
-# if [ -x "$(command -v tzset)" ]; then
-#     tzset
-# fi
+# Use system timezone with fallback to UTC (timedatectl has priority as it's the current system setting)
+export TZ="${TZ:-$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")}"
 
 # ======= Standard exit codes =======
 EXIT_SUCCESS=0
@@ -37,13 +37,21 @@ EXIT_ERROR=2
 # CONFIGURATION LOADING
 # ==========================================
 
+# ======= Loading VERSION file =======
+VERSION_FILE="${BASE_DIR}/VERSION"
+if [[ -f "$VERSION_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$VERSION_FILE"
+fi
+
 # ======= Loading .env before enabling set -u =======
 if [[ -f "$ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$ENV_FILE"
-    echo "Proxmox Backup Script Version: $SCRIPT_VERSION"
+    echo "Proxmox Backup Script Version: ${SCRIPT_VERSION:-0.0.0}"
 else
     echo "[WARNING] Configuration file not found: $ENV_FILE"
+    SCRIPT_VERSION="${SCRIPT_VERSION:-0.0.0}"
 fi
 
 # ==========================================

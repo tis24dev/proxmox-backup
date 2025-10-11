@@ -1,11 +1,14 @@
 #!/bin/bash
 ##
 # Proxmox Restore Script for PVE and PBS
+# File: proxmox-restore.sh
+# Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Script di restore per configurazioni Proxmox
 #
 # This script performs restoration of Proxmox configurations from backup files
 # created by the Proxmox Backup System
-#
-# Version: 0.2.1
+##
 
 # ======= Base variables BEFORE set -u =======
 # Risolve il symlink per ottenere il percorso reale dello script
@@ -22,7 +25,8 @@ export ENV_FILE="${BASE_DIR}/env/backup.env"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ======= Timezone setting (cron-safe) =======
-export TZ="Europe/Rome"
+# Use system timezone with fallback to UTC (timedatectl has priority as it's the current system setting)
+export TZ="${TZ:-$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")}"
 
 # ======= Standard exit codes =======
 EXIT_SUCCESS=0

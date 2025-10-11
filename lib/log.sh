@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Logging Library
+# File: log.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Sistema di logging per backup
+##
 # ==========================================
 # PROXMOX BACKUP LOGGING SYSTEM
 # ==========================================

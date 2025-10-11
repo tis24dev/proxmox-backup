@@ -1,20 +1,30 @@
 #!/bin/bash
-#
+##
+# Proxmox Backup System - Security Check Script
+# File: security-check.sh
+# Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Correzione discrepanza versione header
+##
 # Script to verify backup security
 # This script verifies permissions and ownership of files and folders
-#
-# Version: 0.2.1
+##
 
 set -e
+
+# Script version (autonomo)
+SECURITY_CHECK_VERSION="0.2.0"
 
 # Base directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Mostra versione
+echo "Security Check Script Version: $SECURITY_CHECK_VERSION"
+
 # Load configuration file
 if [ -f "$BASE_DIR/env/backup.env" ]; then
     source "$BASE_DIR/env/backup.env"
-    echo "Security Check Script Version: $SCRIPT_VERSION"
 else
     echo "Configuration file not found: $BASE_DIR/env/backup.env"
     exit 1

@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Utils Library
+# File: utils.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Funzioni di utilità per backup
+##
 # Centralized utility functions for common operations
 
 # ======= Functions for disk space management =======

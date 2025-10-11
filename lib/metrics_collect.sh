@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Metrics Collection Library
+# File: metrics_collect.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Raccolta metriche backup
+##
 
 # Funzione per raccogliere tutte le metriche del backup
 collect_metrics() {

@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Environment Library
+# File: environment.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Setup ambiente per backup
+##
 # ==========================================
 # PROXMOX BACKUP ENVIRONMENT SETUP MODULE
 # ==========================================

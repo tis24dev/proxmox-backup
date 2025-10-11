@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Security Library
+# File: security.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Funzioni di sicurezza per backup
+##
 # Basic security functions for backup
 
 # Cache for command -v to avoid redundant calls

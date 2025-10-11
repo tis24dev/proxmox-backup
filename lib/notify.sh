@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Notification Library
+# File: notify.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Sistema di notifiche per backup
+##
 # Proxmox backup notification system
 
 # Central management of all notifications

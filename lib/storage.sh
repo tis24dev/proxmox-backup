@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Storage Library
+# File: storage.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Gestione storage per backup
+##
 # Backup storage management
 
 # Global variable initialization

@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Core Library
+# File: core.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Funzionalità core per backup
+##
 # ==========================================
 # CORE FUNCTIONALITY FOR PROXMOX BACKUP SYSTEM
 # ==========================================

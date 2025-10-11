@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Backup Manager Library
+# File: backup_manager.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Gestione storage backup
+##
 # ==========================================
 # BACKUP MANAGER STORAGE (AUTOMATIC PARALLEL/SEQUENTIAL MANAGEMENT)
 # ==========================================

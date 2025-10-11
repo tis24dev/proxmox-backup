@@ -1,4 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Server ID Manager
+# File: server-id-manager.sh
+# Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Gestione ID server
+##
 # ==========================================
 # SERVER ID MANAGER
 # ==========================================
@@ -26,17 +33,22 @@
 
 # ==========================================
 
+# Script version (autonomo)
+SERVER_ID_MANAGER_VERSION="0.2.0"
+
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Mostra versione
+echo "Server ID Manager Version: $SERVER_ID_MANAGER_VERSION"
 
 # Source required modules
 source "${SCRIPT_DIR}/../lib/log.sh"
 source "${SCRIPT_DIR}/../lib/utils.sh"
 
-# Load environment file for version info
+# Load environment file
 if [[ -f "${SCRIPT_DIR}/../env/backup.env" ]]; then
     source "${SCRIPT_DIR}/../env/backup.env"
-    echo "Server ID Manager Version: $SCRIPT_VERSION"
 fi
 
 # Initialize logging

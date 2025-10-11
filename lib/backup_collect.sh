@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Backup Collection Library
+# File: backup_collect.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Raccolta dati per backup
+##
 # Functions for backup data collection
 
 # Global counters for monitoring

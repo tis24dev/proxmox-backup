@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Counting Utils Library
+# File: utils_counting.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Sistema di conteggio autonomo
+##
 
 # ======= AUTONOMOUS COUNTING SYSTEM - DOCUMENTATION =======
 #  

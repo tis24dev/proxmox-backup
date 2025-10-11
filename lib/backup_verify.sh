@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Backup Verification Library
+# File: backup_verify.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Verifica integrità backup
+##
 # ==========================================
 # BACKUP VERIFICATION MODULE - OPTIMIZED
 # ==========================================

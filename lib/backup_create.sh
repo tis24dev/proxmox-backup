@@ -1,5 +1,11 @@
 #!/bin/bash
+##
+# Proxmox Backup System - Backup Creation Library
+# File: backup_create.sh
 # Version: 0.2.1
+# Last Modified: 2025-10-11
+# Changes: Creazione archivi backup
+##
 # =============================================================================
 # BACKUP CREATION FUNCTIONS
 # =============================================================================
