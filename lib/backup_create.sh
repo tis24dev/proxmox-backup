@@ -508,7 +508,7 @@ create_backup_archive() {
 
     # Execute tar command with retry logic and comprehensive error handling
     # The actual archive creation happens here
-    local tar_operation="cd '$TEMP_DIR' && $tar_cmd '$BACKUP_FILE' ."
+    local tar_operation="$tar_cmd '$BACKUP_FILE' -C '$TEMP_DIR' ."
     
     if ! retry_operation $MAX_RETRY_ATTEMPTS "$tar_operation" "create compressed archive"; then
         local exit_code=$?
