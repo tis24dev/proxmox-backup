@@ -246,6 +246,12 @@ restore_preserved_files() {
             if [[ -e "$source_path" ]]; then
                 # Ensure the parent directory exists in the new installation
                 mkdir -p "$INSTALL_DIR/$(dirname "$path")"
+                
+                # Remove existing file/directory if it exists to avoid nested copies
+                if [[ -e "$INSTALL_DIR/$path" ]]; then
+                    rm -rf "$INSTALL_DIR/$path"
+                fi
+                
                 # Copy the file/directory back
                 if cp -a "$source_path" "$INSTALL_DIR/$path"; then
                     print_status "Restored: $path"
