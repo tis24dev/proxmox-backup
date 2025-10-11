@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Creation Library
 # File: backup_create.sh
-# Version: 0.2.1
+# Version: 0.2.2
 # Last Modified: 2025-10-11
-# Changes: Creazione archivi backup
+# Changes: added debug
 ##
 # =============================================================================
 # BACKUP CREATION FUNCTIONS
@@ -387,11 +387,24 @@ create_backup_archive() {
     
     # CRITICAL: Ensure we're in a valid directory before any operation
     # This prevents getcwd errors throughout the function
+    debug "=== DIRECTORY CHECK BEFORE CREATE ARCHIVE ==="
+    debug "PWD variable: ${PWD:-not set}"
+    debug "pwd command result: $(pwd 2>&1 || echo 'FAILED')"
+    debug "realpath of PWD: $(realpath "${PWD}" 2>&1 || echo 'FAILED')"
+    debug "Directory exists test: $([ -d "${PWD}" ] && echo 'yes' || echo 'no')"
+    debug "Can list directory: $(ls -la "${PWD}" >/dev/null 2>&1 && echo 'yes' || echo 'no')"
+    debug "Parent directory: $(dirname "${PWD}")"
+    debug "Parent exists: $([ -d "$(dirname "${PWD}")" ] && echo 'yes' || echo 'no')"
+    
     if ! pwd >/dev/null 2>&1; then
         warning "Current directory invalid, moving to safe location"
+        debug "  - PWD says: ${PWD}"
+        debug "  - Directory physically exists: $([ -d "${PWD}" ] && echo 'YES' || echo 'NO')"
+        debug "  - Problem: pwd cannot resolve path (likely parent was deleted)"
         cd /tmp 2>/dev/null || cd / 2>/dev/null
         debug "Changed to safe directory: $(pwd)"
     fi
+    debug "=== END DIRECTORY CHECK ==="
     
     # Initialize and validate configuration with secure defaults
     : "${COMPRESSION_MODE:=standard}"           # Compression speed/quality balance
