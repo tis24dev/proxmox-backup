@@ -181,6 +181,9 @@ install_dependencies() {
 safe_remove_installation() {
     print_status "Safely backing up and removing existing installation..."
     
+    # Change to a safe directory to avoid issues when deleting current working directory
+    cd /tmp
+    
     # Create temporary directory to hold the full backup
     TEMP_PRESERVE=$(mktemp -d)
     
