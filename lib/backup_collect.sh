@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.2.1
+# Version: 0.2.3
 # Last Modified: 2025-10-11
-# Changes: Raccolta dati per backup
+# Changes: Fix: Handle invalid working directory during backup
 ##
 # Functions for backup data collection
 
@@ -608,6 +608,12 @@ collect_system_info() {
     collect_security_configs
     
     success "System information collected successfully"
+    
+    # CRITICAL: Ensure we're in a valid directory after collection
+    # Some commands (like find) may leave the process in an orphaned state
+    cd / 2>/dev/null || true
+    debug "Reset to root directory after system info collection"
+    
     return $EXIT_SUCCESS
 }
 
