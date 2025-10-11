@@ -22,11 +22,11 @@ export ENV_FILE="${BASE_DIR}/env/backup.env"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ======= Timezone setting (cron-safe) =======
-export TZ="Europe/Rome"
+# export TZ="Europe/Rome"
 # Apply timezone also via tzset to ensure cron compatibility
-if [ -x "$(command -v tzset)" ]; then
-    tzset
-fi
+# if [ -x "$(command -v tzset)" ]; then
+#     tzset
+# fi
 
 # ======= Standard exit codes =======
 EXIT_SUCCESS=0
