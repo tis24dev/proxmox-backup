@@ -238,6 +238,7 @@ restore_preserved_files() {
             "secure_account"
             "backup"
             "log"
+            "tec-tool"
         )
         
         for path in "${PRESERVE_PATHS[@]}"; do
