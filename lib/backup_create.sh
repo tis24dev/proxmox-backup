@@ -385,6 +385,14 @@ create_backup_archive() {
     # Record start time for performance metrics
     local compress_start=$(date +%s)
     
+    # CRITICAL: Ensure we're in a valid directory before any operation
+    # This prevents getcwd errors throughout the function
+    if ! pwd >/dev/null 2>&1; then
+        warning "Current directory invalid, moving to safe location"
+        cd /tmp 2>/dev/null || cd / 2>/dev/null
+        debug "Changed to safe directory: $(pwd)"
+    fi
+    
     # Initialize and validate configuration with secure defaults
     : "${COMPRESSION_MODE:=standard}"           # Compression speed/quality balance
     : "${COMPRESSION_THREADS:=0}"               # Auto-detect thread count
@@ -508,7 +516,20 @@ create_backup_archive() {
 
     # Execute tar command with retry logic and comprehensive error handling
     # The actual archive creation happens here
-    local tar_operation="cd '$TEMP_DIR' && $tar_cmd '$BACKUP_FILE' ."
+    # BACKUP_FILE should already be absolute from initialize_backup()
+    
+    # Validate TEMP_DIR before proceeding
+    if [ ! -d "$TEMP_DIR" ]; then
+        report_detailed_error "TEMP_DIR_MISSING" "validate temporary directory" \
+            "Temporary directory disappeared: $TEMP_DIR" \
+            "Check if cleanup is happening prematurely"
+        set_exit_code "error"
+        return $EXIT_ERROR
+    fi
+    
+    # Execute tar operation - BACKUP_FILE is already absolute
+    debug "Executing tar operation..."
+    local tar_operation="( cd '$TEMP_DIR' && $tar_cmd '$BACKUP_FILE' . )"
     
     if ! retry_operation $MAX_RETRY_ATTEMPTS "$tar_operation" "create compressed archive"; then
         local exit_code=$?
@@ -839,6 +860,11 @@ perform_content_preprocessing() {
     
     info "Content preprocessing completed: $processed_files files processed, $failed_files failed"
     
+    # CRITICAL: Return to a safe directory after find operations
+    # find internally changes directories and can leave shell orphaned
+    cd /tmp 2>/dev/null || cd / 2>/dev/null || true
+    debug "Reset to safe directory after preprocessing"
+    
     # Return success if we processed some files or had no failures
     if [ $failed_files -eq 0 ] || [ $processed_files -gt 0 ]; then
         return 0
@@ -903,6 +929,11 @@ perform_smart_chunking() {
     done
     
     info "Smart chunking completed: $large_file_count large files processed"
+    
+    # CRITICAL: Return to a safe directory after find operations
+    cd /tmp 2>/dev/null || cd / 2>/dev/null || true
+    debug "Reset to safe directory after chunking"
+    
     return 0
 }
 
