@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Fresh Installer
 # File: new-install.sh
-# Version: 1.0.0
-# Last Modified: 2025-10-11
-# Changes: Installer per nuova installazione
+# Version: 1.1.0
+# Last Modified: 2025-10-18
+# Changes: **Added automatic backup before complete removal**
 ##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - FRESH INSTALLATION
@@ -30,7 +30,7 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Fresh Installer"
-NEW_INSTALLER_VERSION="1.0.0"
+NEW_INSTALLER_VERSION="1.1.0"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh"
@@ -91,13 +91,153 @@ show_critical_warning() {
     echo
 }
 
+# Function to create temporary backup before removal
+create_backup_before_removal() {
+    if [[ ! -d "$INSTALL_DIR" ]]; then
+        print_status "No existing installation to backup"
+        return 0
+    fi
+
+    print_status "Existing installation detected at $INSTALL_DIR"
+    echo
+    echo -e "${BOLD}${YELLOW}BACKUP RECOMMENDATION:${RESET}"
+    echo -e "${YELLOW}It is STRONGLY recommended to create a temporary backup before complete removal.${RESET}"
+    echo -e "${YELLOW}This backup can be used to restore data if needed (before system reboot).${RESET}"
+    echo
+    read -p "Create temporary backup before removal? (Y/n): " -n 1 -r BACKUP_CHOICE
+    echo
+
+    if [[ ! $BACKUP_CHOICE =~ ^[Nn]$ ]]; then
+        # Define backup location and filename in /tmp
+        BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        BACKUP_FILE="/tmp/proxmox-backup-full-${BACKUP_TIMESTAMP}.tar.gz"
+        README_FILE="/tmp/proxmox-backup-restore-${BACKUP_TIMESTAMP}.txt"
+
+        # Remove immutable attributes before backup
+        print_status "Preparing files for backup..."
+        if command -v chattr >/dev/null 2>&1; then
+            chattr -R -i "$INSTALL_DIR" 2>/dev/null || true
+        fi
+
+        # Create compressed backup
+        print_status "Creating temporary compressed backup (this may take a while)..."
+        if tar czf "$BACKUP_FILE" -C "$(dirname "$INSTALL_DIR")" "$(basename "$INSTALL_DIR")" 2>/dev/null; then
+            local backup_size=$(du -h "$BACKUP_FILE" | cut -f1)
+            print_success "Temporary backup created successfully: $BACKUP_FILE ($backup_size)"
+
+            # Create README with restoration instructions
+            cat > "$README_FILE" << EOF
+================================================================================
+PROXMOX BACKUP SYSTEM - TEMPORARY BACKUP ARCHIVE
+================================================================================
+Created: $(date)
+Backup File: $BACKUP_FILE
+Original Location: $INSTALL_DIR
+Backup Size: $backup_size
+
+================================================================================
+IMPORTANT - TEMPORARY BACKUP
+================================================================================
+This is a TEMPORARY backup stored in /tmp/
+It will be automatically deleted when the system reboots or when /tmp is cleaned.
+
+If you need to keep this backup permanently, copy it to a safe location NOW:
+  cp $BACKUP_FILE /root/proxmox-backup-full-${BACKUP_TIMESTAMP}.tar.gz
+
+================================================================================
+RESTORATION INSTRUCTIONS
+================================================================================
+
+To restore this backup manually (before system reboot):
+
+1. Stop any running backup processes:
+   pkill -f proxmox-backup
+
+2. Remove current installation (if exists):
+   rm -rf $INSTALL_DIR
+
+3. Extract the backup:
+   tar xzf "$BACKUP_FILE" -C /opt/
+
+4. Fix permissions:
+   chown -R root:root $INSTALL_DIR
+   chmod -R 755 $INSTALL_DIR
+   chmod 600 $INSTALL_DIR/env/backup.env
+
+5. Recreate symlinks:
+   ln -sf $INSTALL_DIR/script/proxmox-backup.sh /usr/local/bin/proxmox-backup
+   ln -sf $INSTALL_DIR/script/security-check.sh /usr/local/bin/proxmox-backup-security
+   ln -sf $INSTALL_DIR/script/fix-permissions.sh /usr/local/bin/proxmox-backup-permissions
+   ln -sf $INSTALL_DIR/script/proxmox-restore.sh /usr/local/bin/proxmox-restore
+
+6. Test the restoration:
+   proxmox-backup --dry-run
+
+7. Recreate cron job:
+   (crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/proxmox-backup >/dev/null 2>&1") | crontab -
+
+================================================================================
+BACKUP CONTENTS
+================================================================================
+This backup contains:
+- All configuration files (env/backup.env)
+- Server identity and security settings
+- All backups stored in backup/
+- All logs stored in log/
+- Custom tools in tec-tool/ (if present)
+- All scripts and libraries
+
+================================================================================
+CLEANUP
+================================================================================
+To manually remove this temporary backup:
+  rm -f $BACKUP_FILE $README_FILE
+
+This backup was created automatically by new-install.sh v${NEW_INSTALLER_VERSION}
+================================================================================
+EOF
+
+            print_success "Restoration instructions created: $README_FILE"
+            echo
+            echo -e "${BOLD}${YELLOW}Temporary Backup Location: ${CYAN}$BACKUP_FILE${RESET} ${YELLOW}($backup_size)${RESET}"
+            echo -e "${BOLD}${YELLOW}Instructions: ${CYAN}$README_FILE${RESET}"
+            echo
+            echo -e "${BOLD}${RED}⚠️  IMPORTANT: This backup is TEMPORARY (in /tmp/)${RESET}"
+            echo -e "${RED}   It will be deleted on system reboot or /tmp cleanup.${RESET}"
+            echo -e "${GREEN}   To keep permanently, run:${RESET}"
+            echo -e "${CYAN}   cp $BACKUP_FILE /root/proxmox-backup-saved-${BACKUP_TIMESTAMP}.tar.gz${RESET}"
+            echo
+
+            # Save backup location for later reference
+            echo "$BACKUP_FILE" > /tmp/proxmox_backup_archive_location
+
+        else
+            print_error "Failed to create backup"
+            echo
+            read -p "Continue with removal anyway? (y/N): " -n 1 -r CONTINUE_ANYWAY
+            echo
+            if [[ ! $CONTINUE_ANYWAY =~ ^[Yy]$ ]]; then
+                print_error "Operation cancelled"
+                exit 1
+            fi
+        fi
+    else
+        print_warning "Backup skipped by user request"
+        echo
+        echo -e "${BOLD}${RED}WARNING: Proceeding without backup!${RESET}"
+        echo -e "${RED}All data will be permanently lost.${RESET}"
+        echo
+        sleep 2
+    fi
+}
+
 # Function to confirm removal
 confirm_removal() {
     echo -e "${BOLD}${RED}To confirm complete removal, type: ${YELLOW}REMOVE-EVERYTHING${RESET}"
     echo -e "${BOLD}${RED}To cancel, type anything else or press Ctrl+C${RESET}"
     echo
     read -p "Confirmation: " -r CONFIRMATION
-    
+
     if [[ "$CONFIRMATION" != "REMOVE-EVERYTHING" ]]; then
         print_error "Operation cancelled - incorrect confirmation"
         echo
@@ -105,7 +245,7 @@ confirm_removal() {
         echo -e "${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)\"${RESET}"
         exit 1
     fi
-    
+
     print_warning "Confirmation accepted - proceeding with complete removal"
 }
 
@@ -127,6 +267,7 @@ complete_removal() {
         rm -f /usr/local/bin/proxmox-backup 2>/dev/null || true
         rm -f /usr/local/bin/proxmox-backup-security 2>/dev/null || true
         rm -f /usr/local/bin/proxmox-backup-permissions 2>/dev/null || true
+        rm -f /usr/local/bin/proxmox-restore 2>/dev/null || true
         
         # Force removal of all files, including protected ones
         print_status "Forcing removal of all files (including protected ones)..."
@@ -161,9 +302,10 @@ complete_removal() {
         print_status "No existing installation found at $INSTALL_DIR"
     fi
     
-    # Clean up any remaining temporary files
-    print_status "Cleaning up temporary files..."
-    rm -f /tmp/proxmox_backup_* 2>/dev/null || true
+    # Clean up any remaining temporary files (except the backup we just created)
+    print_status "Cleaning up old temporary files..."
+    # Remove old temporary files but preserve the current backup and its location marker
+    find /tmp -maxdepth 1 -name "proxmox_backup_*" -type f ! -name "proxmox_backup_archive_location" ! -name "proxmox-backup-full-*.tar.gz" ! -name "proxmox-backup-restore-*.txt" -delete 2>/dev/null || true
     rm -f /tmp/backup_*_*.lock 2>/dev/null || true
     
     print_success "Cleanup completed"
@@ -194,25 +336,28 @@ error_handler() {
 # Main function
 main() {
     print_header
-    
+
     # Set error handling
     trap 'error_handler "${BASH_COMMAND}"' ERR
-    
+
     # Check if running as root
     check_root
-    
+
     # Show critical warning
     show_critical_warning
-    
+
+    # Create backup before removal (if installation exists)
+    create_backup_before_removal
+
     # Confirm removal
     confirm_removal
-    
+
     # Perform complete removal
     complete_removal
-    
+
     # Run fresh installation
     run_fresh_installation
-    
+
     echo
     echo "================================================"
     print_success "🎉 FRESH INSTALLATION COMPLETED 🎉"
@@ -221,6 +366,24 @@ main() {
     print_status "The system has been completely reinstalled with default settings."
     print_status "ALL previous data has been removed and the system is now clean."
     echo
+
+    # Show backup location if backup was created
+    if [[ -f /tmp/proxmox_backup_archive_location ]]; then
+        BACKUP_LOCATION=$(cat /tmp/proxmox_backup_archive_location)
+        local backup_size=$(du -h "$BACKUP_LOCATION" 2>/dev/null | cut -f1)
+        echo -e "${BOLD}${YELLOW}⚠️  Temporary Backup Information:${RESET}"
+        echo -e "${CYAN}Previous installation backed up to: ${YELLOW}$BACKUP_LOCATION${RESET} ${YELLOW}($backup_size)${RESET}"
+        echo -e "${CYAN}Restoration instructions: ${YELLOW}/tmp/proxmox-backup-restore-*.txt${RESET}"
+        echo
+        echo -e "${BOLD}${RED}IMPORTANT: Backup is in /tmp/ and will be deleted on reboot!${RESET}"
+        echo -e "${GREEN}To keep permanently, copy it now:${RESET}"
+        local timestamp=$(echo "$BACKUP_LOCATION" | grep -oP '\d{8}_\d{6}')
+        echo -e "${CYAN}cp $BACKUP_LOCATION /root/proxmox-backup-saved-${timestamp}.tar.gz${RESET}"
+        echo
+
+        # Clean up temporary file
+        rm -f /tmp/proxmox_backup_archive_location
+    fi
 }
 
 # Run main function

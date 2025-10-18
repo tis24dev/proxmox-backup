@@ -5,6 +5,14 @@ Tutte le modifiche notevoli a questo progetto sono documentate in questo file.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [1.1.0] - 2025-10-18 - Script Autonomo: new-install.sh
+
+### Changed
+? ****Added automatic backup before complete removal****
+- Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
+- Autore: root
+
 ---
 
 ## [0.2.1] - 2025-10-11
