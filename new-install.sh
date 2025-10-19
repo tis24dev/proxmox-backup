@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Fresh Installer
 # File: new-install.sh
-# Version: 1.1.0
-# Last Modified: 2025-10-18
-# Changes: **Added automatic backup before complete removal**
+# Version: 1.2.0
+# Last Modified: 2025-10-19
+# Changes: **Added backup verification before removal - prevents data loss from corrupted backups**
 ##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - FRESH INSTALLATION
@@ -30,10 +30,14 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Fresh Installer"
-NEW_INSTALLER_VERSION="1.1.0"
+NEW_INSTALLER_VERSION="1.2.0"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh"
+
+# Backup verification status
+BACKUP_VERIFIED=false
+BACKUP_FILE=""
 
 # Function to print colored output
 print_status() {
@@ -124,6 +128,39 @@ create_backup_before_removal() {
         if tar czf "$BACKUP_FILE" -C "$(dirname "$INSTALL_DIR")" "$(basename "$INSTALL_DIR")" 2>/dev/null; then
             local backup_size=$(du -h "$BACKUP_FILE" | cut -f1)
             print_success "Temporary backup created successfully: $BACKUP_FILE ($backup_size)"
+            echo
+
+            # Verify backup integrity
+            if verify_backup "$BACKUP_FILE"; then
+                BACKUP_VERIFIED=true
+                print_success "Backup verified and ready for use"
+            else
+                print_error "Backup verification failed!"
+                print_error "The backup file may be corrupted or incomplete"
+
+                # Remove corrupted backup
+                print_status "Removing corrupted backup file..."
+                rm -f "$BACKUP_FILE" 2>/dev/null || true
+
+                echo
+                echo -e "${BOLD}${RED}BACKUP VERIFICATION FAILED!${RESET}"
+                echo -e "${RED}The backup could not be verified and has been removed.${RESET}"
+                echo
+                read -p "Do you want to continue WITHOUT backup? (y/N): " -n 1 -r CONTINUE_NO_BACKUP
+                echo
+
+                if [[ ! $CONTINUE_NO_BACKUP =~ ^[Yy]$ ]]; then
+                    print_error "Operation cancelled for safety"
+                    exit 1
+                fi
+
+                print_warning "Proceeding without verified backup - data loss risk!"
+                BACKUP_VERIFIED=false
+                BACKUP_FILE=""
+                sleep 2
+                return 0
+            fi
+            echo
 
             # Create README with restoration instructions
             cat > "$README_FILE" << EOF
@@ -231,6 +268,81 @@ EOF
     fi
 }
 
+# Function to verify backup integrity
+verify_backup() {
+    local backup_archive="$1"
+
+    print_status "Verifying backup integrity..."
+
+    # Test 1: Check if archive is readable and valid
+    if ! tar -tzf "$backup_archive" >/dev/null 2>&1; then
+        print_error "Backup archive is corrupted or unreadable"
+        return 1
+    fi
+
+    print_success "Archive integrity test passed"
+
+    # Test 2: Verify critical files are present in backup
+    print_status "Checking for critical files in backup..."
+
+    local missing_files=0
+
+    # List all files in backup
+    local backup_contents=$(tar -tzf "$backup_archive" 2>/dev/null)
+
+    # Check for env/backup.env
+    if echo "$backup_contents" | grep -F "env/backup.env" >/dev/null 2>&1; then
+        print_success "Found critical file: env/backup.env"
+    else
+        print_warning "Critical path not found in backup: env/backup.env"
+        missing_files=$((missing_files + 1))
+    fi
+
+    # Check for script/ directory
+    if echo "$backup_contents" | grep -F "script/" >/dev/null 2>&1; then
+        print_success "Found critical directory: script/"
+    else
+        print_warning "Critical path not found in backup: script/"
+        missing_files=$((missing_files + 1))
+    fi
+
+    if [[ $missing_files -gt 0 ]]; then
+        print_warning "Some critical files may be missing from backup"
+        echo
+        read -p "Continue anyway? (y/N): " -n 1 -r CONTINUE_MISSING
+        echo
+        if [[ ! $CONTINUE_MISSING =~ ^[Yy]$ ]]; then
+            print_error "Backup verification failed due to missing files"
+            return 1
+        fi
+    else
+        print_success "All critical files found in backup"
+    fi
+
+    # Test 3: Count files in backup vs original directory
+    print_status "Comparing file counts..."
+    local backup_file_count=$(tar -tzf "$backup_archive" 2>/dev/null | wc -l)
+    local original_file_count=$(find "$INSTALL_DIR" -type f 2>/dev/null | wc -l)
+
+    print_status "Original directory: $original_file_count files"
+    print_status "Backup archive: $backup_file_count entries"
+
+    # Allow some variance (directories are counted in tar)
+    if [[ $backup_file_count -lt $((original_file_count / 2)) ]]; then
+        print_warning "Backup contains significantly fewer files than original"
+        echo
+        read -p "Continue anyway? (y/N): " -n 1 -r CONTINUE_FEWER
+        echo
+        if [[ ! $CONTINUE_FEWER =~ ^[Yy]$ ]]; then
+            print_error "Backup verification failed due to file count mismatch"
+            return 1
+        fi
+    fi
+
+    print_success "Backup verification completed successfully"
+    return 0
+}
+
 # Function to confirm removal
 confirm_removal() {
     echo -e "${BOLD}${RED}To confirm complete removal, type: ${YELLOW}REMOVE-EVERYTHING${RESET}"
@@ -252,8 +364,30 @@ confirm_removal() {
 # Function to completely remove existing installation
 complete_removal() {
     print_status "Performing complete removal of existing installation..."
-    
+
     if [[ -d "$INSTALL_DIR" ]]; then
+        # Safety check: ensure backup was verified if one was created
+        if [[ -n "$BACKUP_FILE" ]] && [[ "$BACKUP_VERIFIED" != "true" ]]; then
+            print_critical "SAFETY CHECK FAILED!"
+            print_error "Existing installation detected but backup was not verified"
+            print_error "Cannot proceed with removal to prevent data loss"
+            echo
+            echo -e "${BOLD}${YELLOW}Options:${RESET}"
+            echo -e "${YELLOW}1. Cancel and try creating backup again${RESET}"
+            echo -e "${YELLOW}2. Continue at your own risk (data will be lost)${RESET}"
+            echo
+            read -p "Continue WITHOUT verified backup? (y/N): " -n 1 -r FORCE_CONTINUE
+            echo
+
+            if [[ ! $FORCE_CONTINUE =~ ^[Yy]$ ]]; then
+                print_error "Operation cancelled for safety - backup not verified"
+                exit 1
+            fi
+
+            print_warning "User forced continuation without verified backup"
+            sleep 2
+        fi
+
         print_status "Removing directory: $INSTALL_DIR"
         
         # Remove cron jobs first
