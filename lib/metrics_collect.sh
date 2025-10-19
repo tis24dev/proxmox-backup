@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Metrics Collection Library
 # File: metrics_collect.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Raccolta metriche backup
+# Version: 0.2.4
+# Last Modified: 2025-10-19
+# Changes: Remove duplicate system metrics collection
 ##
 
 # Funzione per raccogliere tutte le metriche del backup
@@ -396,22 +396,6 @@ collect_metrics() {
         local is_cloud_configured=false
         local emoji_value=$(get_status_emoji "log" "cloud")
         LOG_CLO_EMOJI="$emoji_value"
-    fi
-
-    # Collect system statistics
-    SYSTEM_LOAD_AVG=$(cat /proc/loadavg 2>/dev/null | awk '{print $1" "$2" "$3}' || echo "N/A")
-
-    if [ -f /proc/meminfo ]; then
-        SYSTEM_MEM_TOTAL=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-        SYSTEM_MEM_FREE=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-        if [ -n "$SYSTEM_MEM_TOTAL" ] && [ -n "$SYSTEM_MEM_FREE" ]; then
-            SYSTEM_MEM_USED=$((SYSTEM_MEM_TOTAL - SYSTEM_MEM_FREE))
-        fi
-    fi
-
-    # Calculate CPU usage
-    if command -v top &>/dev/null; then
-        SYSTEM_CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
     fi
 
     # Imposta lo stato basato sulle operazioni
