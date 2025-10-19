@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - PBS/PVE Collection Library
 # File: backup_collect_pbspve.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Raccolta dati PBS/PVE
+# Version: 0.2.5
+# Last Modified: 2025-10-19
+# Changes: Optimize file scanning and improve safety
 ##
 # Functions for backup data collection
 
@@ -146,9 +146,11 @@ detect_all_datastores() {
                     if [[ "$line" =~ ^Name.*Type.*Status ]] || [[ -z "$line" ]]; then
                         continue
                     fi
-                    
+
                     # Parse the line (Name Type Status Total Used Available %)
-                    local storage_info=($line)
+                    # Use 'read -ra' to safely split the line and prevent glob expansion
+                    local storage_info
+                    IFS=' ' read -ra storage_info <<< "$line"
                     if [ ${#storage_info[@]} -ge 3 ]; then
                         local storage_name="${storage_info[0]}"
                         local storage_type="${storage_info[1]}"
@@ -313,57 +315,6 @@ get_datastores_by_type() {
             echo "$sys_type|$name|$path|$comment"
         fi
     done < <(detect_all_datastores)
-}
-
-# Helper function to update backup.env with auto-detected datastores for compatibility
-update_env_with_detected_datastores() {
-    local env_file="$1"
-    local backup_env_path="${env_file:-${BASE_DIR}/env/backup.env}"
-    
-    if [ ! -f "$backup_env_path" ]; then
-        warning "backup.env file not found: $backup_env_path"
-        return 1
-    fi
-    
-    # Get detected PBS datastores
-    local pbs_datastores
-    mapfile -t pbs_datastores < <(get_datastores_by_type "PBS")
-    
-    if [ ${#pbs_datastores[@]} -gt 0 ]; then
-        # Use the first PBS datastore as primary
-        local primary_datastore="${pbs_datastores[0]}"
-        IFS='|' read -r sys_type ds_name ds_path ds_comment <<< "$primary_datastore"
-        
-        info "Updating PBS_DATASTORE_PATH in backup.env with auto-detected path: $ds_path"
-        
-        # Create backup of original file
-        cp "$backup_env_path" "$backup_env_path.autodetect.bak"
-        
-        # Update or add PBS_DATASTORE_PATH
-        if grep -q "^PBS_DATASTORE_PATH=" "$backup_env_path"; then
-            # Update existing line
-            sed -i "s|^PBS_DATASTORE_PATH=.*|PBS_DATASTORE_PATH=\"$ds_path\"  # Auto-detected: $ds_name ($ds_comment)|" "$backup_env_path"
-        else
-            # Add new line
-            echo "" >> "$backup_env_path"
-            echo "# Auto-detected PBS datastore path" >> "$backup_env_path"
-            echo "PBS_DATASTORE_PATH=\"$ds_path\"  # Auto-detected: $ds_name ($ds_comment)" >> "$backup_env_path"
-        fi
-        
-        success "Updated PBS_DATASTORE_PATH with auto-detected value"
-        
-        # If multiple datastores found, add them as comments
-        if [ ${#pbs_datastores[@]} -gt 1 ]; then
-            echo "" >> "$backup_env_path"
-            echo "# Additional PBS datastores detected:" >> "$backup_env_path"
-            for ((i=1; i<${#pbs_datastores[@]}; i++)); do
-                IFS='|' read -r sys_type ds_name ds_path ds_comment <<< "${pbs_datastores[i]}"
-                echo "# PBS_DATASTORE_PATH_${i}=\"$ds_path\"  # $ds_name ($ds_comment)" >> "$backup_env_path"
-            done
-        fi
-    else
-        debug "No PBS datastores detected for backup.env update"
-    fi
 }
 
 # ======= CLUSTER DETECTION FUNCTIONS =======
@@ -534,14 +485,16 @@ collect_pve_configs() {
         
         if [ -d "${PVE_CONFIG_PATH}/nodes" ]; then
             # Find all qemu VM configurations
-            find "${PVE_CONFIG_PATH}/nodes" -path "*/qemu-server/*.conf" 2>/dev/null | while read vm_conf; do
+            # Use 'IFS= read -r' to safely read paths and preserve special characters
+            find "${PVE_CONFIG_PATH}/nodes" -path "*/qemu-server/*.conf" 2>/dev/null | while IFS= read -r vm_conf; do
                 local target_dir="$TEMP_DIR/$(dirname "$vm_conf")"
                 mkdir -p "$target_dir"
                 safe_copy "$vm_conf" "$target_dir/$(basename "$vm_conf")" "VM configuration $(basename "$vm_conf")"
             done
             
             # Find all LXC container configurations
-            find "${PVE_CONFIG_PATH}/nodes" -path "*/lxc/*.conf" 2>/dev/null | while read ct_conf; do
+            # Use 'IFS= read -r' to safely read paths and preserve special characters
+            find "${PVE_CONFIG_PATH}/nodes" -path "*/lxc/*.conf" 2>/dev/null | while IFS= read -r ct_conf; do
                 local target_dir="$TEMP_DIR/$(dirname "$ct_conf")"
                 mkdir -p "$target_dir"
                 safe_copy "$ct_conf" "$target_dir/$(basename "$ct_conf")" "Container configuration $(basename "$ct_conf")"
@@ -586,9 +539,11 @@ collect_pve_configs() {
                         if [[ "$line" =~ ^Name.*Type.*Status ]] || [[ -z "$line" ]]; then
                             continue
                         fi
-                        
+
                         # Parse storage line
-                        local storage_info=($line)
+                        # Use 'read -ra' to safely split the line and prevent glob expansion
+                        local storage_info
+                        IFS=' ' read -ra storage_info <<< "$line"
                         if [ ${#storage_info[@]} -ge 7 ]; then
                             local name="${storage_info[0]}"
                             local type="${storage_info[1]}"
@@ -686,7 +641,8 @@ collect_pve_configs() {
                         
                         # File type summary (sample)
                         echo "## File Types (sample):"
-                        find "$ds_path" -maxdepth 3 -type f -name "*" 2>/dev/null | head -10 | while read file; do
+                        # Use 'IFS= read -r' to safely read paths and preserve special characters
+                        find "$ds_path" -maxdepth 3 -type f -name "*" 2>/dev/null | head -10 | while IFS= read -r file; do
                             echo "$(stat -c '%y %s %n' "$file" 2>/dev/null)" || true
                         done
                         
@@ -711,26 +667,41 @@ collect_pve_configs() {
                             "*.notes"         # Backup notes
                         )
                         
-                        # Scan for each backup type
+                        # Performance optimization: Execute find only once for all patterns
+                        # instead of 10 separate find operations (one per pattern)
+                        info "Scanning for PVE backup files in datastore: $ds_name (optimized single scan)"
+                        local all_backup_files=()
+                        mapfile -t all_backup_files < <(
+                            find "$ds_path" \( \
+                                -name "*.vma" -o -name "*.vma.gz" -o -name "*.vma.lz4" -o -name "*.vma.zst" -o \
+                                -name "*.tar" -o -name "*.tar.gz" -o -name "*.tar.lz4" -o -name "*.tar.zst" -o \
+                                -name "*.log" -o -name "*.notes" \
+                            \) -type f 2>/dev/null
+                        )
+
+                        # Now process files for each pattern (filtering from cached results)
                         for pattern in "${pve_backup_patterns[@]}"; do
                             local pattern_clean="${pattern//\*/}"
                             local backup_list_file="$ds_metadata_dir/backup_analysis/${ds_name}_${pattern_clean}_list.txt"
-                            
-                            # Find backup files matching pattern
+
+                            # Filter cached files matching current pattern
                             {
                                 echo "# PVE backup files matching pattern: $pattern"
                                 echo "# Datastore: $ds_name ($ds_path)"
                                 echo "# Generated on: $(date)"
                                 echo "# Format: permissions size date name"
                                 echo ""
-                                
+
                                 local found_backups=0
-                                while IFS= read -r backup_file; do
-                                    if [ -f "$backup_file" ]; then
-                                        ls -lh "$backup_file" 2>/dev/null && found_backups=$((found_backups + 1))
+                                for backup_file in "${all_backup_files[@]}"; do
+                                    # Match pattern using bash pattern matching
+                                    if [[ "$(basename "$backup_file")" == $pattern ]]; then
+                                        if [ -f "$backup_file" ]; then
+                                            ls -lh "$backup_file" 2>/dev/null && found_backups=$((found_backups + 1))
+                                        fi
                                     fi
-                                done < <(find "$ds_path" -name "$pattern" -type f 2>/dev/null)
-                                
+                                done
+
                                 if [ "$found_backups" -eq 0 ]; then
                                     echo "# No backup files found matching pattern: $pattern"
                                 else
@@ -738,7 +709,7 @@ collect_pve_configs() {
                                     echo "# Total files found: $found_backups"
                                 fi
                             } > "$backup_list_file"
-                            
+
                             # Count found files for reporting
                             local count_backups=$(grep -v '^#' "$backup_list_file" | grep -v '^$' | wc -l)
                             if [ "$count_backups" -gt 0 ]; then
@@ -747,32 +718,37 @@ collect_pve_configs() {
                             fi
                         done
                         
-                        # Create summary of all backup files
+                        # Create summary of all backup files (reusing cached file list)
                         local backup_summary="$ds_metadata_dir/backup_analysis/${ds_name}_backup_summary.txt"
                         {
                             echo "# PVE Backup Files Summary for datastore: $ds_name"
                             echo "# Path: $ds_path"
                             echo "# Generated on: $(date)"
                             echo ""
-                            
+
                             local total_backup_files=0
                             local total_backup_size=0
-                            
+
+                            # Process statistics from cached file list (no additional find needed)
                             for pattern in "${pve_backup_patterns[@]}"; do
                                 echo "## Files matching pattern: $pattern"
                                 local pattern_count=0
                                 local pattern_size=0
-                                
-                                while IFS= read -r backup_file; do
-                                    if [ -f "$backup_file" ]; then
-                                        local file_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
-                                        pattern_count=$((pattern_count + 1))
-                                        pattern_size=$((pattern_size + file_size))
-                                        total_backup_files=$((total_backup_files + 1))
-                                        total_backup_size=$((total_backup_size + file_size))
+
+                                # Filter cached files matching current pattern
+                                for backup_file in "${all_backup_files[@]}"; do
+                                    # Match pattern using bash pattern matching
+                                    if [[ "$(basename "$backup_file")" == $pattern ]]; then
+                                        if [ -f "$backup_file" ]; then
+                                            local file_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
+                                            pattern_count=$((pattern_count + 1))
+                                            pattern_size=$((pattern_size + file_size))
+                                            total_backup_files=$((total_backup_files + 1))
+                                            total_backup_size=$((total_backup_size + file_size))
+                                        fi
                                     fi
-                                done < <(find "$ds_path" -name "$pattern" -type f 2>/dev/null)
-                                
+                                done
+
                                 if [ "$pattern_count" -gt 0 ]; then
                                     echo "  Files: $pattern_count"
                                     echo "  Total size: $(numfmt --to=iec $pattern_size 2>/dev/null || echo "${pattern_size} bytes")"
@@ -781,11 +757,11 @@ collect_pve_configs() {
                                 fi
                                 echo ""
                             done
-                            
+
                             echo "## Overall Summary"
                             echo "Total backup files: $total_backup_files"
                             echo "Total backup size: $(numfmt --to=iec $total_backup_size 2>/dev/null || echo "${total_backup_size} bytes")"
-                            
+
                         } > "$backup_summary"
                         
                         # Optional: Copy small backup files (similar to PBS small .pxar)
@@ -888,7 +864,8 @@ collect_pve_configs() {
         # Collect system cron jobs
         if [ -d "/etc/cron.d" ]; then
             mkdir -p "$TEMP_DIR/etc/cron.d"
-            find /etc/cron.d -name "*pve*" -o -name "*proxmox*" -o -name "*vzdump*" 2>/dev/null | while read cron_file; do
+            # Use parentheses to fix operator precedence and 'IFS= read -r' for safety
+            find /etc/cron.d \( -name "*pve*" -o -name "*proxmox*" -o -name "*vzdump*" \) 2>/dev/null | while IFS= read -r cron_file; do
                 safe_copy "$cron_file" "$TEMP_DIR$cron_file" "cron job $(basename "$cron_file")"
             done
         fi
@@ -1045,31 +1022,39 @@ collect_pbs_configs() {
                 fi
                 
                 # Read datastore subdirectories list for processing
-                local datastore_list=$(grep -v '^#' "$datastore_file" 2>/dev/null)
-                
+                # Use mapfile to safely handle directory names with spaces or special characters
+                local datastore_list_array=()
+                mapfile -t datastore_list_array < <(grep -v '^#' "$datastore_file" 2>/dev/null)
+
                 # For each subdirectory in the datastore, create a list of .pxar files
-                for subdir in $datastore_list; do
+                for subdir in "${datastore_list_array[@]}"; do
                     local subdir_path="$datastore_base_path/$subdir"
                     if [ -d "$subdir_path" ]; then
                         debug "Scanning datastore subdirectory: $ds_name/$subdir"
-                        
+
+                        # Performance optimization: Execute find only once for all .pxar operations
+                        # instead of 3 separate find operations (list, small files, pattern matching)
+                        debug "Collecting all .pxar files in subdirectory (optimized single scan)"
+                        local all_pxar_files=()
+                        mapfile -t all_pxar_files < <(find "$subdir_path" -name "*.pxar" -type f 2>/dev/null)
+
                         # Save information about .pxar files but not the files themselves
                         local pxar_list_file="$TEMP_DIR/var/lib/proxmox-backup/pxar_metadata/${ds_name}_${subdir}_pxar_list.txt"
-                        
-                        # Enhanced method with error handling
+
+                        # Enhanced method with error handling (using cached file list)
                         if ! {
                             echo "# List of .pxar files in $subdir_path generated on $(date)"
                             echo "# Datastore: $ds_name, Subdirectory: $subdir"
                             echo "# Format: permissions size date name"
-                            
-                            # Find .pxar files and write them one by one to file
+
+                            # Process .pxar files from cached list
                             found_pxar=0
-                            while IFS= read -r pxar_file; do
+                            for pxar_file in "${all_pxar_files[@]}"; do
                                 if [ -f "$pxar_file" ]; then
                                     ls -lh "$pxar_file" 2>/dev/null && found_pxar=$((found_pxar + 1))
                                 fi
-                            done < <(find "$subdir_path" -name "*.pxar" -type f 2>/dev/null)
-                            
+                            done
+
                             # If no files were found, add a note
                             if [ "$found_pxar" -eq 0 ]; then
                                 echo "# No .pxar files found"
@@ -1081,7 +1066,7 @@ collect_pbs_configs() {
                             pxar_success=false
                             continue
                         fi
-                        
+
                         # Check that the file was created correctly
                         if [ ! -f "$pxar_list_file" ] || [ -L "$pxar_list_file" ]; then
                             handle_collection_error ".pxar file list validation" "$pxar_list_file" "warning" "not a regular file"
@@ -1090,7 +1075,7 @@ collect_pbs_configs() {
                             pxar_success=false
                             continue
                         fi
-                        
+
                         # Verify count of found files
                         local count_pxar=$(grep -v '^#' "$pxar_list_file" | wc -l)
                         if [ "$count_pxar" -eq 0 ]; then
@@ -1099,44 +1084,54 @@ collect_pbs_configs() {
                             info "Found $count_pxar .pxar files in datastore: $ds_name/$subdir"
                             increment_file_counter "processed"
                         fi
-                        
-                        # If backup of small .pxar files is enabled
+
+                        # If backup of small .pxar files is enabled (reusing cached file list)
                         if [ "${BACKUP_SMALL_PXAR:-false}" == "true" ] && [ -n "${MAX_PXAR_SIZE:-}" ]; then
                             debug "Looking for small .pxar files in datastore $ds_name/$subdir (max size: ${MAX_PXAR_SIZE})"
-                            
+
                             # Destination directory for small .pxar files
                             local small_pxar_dir="$TEMP_DIR/var/lib/proxmox-backup/small_pxar/${ds_name}/${subdir}"
                             mkdir -p "$small_pxar_dir"
-                            
-                            # Find and copy only .pxar files under maximum size with error handling
+
+                            # Filter cached files by size instead of running another find
                             local copied_count=0
-                            while IFS= read -r small_pxar; do
-                                if safe_copy "$small_pxar" "$small_pxar_dir/$(basename "$small_pxar")" "small .pxar file $(basename "$small_pxar")" "debug"; then
-                                    copied_count=$((copied_count + 1))
+                            for small_pxar in "${all_pxar_files[@]}"; do
+                                if [ -f "$small_pxar" ]; then
+                                    local file_size=$(stat -c%s "$small_pxar" 2>/dev/null || echo "0")
+                                    # Convert MAX_PXAR_SIZE to bytes (supports K, M, G suffixes)
+                                    local max_size_bytes=$(numfmt --from=iec "${MAX_PXAR_SIZE}" 2>/dev/null || echo "${MAX_PXAR_SIZE}")
+                                    if [ "$file_size" -lt "$max_size_bytes" ]; then
+                                        if safe_copy "$small_pxar" "$small_pxar_dir/$(basename "$small_pxar")" "small .pxar file $(basename "$small_pxar")" "debug"; then
+                                            copied_count=$((copied_count + 1))
+                                        fi
+                                    fi
                                 fi
-                            done < <(find "$subdir_path" -name "*.pxar" -type f -size -${MAX_PXAR_SIZE} 2>/dev/null)
-                            
+                            done
+
                             if [ $copied_count -gt 0 ]; then
                                 info "Copied $copied_count small .pxar files from datastore $ds_name/$subdir"
                             fi
                         fi
-                        
-                        # If a pattern of .pxar files to include is specified
+
+                        # If a pattern of .pxar files to include is specified (reusing cached file list)
                         if [ -n "${PXAR_INCLUDE_PATTERN:-}" ]; then
                             debug "Searching for .pxar files matching pattern: $PXAR_INCLUDE_PATTERN in datastore $ds_name/$subdir"
-                            
+
                             # Destination directory for selected .pxar files
                             local selected_pxar_dir="$TEMP_DIR/var/lib/proxmox-backup/selected_pxar/${ds_name}/${subdir}"
                             mkdir -p "$selected_pxar_dir"
-                            
-                            # Find and copy only .pxar files that match the pattern with error handling
+
+                            # Filter cached files by pattern instead of running another find
                             local pattern_count=0
-                            while IFS= read -r pattern_pxar; do
-                                if safe_copy "$pattern_pxar" "$selected_pxar_dir/$(basename "$pattern_pxar")" "pattern .pxar file $(basename "$pattern_pxar")" "debug"; then
-                                    pattern_count=$((pattern_count + 1))
+                            for pattern_pxar in "${all_pxar_files[@]}"; do
+                                # Match pattern in file path using bash pattern matching
+                                if [[ "$pattern_pxar" == *"${PXAR_INCLUDE_PATTERN}"* ]]; then
+                                    if safe_copy "$pattern_pxar" "$selected_pxar_dir/$(basename "$pattern_pxar")" "pattern .pxar file $(basename "$pattern_pxar")" "debug"; then
+                                        pattern_count=$((pattern_count + 1))
+                                    fi
                                 fi
-                            done < <(find "$subdir_path" -name "*.pxar" -type f -path "*${PXAR_INCLUDE_PATTERN}*" 2>/dev/null)
-                            
+                            done
+
                             if [ $pattern_count -gt 0 ]; then
                                 info "Copied $pattern_count .pxar files matching pattern from datastore $ds_name/$subdir"
                             fi
