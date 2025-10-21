@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.2.3
+# Version: 0.2.6
 # Last Modified: 2025-10-11
-# Changes: Fix: Handle invalid working directory during backup
+# Changes: Fix: Explicitly create the destination directory
 ##
 # Functions for backup data collection
 
@@ -76,7 +76,12 @@ safe_copy() {
     
     # Perform copy operation
     if [ -d "$source" ]; then
-        if cp -r $copy_options "$source"/* "$destination/" 2>/dev/null; then
+        # Ensure destination exists so dotfiles and empty directories copy correctly
+        if [ ! -d "$destination" ]; then
+            mkdir -p "$destination"
+        fi
+
+        if cp -a $copy_options "$source"/. "$destination/" 2>/dev/null; then
             debug "Successfully collected $operation_name: $source"
             increment_file_counter "processed"
             return 0
