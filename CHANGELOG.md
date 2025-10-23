@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.2] - 2025-10-18 - Standalone Script: install.sh
+###Fix
+- Forced switching to a safe directory before cloning or copying files, preventing fatal: Unable to read current working directory errors
+###Add
+- Applied chmod 744 to install.sh and new-install.sh immediately after the initial clone
+
+## [0.3.0] - 2025-10-18 - Standalone Script: fix-permissions.sh
+###Add
+- Included both installers in the routine and ensured they stay at permission level 744 during updates and repairs.
+
 ## [1.2.0] - 2025-10-18 - Standalone Script: security-check.sh
 ### Fix
 - Explicitly check `[ ! -f "$script" ]` before calling `stat`
@@ -30,8 +40,7 @@ All notable changes to this project are documented in this file.
 - The new `lock` directory survives upgrades performed with `install.sh`
 
 ## [1.1.0] - 2025-10-18 - Standalone Script: new-install.sh
-### Changed
-****Added automatic backup before complete removal****
+****Add
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
 ## [0.3.0] - 2025-10-19
@@ -166,3 +175,4 @@ All notable changes to this project are documented in this file.
 ### Fixed
 **Remove duplicate system metrics collection**
 - Files changed: `lib/backup_collect.sh`
+
