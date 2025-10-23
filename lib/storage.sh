@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Storage Library
 # File: storage.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: Gestione storage per backup
 ##
 # Backup storage management
@@ -182,9 +182,9 @@ upload_backup_file_async() {
     debug "Starting asynchronous backup file upload"
     debug "Starting backup file upload to cloud storage"
     
-    if timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=10s --stats-one-line 2>&1 | while read -r line; do
+    if ( set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=10s --stats-one-line 2>&1 | while read -r line; do
         debug "Backup upload progress: $line"
-    done; then
+    done ); then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         echo "backup_upload=SUCCESS duration=$duration" > "$result_file"
@@ -211,7 +211,9 @@ upload_checksum_file_async() {
         return 0
     fi
     
-    if timeout $RCLONE_TIMEOUT_MEDIUM rclone copy "${BACKUP_FILE}.sha256" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" ${RCLONE_FLAGS} 2>/dev/null; then
+    if ( set -o pipefail; timeout $RCLONE_TIMEOUT_MEDIUM rclone copy "${BACKUP_FILE}.sha256" "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/" ${RCLONE_FLAGS} --stats=10s --stats-one-line 2>&1 | while read -r line; do
+            debug "Checksum upload progress: $line"
+        done ); then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         echo "checksum_upload=SUCCESS duration=$duration" > "$result_file"
@@ -508,9 +510,9 @@ upload_to_cloud() {
         debug "Destination: $remote_file_path"
         
         # Upload with progress (stats every 5s)
-        if ! { set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
+        if ! ( set -o pipefail; timeout $RCLONE_TIMEOUT_LONG rclone copy "$BACKUP_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
                 debug "Progress: $line"
-            done; }; then
+            done ); then
             error "Failed to upload backup to cloud storage"
             set_exit_code "warning"
             set_backup_status "cloud_upload" $EXIT_WARNING

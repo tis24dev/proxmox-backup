@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Core Library
 # File: core.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Funzionalità core per backup
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: 
 ##
 # ==========================================
 # CORE FUNCTIONALITY FOR PROXMOX BACKUP SYSTEM
@@ -50,7 +50,7 @@
 #   * Controls amount of debug information displayed
 #
 # - CURRENT_LOG_LEVEL: Numeric log level for filtering
-#   * Values: 1=ERROR, 2=WARNING, 3=INFO, 4=DEBUG, 5=TRACE
+#   * Values: 0=ERROR, 1=WARNING, 2=INFO, 3=DEBUG, 4=TRACE
 #   * Used by logging functions to filter messages
 #
 # MODE CONTROL VARIABLES:
@@ -120,8 +120,24 @@
 # Last Modified: 2024
 # ==========================================
 
-# Enable strict error handling for better reliability
-set -euo pipefail
+# Shell Options Management:
+# ========================
+# This library does NOT set shell options (set -euo pipefail) to avoid forcing
+# them on all scripts that source this file. Each executable script should set
+# its own shell options based on its requirements BEFORE sourcing this library.
+#
+# Recommended pattern for executable scripts:
+#   1. Define base variables (SCRIPT_DIR, BASE_DIR, etc.)
+#   2. Load environment files (.env)
+#   3. Set shell options: set -euo pipefail (or set -e, set -u, set -o pipefail separately)
+#   4. Source library files (including this one)
+#
+# This approach provides:
+#   - Explicit control over error handling in each script
+#   - No unexpected behavior from inherited shell options
+#   - Better compatibility with scripts that need custom error handling
+#
+# See script/proxmox-backup.sh:62-64 for reference implementation.
 
 # Define exit code constants for consistency
 readonly EXIT_SUCCESS=0
@@ -201,12 +217,10 @@ parse_arguments() {
                 ;;
             -v|--verbose)
                 DEBUG_LEVEL="advanced"
-                CURRENT_LOG_LEVEL=3  # Set to DEBUG level
                 debug "Verbose logging enabled"
                 ;;
             -x|--extreme)
                 DEBUG_LEVEL="extreme"
-                CURRENT_LOG_LEVEL=4  # Set to TRACE level
                 debug "Extreme logging enabled"
                 ;;
             -e|--env)
@@ -303,6 +317,128 @@ parse_arguments() {
 #
 # Returns:
 #   Current EXIT_CODE value
+
+# Safe cleanup of temporary directory with multiple security guards
+#
+# This function implements defense-in-depth protection against accidental
+# deletion of critical system paths. It is called during error handling
+# and normal cleanup procedures.
+#
+# Security Guards:
+# 1. Pattern matching: Only allows /tmp/proxmox-backup-* paths
+# 2. Blacklist: Rejects critical system paths (/, /tmp, /home, /etc, /var, /root, /boot, /usr, /opt, /srv)
+# 3. Length validation: Minimum 20 characters to avoid generic paths
+# 4. Marker verification: Confirms directory was created by this process
+# 5. Directory validation: Ensures target exists and is a directory
+#
+# The function creates a .proxmox-backup-marker file when TEMP_DIR is created
+# and verifies its presence before deletion.
+#
+# Arguments:
+#   None (uses global TEMP_DIR variable)
+#
+# Returns:
+#   0 on successful cleanup or safe skip
+#   1 on security violation (logs error but doesn't exit)
+#
+# Example:
+#   safe_cleanup_temp_dir
+safe_cleanup_temp_dir() {
+    # Check if TEMP_DIR is set and not empty
+    if [ -z "${TEMP_DIR:-}" ]; then
+        debug "TEMP_DIR is not set, skipping cleanup"
+        return 0
+    fi
+
+    # Check if directory exists
+    if [ ! -d "$TEMP_DIR" ]; then
+        debug "TEMP_DIR does not exist or is not a directory: $TEMP_DIR"
+        return 0
+    fi
+
+    # Security Guard 1: Pattern matching - must match expected format
+    # Accept both mktemp-generated paths and our custom paths
+    case "$TEMP_DIR" in
+        /tmp/proxmox-backup-*)
+            # Custom pattern from environment.sh - valid
+            debug "TEMP_DIR matches custom pattern: /tmp/proxmox-backup-*"
+            ;;
+        /tmp/tmp.*)
+            # mktemp -d generated pattern - valid
+            debug "TEMP_DIR matches mktemp pattern: /tmp/tmp.*"
+            ;;
+        *)
+            error "SECURITY VIOLATION: TEMP_DIR does not match expected patterns"
+            error "Expected: /tmp/proxmox-backup-* or /tmp/tmp.*"
+            error "Got: $TEMP_DIR"
+            return 1
+            ;;
+    esac
+
+    # Security Guard 2: Blacklist critical system paths
+    local forbidden_paths=(
+        "/"
+        "/tmp"
+        "/home"
+        "/etc"
+        "/var"
+        "/root"
+        "/boot"
+        "/usr"
+        "/opt"
+        "/srv"
+        "/mnt"
+        "/media"
+    )
+
+    for forbidden in "${forbidden_paths[@]}"; do
+        if [ "$TEMP_DIR" = "$forbidden" ]; then
+            error "SECURITY VIOLATION: TEMP_DIR matches forbidden path: $TEMP_DIR"
+            error "Refusing to delete critical system directory"
+            return 1
+        fi
+    done
+
+    # Security Guard 3: Length validation (minimum 20 chars)
+    # /tmp/proxmox-backup-pve-20250101_000000-12345 = 45 chars minimum
+    if [ "${#TEMP_DIR}" -lt 20 ]; then
+        error "SECURITY VIOLATION: TEMP_DIR path is suspiciously short (${#TEMP_DIR} chars)"
+        error "Refusing to delete: $TEMP_DIR"
+        return 1
+    fi
+
+    # Security Guard 4: Verify marker file (proves we created this directory)
+    local marker_file="${TEMP_DIR}/.proxmox-backup-marker"
+    if [ ! -f "$marker_file" ]; then
+        warning "SECURITY WARNING: Marker file not found in $TEMP_DIR"
+        warning "This directory may not have been created by this script"
+        warning "Skipping cleanup for safety. Manual cleanup may be required."
+        return 1
+    fi
+
+    # Verify marker content (should contain process PID)
+    local marker_content
+    marker_content=$(cat "$marker_file" 2>/dev/null || echo "")
+    if [ -z "$marker_content" ]; then
+        warning "SECURITY WARNING: Marker file is empty or unreadable"
+        warning "Skipping cleanup of: $TEMP_DIR"
+        return 1
+    fi
+
+    # All security checks passed - safe to delete
+    debug "All security checks passed for: $TEMP_DIR"
+    debug "Marker verified: $marker_content"
+
+    if rm -rf "$TEMP_DIR" 2>/dev/null; then
+        debug "Successfully cleaned up temporary directory: $TEMP_DIR"
+        return 0
+    else
+        warning "Failed to remove temporary directory: $TEMP_DIR"
+        warning "Manual cleanup may be required"
+        return 1
+    fi
+}
+
 handle_error() {
     local line_no=$1
     local error_code=$2
@@ -453,15 +589,10 @@ EOF
     if [ "$notification_failed" = true ]; then
         set_exit_code "warning"
     fi
-    
-    # Enhanced temporary directory cleanup
-    if [ -n "${TEMP_DIR+x}" ] && [ -d "$TEMP_DIR" ]; then
-        debug "Cleaning up temporary directory: $TEMP_DIR"
-        if ! rm -rf "$TEMP_DIR" 2>/dev/null; then
-            warning "Failed to remove temporary directory: $TEMP_DIR"
-        fi
-    fi
-    
+
+    # Enhanced temporary directory cleanup with security guards
+    safe_cleanup_temp_dir
+
     return $EXIT_CODE
 }
 
@@ -593,42 +724,11 @@ cleanup() {
         TEMP_DIR=""
     fi
     
-    # Main temporary directory cleanup
+    # Main temporary directory cleanup with security guards
     debug "TEMP_DIR cleanup check - Value: '${TEMP_DIR:-not set}'"
-    if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
-        debug "Removing temporary directory: $TEMP_DIR"
-        
-        # Enhanced removal with retry mechanism
-        local retry_count=0
-        local max_retries=3
-        
-        while [ $retry_count -lt $max_retries ]; do
-            if rm -rf "$TEMP_DIR" 2>/dev/null; then
-                debug "Successfully removed temporary directory: $TEMP_DIR"
-                break
-            else
-                retry_count=$((retry_count + 1))
-                if [ $retry_count -lt $max_retries ]; then
-                    warning "Failed to remove temporary directory (attempt $retry_count/$max_retries), retrying..."
-                    sleep 1
-                else
-                    warning "Unable to remove temporary directory: $TEMP_DIR after $max_retries attempts"
-                    cleanup_errors=$((cleanup_errors + 1))
-                fi
-            fi
-        done
-        
-        # Verify removal success
-        if [ ! -d "$TEMP_DIR" ]; then
-            debug "Temporary directory removal verified successfully: $TEMP_DIR"
-        else
-            warning "Temporary directory still exists after cleanup attempts: $TEMP_DIR"
-            cleanup_errors=$((cleanup_errors + 1))
-        fi
-    elif [ -n "$TEMP_DIR" ] && [ ! -d "$TEMP_DIR" ]; then
-        debug "Temporary directory already removed or doesn't exist: $TEMP_DIR"
-    else
-        debug "No temporary directory found or TEMP_DIR variable not defined"
+    if ! safe_cleanup_temp_dir; then
+        warning "Temporary directory cleanup failed or was skipped for security reasons"
+        cleanup_errors=$((cleanup_errors + 1))
     fi
     
     # Lock files cleanup (auto-detect and remove)
@@ -839,6 +939,10 @@ display_final_status() {
             ;;
         2)
             status="ERROR"
+            color="${RED}"
+            ;;
+        3)
+            status="CRITICAL"
             color="${RED}"
             ;;
         *)

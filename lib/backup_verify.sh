@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Verification Library
 # File: backup_verify.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Verifica integrità backup
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: Improved check backup integrity
 ##
 # ==========================================
 # BACKUP VERIFICATION MODULE - OPTIMIZED
@@ -380,11 +380,12 @@ test_sample_extraction() {
     mkdir -p "$test_dir/sample"
     
     local sample_files
-    # Use shuf if available, otherwise fall back to sort -R
+    # Use shuf if available, otherwise fall back to portable awk randomization
     if command -v shuf >/dev/null 2>&1; then
         sample_files=$(grep -v '/$' "$file_list" | shuf | head -n "$SAMPLE_SIZE")
     else
-        sample_files=$(grep -v '/$' "$file_list" | sort -R | head -n "$SAMPLE_SIZE")
+        # Portable fallback: use awk with random seed for shuffling
+        sample_files=$(grep -v '/$' "$file_list" | awk 'BEGIN{srand()} {print rand() "\t" $0}' | sort -n | cut -f2- | head -n "$SAMPLE_SIZE")
     fi
     
     while read -r sample_file && [ $sample_errors -lt 5 ]; do
@@ -459,11 +460,13 @@ verify_backup() {
     
     # Step 6: Test critical files extraction
     local critical_errors
-    critical_errors=$(test_critical_files "$test_dir" "$file_list")
+    test_critical_files "$test_dir" "$file_list"
+    critical_errors=$?
     
     # Step 7: Sample extraction test
     local sample_errors
-    sample_errors=$(test_sample_extraction "$test_dir" "$file_list")
+    test_sample_extraction "$test_dir" "$file_list"
+    sample_errors=$?
     
     # Final analysis and reporting
     local total_errors=${#ERROR_LIST[@]}
@@ -557,17 +560,17 @@ verify_backup_consistency() {
     fi
     
     # Verify cloud backup
-    if [ "$cloud_enabled" == "true" ] && command -v rclone >/dev/null 2>&1 && 
+    if [ "$cloud_enabled" == "true" ] && command -v rclone >/dev/null 2>&1 &&
        [ -n "${RCLONE_REMOTE:-}" ] && rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:$"; then
-        
+
         local cloud_backup="${CLOUD_BACKUP_PATH}/$(basename "$BACKUP_FILE")"
-        local temp_hash
-        temp_hash=$(mktemp)
-        
-        if timeout 60 rclone copy "${RCLONE_REMOTE}:${cloud_backup}.sha256" "$temp_hash" ${RCLONE_FLAGS:-} 2>/dev/null; then
+        local temp_dir
+        temp_dir=$(mktemp -d)
+
+        if timeout 60 rclone copy "${RCLONE_REMOTE}:${cloud_backup}.sha256" "$temp_dir" ${RCLONE_FLAGS:-} 2>/dev/null; then
             local cloud_hash
-            cloud_hash=$(cut -d' ' -f1 "$temp_hash" 2>/dev/null)
-            
+            cloud_hash=$(cut -d' ' -f1 "$temp_dir/$(basename "${cloud_backup}.sha256")" 2>/dev/null)
+
             if [ -n "$cloud_hash" ] && [ "$local_hash" != "$cloud_hash" ]; then
                 error "Cloud backup hash mismatch"
                 ((verify_errors++))
@@ -575,7 +578,7 @@ verify_backup_consistency() {
                 info "Cloud backup hash verified"
             fi
         fi
-        rm -f "$temp_hash"
+        rm -rf "$temp_dir"
     fi
     
     # Final status report

@@ -3,7 +3,7 @@
 # Proxmox Backup System - Logging Library
 # File: log.sh
 # Version: 0.2.1
-# Last Modified: 2025-10-11
+# Last Modified: 2025-10-23
 # Changes: Sistema di logging per backup
 ##
 # ==========================================
@@ -178,6 +178,30 @@
 # ===========================================
 # This section defines the logging system's core configuration including
 # log levels, color settings, and automatic environment detection.
+#
+# IMPORTANT: CURRENT_LOG_LEVEL Override Mechanism
+# ================================================
+# The CURRENT_LOG_LEVEL variable can be set in three ways (in order of precedence):
+#
+# 1. EXTERNAL OVERRIDE (Highest Priority):
+#    Set CURRENT_LOG_LEVEL before sourcing this module to force a specific level
+#    Example: CURRENT_LOG_LEVEL=4 source lib/log.sh
+#    Use case: When core.sh or parent script needs full control over logging
+#
+# 2. DEBUG_LEVEL MAPPING (Normal Priority):
+#    Set DEBUG_LEVEL to control verbosity using predefined levels:
+#    - DEBUG_LEVEL=standard → CURRENT_LOG_LEVEL=2 (INFO and above)
+#    - DEBUG_LEVEL=advanced → CURRENT_LOG_LEVEL=3 (DEBUG and above)
+#    - DEBUG_LEVEL=extreme → CURRENT_LOG_LEVEL=4 (TRACE and above)
+#    This mapping occurs during setup_logging() or start_logging()
+#
+# 3. DEFAULT FALLBACK (Lowest Priority):
+#    If neither CURRENT_LOG_LEVEL nor DEBUG_LEVEL is set, defaults to standard (level 2)
+#
+# The _LOG_LEVEL_SET_EXTERNALLY flag is set during module initialization to
+# detect if CURRENT_LOG_LEVEL was defined externally. This allows us to respect
+# external overrides (even when set to default value 2) while providing a safe
+# default for set -u compatibility.
 
 # Default debug level if not set by environment
 # Can be overridden by setting DEBUG_LEVEL environment variable
@@ -186,7 +210,7 @@ DEBUG_LEVEL=${DEBUG_LEVEL:-standard}
 # Log level definitions with numeric priorities
 # Lower numbers have higher priority (ERROR=0 is highest priority)
 # This allows for efficient level comparison and filtering
-declare -A LOG_LEVELS=( 
+declare -A LOG_LEVELS=(
     ["ERROR"]=0     # Critical errors that may cause operation failure
     ["WARNING"]=1   # Warning conditions that should be noted
     ["INFO"]=2      # General informational messages
@@ -196,9 +220,15 @@ declare -A LOG_LEVELS=(
     ["SUCCESS"]=2   # Success confirmations (same level as INFO)
 )
 
-# Default log level (INFO and above)
-# Will be updated based on DEBUG_LEVEL during setup
-CURRENT_LOG_LEVEL=2
+# Initialize CURRENT_LOG_LEVEL with safe default for set -u compatibility
+# Detect if variable was set externally before sourcing this module
+# This flag-based approach correctly handles external overrides even when set to default value (2)
+if [ -z "${CURRENT_LOG_LEVEL+x}" ]; then
+    CURRENT_LOG_LEVEL=2          # Default to INFO level (safe for set -u)
+    _LOG_LEVEL_SET_EXTERNALLY=false
+else
+    _LOG_LEVEL_SET_EXTERNALLY=true
+fi
 
 # Cache for configuration checks (aligned with storage.sh)
 _cloud_backup_enabled=""
@@ -243,7 +273,7 @@ fi
 
 # Allow manual override of color detection via environment variable
 # This is useful for forcing color output off in specific environments
-if [[ "${DISABLE_COLORS}" == "1" || "${DISABLE_COLORS}" == "true" ]]; then
+if [[ "${DISABLE_COLORS:-}" == "1" || "${DISABLE_COLORS:-}" == "true" ]]; then
     USE_COLORS=0
 fi
 
@@ -381,8 +411,9 @@ setup_logging() {
     LOG_FILE="${LOCAL_LOG_PATH}/${log_basename}"
     
     # Configure log level based on DEBUG_LEVEL setting
-    # Only update if not already set by command line or other means
-    if [ -z "${CURRENT_LOG_LEVEL:-}" ]; then
+    # Only update if not already set by external caller (e.g., core.sh or environment)
+    # Use explicit flag to detect external override (handles override to default value correctly)
+    if [ "$_LOG_LEVEL_SET_EXTERNALLY" != "true" ]; then
         case "$DEBUG_LEVEL" in
             "standard")
                 CURRENT_LOG_LEVEL=2  # INFO level and above
@@ -398,6 +429,8 @@ setup_logging() {
                 warning "Unknown DEBUG_LEVEL '$DEBUG_LEVEL', defaulting to 'standard'"
                 ;;
         esac
+    else
+        debug "CURRENT_LOG_LEVEL already set to $CURRENT_LOG_LEVEL (respecting external override)"
     fi
     
     # Log initialization details for debugging
@@ -410,10 +443,10 @@ setup_logging() {
     else
         debug "Color output enabled for interactive terminal"
     fi
-    
-    # Set up cleanup trap to ensure buffer is flushed on exit
-    trap 'force_flush_log_buffer' EXIT INT TERM
-    
+
+    # Note: Log buffer flush is handled by the main cleanup_handler in proxmox-backup.sh
+    # to avoid overriding the global EXIT trap
+
     success "Logging system initialized successfully"
     return 0
 }
@@ -475,8 +508,10 @@ log() {
     
     # Check if message should be logged based on current log level
     # Only process messages that meet the current logging threshold
+    # Use ${CURRENT_LOG_LEVEL:-2} for safety with set -u before initialization
+    # Default to level 2 (INFO) which allows ERROR/WARNING/INFO/STEP/SUCCESS
     local level_priority=${LOG_LEVELS[$level]:-999}
-    if [ "$level_priority" -le "$CURRENT_LOG_LEVEL" ]; then
+    if [ "$level_priority" -le "${CURRENT_LOG_LEVEL:-2}" ]; then
         
         # Output to console with appropriate formatting
         if [ "$USE_COLORS" -eq 1 ]; then
@@ -568,6 +603,7 @@ success() {
 
 # Log a debug message with level checking
 # Only logged if current log level includes DEBUG messages
+# Safe to call before logging initialization (uses default level 0)
 #
 # Arguments:
 #   $1: Debug message
@@ -575,14 +611,15 @@ success() {
 # Returns:
 #   0: Message logged successfully
 #   1: Message filtered out due to log level
-debug() { 
-    if [ "$CURRENT_LOG_LEVEL" -ge 3 ]; then
+debug() {
+    if [ "${CURRENT_LOG_LEVEL:-0}" -ge 3 ]; then
         log "DEBUG" "$1"
     fi
 }
 
 # Log a trace message with level checking
 # Only logged if current log level includes TRACE messages (most verbose)
+# Safe to call before logging initialization (uses default level 0)
 #
 # Arguments:
 #   $1: Trace message
@@ -590,8 +627,8 @@ debug() {
 # Returns:
 #   0: Message logged successfully
 #   1: Message filtered out due to log level
-trace() { 
-    if [ "$CURRENT_LOG_LEVEL" -ge 4 ]; then
+trace() {
+    if [ "${CURRENT_LOG_LEVEL:-0}" -ge 4 ]; then
         log "TRACE" "$1"
     fi
 }
@@ -652,7 +689,9 @@ start_logging() {
     LOG_FILE="${LOCAL_LOG_PATH}/${log_basename}"
     
     # Configure logging level based on environment
-    if [ -z "${CURRENT_LOG_LEVEL:-}" ]; then
+    # Only update if not already set by external caller (e.g., core.sh or environment)
+    # Use explicit flag to detect external override (handles override to default value correctly)
+    if [ "$_LOG_LEVEL_SET_EXTERNALLY" != "true" ]; then
         case "${DEBUG_LEVEL:-standard}" in
             "standard")
                 CURRENT_LOG_LEVEL=2  # INFO level and above
@@ -668,6 +707,8 @@ start_logging() {
                 warning "Unknown DEBUG_LEVEL '${DEBUG_LEVEL}', using standard level"
                 ;;
         esac
+    else
+        debug "CURRENT_LOG_LEVEL already set to $CURRENT_LOG_LEVEL (respecting external override)"
     fi
     
     # Log configuration details
@@ -1450,9 +1491,9 @@ upload_logs_to_cloud() {
     debug "Destination: $remote_file_path"
     
     # Upload con avanzamento (stats ogni 5s)
-    if ! { set -o pipefail; rclone copy "$LOG_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
+    if ! ( set -o pipefail; rclone copy "$LOG_FILE" "$remote_path" --bwlimit=${RCLONE_BANDWIDTH_LIMIT} ${RCLONE_FLAGS} --stats=5s --stats-one-line 2>&1 | while read -r line; do
             debug "Progress: $line"
-        done; }; then
+        done ); then
         error "Failed to upload log file to cloud storage"
         set_exit_code "warning"
         set_backup_status "log_cloud_upload" $EXIT_WARNING

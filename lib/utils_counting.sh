@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Counting Utils Library
 # File: utils_counting.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Sistema di conteggio autonomo
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: Handle pipe-separated compression extensions and prevent PROXMOX_TYPE regex injection
 ##
 
 # ======= AUTONOMOUS COUNTING SYSTEM - DOCUMENTATION =======
@@ -177,7 +177,8 @@ CHECK_COUNT() {
                 echo "COUNT_CLOUD_CONNECTIVITY_STATUS=$COUNT_CLOUD_CONNECTIVITY_STATUS"
                 echo "COUNT_CLOUD_CONNECTION_ERROR=$COUNT_CLOUD_CONNECTION_ERROR"
                 if [ "$COUNT_CLOUD_CONNECTIVITY_STATUS" = "error" ]; then
-                    echo "ERROR_DESCRIPTION=$(_GET_COUNT_ERROR_DESCRIPTION "A")"
+                    local error_desc=$(_GET_COUNT_ERROR_DESCRIPTION "A")
+                    echo "ERROR_DESCRIPTION=$error_desc"
                 fi
                 echo "EXIT_CODE=$connectivity_result"
             fi
@@ -212,7 +213,8 @@ CHECK_COUNT() {
                     echo "STATUS=DISABLED"
                 elif [ "$COUNT_CLOUD_CONNECTION_ERROR" = "true" ]; then
                     echo "COUNT_CLOUD_CONNECTION_ERROR=$COUNT_CLOUD_CONNECTION_ERROR"
-                    echo "ERROR_DESCRIPTION=$(_GET_COUNT_ERROR_DESCRIPTION "A")"
+                    local error_desc=$(_GET_COUNT_ERROR_DESCRIPTION "A")
+                    echo "ERROR_DESCRIPTION=$error_desc"
                 fi
             fi
             ;;
@@ -260,7 +262,8 @@ CHECK_COUNT() {
                     echo "STATUS=CLOUD_DISABLED"
                 elif [ "$COUNT_CLOUD_CONNECTION_ERROR" = "true" ]; then
                     echo "COUNT_CLOUD_CONNECTION_ERROR=$COUNT_CLOUD_CONNECTION_ERROR"
-                    echo "ERROR_DESCRIPTION=$(_GET_COUNT_ERROR_DESCRIPTION "A")"
+                    local error_desc=$(_GET_COUNT_ERROR_DESCRIPTION "A")
+                    echo "ERROR_DESCRIPTION=$error_desc"
                 fi
             fi
             ;;
@@ -349,6 +352,13 @@ _GET_COMPRESSION_EXTENSIONS() {
         "lzma") echo "lzma" ;;
         *) echo "zst|xz|gz|bz2|lzma" ;;
     esac
+}
+
+# Helper function to escape regex metacharacters for safe use in patterns
+_ESCAPE_REGEX_METACHARACTERS() {
+    local string="$1"
+    # Escape all POSIX ERE metacharacters: . * + ? [ ] ^ $ ( ) { } | \
+    echo "$string" | sed 's/[].*+?^$(){}|[\\]/\\&/g'
 }
 
 # Helper function to get error descriptions
@@ -486,9 +496,18 @@ _COUNT_BACKUPS_AUTONOMOUS() {
             if [ -n "$backup_path" ] && [ -d "$backup_path" ]; then
                 # Use helper function for extensions
                 local extensions=$(_GET_COMPRESSION_EXTENSIONS)
-                
+
                 # Count backup files, excluding checksums and metadata
-                count=$(timeout "${LOCAL_FIND_TIMEOUT}" find "$backup_path" -maxdepth 1 -type f -name "${PROXMOX_TYPE:-*}-backup-*.tar.${extensions}" -not -name "*.sha256" -not -name "*.metadata" 2>/dev/null | wc -l)
+                # Use regex to properly handle multiple extensions (e.g., "zst|xz|gz")
+                # Escape PROXMOX_TYPE to prevent regex injection
+                local type_pattern="${PROXMOX_TYPE:-[^/]+}"
+                if [ -n "${PROXMOX_TYPE:-}" ]; then
+                    type_pattern=$(_ESCAPE_REGEX_METACHARACTERS "$PROXMOX_TYPE")
+                fi
+                count=$(timeout "${LOCAL_FIND_TIMEOUT}" find "$backup_path" -maxdepth 1 -type f \
+                    -regextype posix-extended \
+                    -regex ".*/${type_pattern}-backup-[^/]+\.tar\.(${extensions})" \
+                    -not -name "*.sha256" -not -name "*.metadata" 2>/dev/null | wc -l)
             fi
             COUNT_BACKUP_PRIMARY=$count
             ;;
@@ -501,8 +520,17 @@ _COUNT_BACKUPS_AUTONOMOUS() {
                 if [ -n "$backup_path" ] && [ -d "$backup_path" ]; then
                     # Use helper function for extensions
                     local extensions=$(_GET_COMPRESSION_EXTENSIONS)
-                    
-                    count=$(timeout "${LOCAL_FIND_TIMEOUT}" find "$backup_path" -maxdepth 1 -type f -name "${PROXMOX_TYPE:-*}-backup-*.tar.${extensions}" -not -name "*.sha256" -not -name "*.metadata" 2>/dev/null | wc -l)
+
+                    # Use regex to properly handle multiple extensions (e.g., "zst|xz|gz")
+                    # Escape PROXMOX_TYPE to prevent regex injection
+                    local type_pattern="${PROXMOX_TYPE:-[^/]+}"
+                    if [ -n "${PROXMOX_TYPE:-}" ]; then
+                        type_pattern=$(_ESCAPE_REGEX_METACHARACTERS "$PROXMOX_TYPE")
+                    fi
+                    count=$(timeout "${LOCAL_FIND_TIMEOUT}" find "$backup_path" -maxdepth 1 -type f \
+                        -regextype posix-extended \
+                        -regex ".*/${type_pattern}-backup-[^/]+\.tar\.(${extensions})" \
+                        -not -name "*.sha256" -not -name "*.metadata" 2>/dev/null | wc -l)
                 fi
             fi
             COUNT_BACKUP_SECONDARY=$count

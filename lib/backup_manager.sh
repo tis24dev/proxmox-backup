@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Backup Manager Library
 # File: backup_manager.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: Gestione storage backup
 ##
 # ==========================================
@@ -139,6 +139,15 @@
 # - Medium timeouts (15 min) for storage operations
 # - Long timeouts (30-60 min) for complete backup processes
 
+# Cleanup stale lock files at module initialization
+if [ -d "${BASE_DIR}/lock" ]; then
+    find "${BASE_DIR}/lock" -name "backup_manager_*.lock" -o -name "backup_status_*.lock" 2>/dev/null | while read -r lock_file; do
+        if flock -n "$lock_file" true 2>/dev/null; then
+            rm -f "$lock_file" 2>/dev/null || true
+        fi
+    done
+fi
+
 # Acquire exclusive lock for backup operations
 # This prevents multiple backup processes from interfering with each other
 # Uses flock for atomic file locking with timeout protection
@@ -153,7 +162,7 @@
 acquire_backup_lock() {
     local lock_id="$1"
     local timeout="${2:-300}"  # 5 minutes default timeout
-    local lock_file="/tmp/backup_manager_${lock_id}_$$.lock"
+    local lock_file="${BASE_DIR}/lock/backup_manager_${lock_id}.lock"
     
     debug "Attempting to acquire lock for: $lock_id (timeout: ${timeout}s)"
     
@@ -202,7 +211,7 @@ acquire_backup_lock() {
 #   1: Error releasing lock
 release_backup_lock() {
     local lock_id="$1"
-    local lock_file="/tmp/backup_manager_${lock_id}_$$.lock"
+    local lock_file="${BASE_DIR}/lock/backup_manager_${lock_id}.lock"
     
     if [ -f "$lock_file" ]; then
         rm -f "$lock_file" 2>/dev/null
@@ -228,7 +237,7 @@ release_backup_lock() {
 atomic_status_update() {
     local status_type="$1"
     local status_value="$2"
-    local status_lock="/tmp/backup_status_update_$$.lock"
+    local status_lock="${BASE_DIR}/lock/backup_status_update.lock"
     local temp_status_file="/tmp/backup_status_${status_type}_$$.tmp"
     
     # Acquire lock for status update using file descriptor 200
@@ -307,8 +316,10 @@ start_synchronized_process() {
     local bg_pid=$!
     echo "$bg_pid" > "$pid_file"
     debug "Started background process: $process_id (PID: $bg_pid)"
-    
-    return $bg_pid
+
+    # Note: PID is written to $pid_file, caller should read from there
+    # Do not return PID via return code as it gets truncated to 0-255
+    return 0  # Explicit success return to avoid spurious errors from debug with set -e
 }
 
 # Wait for synchronized process with timeout and cleanup
@@ -471,12 +482,28 @@ backup_manager_storage() {
         # Start secondary copy operation in background with synchronization
         debug "Starting secondary copy process with race condition protection"
         start_synchronized_process "copy_to_secondary" "secondary_copy"
-        pid_copy=$?
+        local pid_file_copy="/tmp/backup_process_secondary_copy_$$.pid"
+        pid_copy=$(cat "$pid_file_copy" 2>/dev/null)
+        if [ -z "$pid_copy" ] || [ "$pid_copy" -eq 0 ] 2>/dev/null; then
+            error "Failed to start secondary copy process (invalid PID)"
+            release_backup_lock "cloud_storage"
+            release_backup_lock "secondary_storage"
+            release_backup_lock "backup_manager"
+            return 1
+        fi
 
         # Start cloud upload operation in background with synchronization
         debug "Starting cloud upload process with race condition protection"
         start_synchronized_process "upload_to_cloud" "cloud_upload"
-        pid_upload=$?
+        local pid_file_upload="/tmp/backup_process_cloud_upload_$$.pid"
+        pid_upload=$(cat "$pid_file_upload" 2>/dev/null)
+        if [ -z "$pid_upload" ] || [ "$pid_upload" -eq 0 ] 2>/dev/null; then
+            error "Failed to start cloud upload process (invalid PID)"
+            release_backup_lock "cloud_storage"
+            release_backup_lock "secondary_storage"
+            release_backup_lock "backup_manager"
+            return 1
+        fi
 
         # Wait for secondary copy operation to complete with timeout protection
         debug "Waiting for secondary copy process to complete"
@@ -504,11 +531,8 @@ backup_manager_storage() {
         debug "Acquiring lock for secondary copy operation"
         if acquire_backup_lock "secondary_storage" 900; then  # 15 minutes timeout
             debug "Executing secondary copy operation"
-            if ! copy_to_secondary; then
-                copy_status=$?
-            else
-                copy_status=0
-            fi
+            copy_to_secondary
+            copy_status=$?
             release_backup_lock "secondary_storage"
         else
             error "Failed to acquire secondary storage lock for sequential operation"
@@ -519,11 +543,8 @@ backup_manager_storage() {
         debug "Acquiring lock for cloud upload operation"
         if acquire_backup_lock "cloud_storage" 900; then  # 15 minutes timeout
             debug "Executing cloud upload operation"
-            if ! upload_to_cloud; then
-                upload_status=$?
-            else
-                upload_status=0
-            fi
+            upload_to_cloud
+            upload_status=$?
             release_backup_lock "cloud_storage"
         else
             error "Failed to acquire cloud storage lock for sequential operation"
@@ -665,12 +686,13 @@ backup_manager_storage() {
     # Verify backup consistency across all storage locations
     # This is a non-blocking operation that logs warnings but doesn't fail the process
     if acquire_backup_lock "consistency_check" 300; then  # 5 minutes timeout
-        verify_backup_consistency || warning "Backup consistency verification failed, but continuing execution"
-        
+        verify_backup_consistency
+        local verify_status=$?
+
         # Handle consistency verification results
         # Don't set fatal exit code for consistency errors, but log them
-        if [ "$?" -ne 0 ]; then
-            warning "Backup consistency verification failed"
+        if [ "$verify_status" -ne 0 ]; then
+            warning "Backup consistency verification failed, but continuing execution"
             set_exit_code "warning"
         fi
         release_backup_lock "consistency_check"

@@ -2,7 +2,7 @@
 ##
 # Proxmox Backup System - Automatic Installer
 # File: install.sh
-# Version: 1.0.0
+# Version: 1.1.1
 # Last Modified: 2025-10-11
 # Changes: Installer automatico del sistema
 ##
@@ -45,7 +45,7 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Installer"
-INSTALLER_VERSION="1.0.0"
+INSTALLER_VERSION="1.1.1"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 
@@ -238,6 +238,7 @@ restore_preserved_files() {
             "secure_account"
             "backup"
             "log"
+            "lock"
             "tec-tool"
         )
         
@@ -586,7 +587,7 @@ set_permissions() {
     chmod 600 env/backup.env
     
     # Create necessary directories
-    mkdir -p backup log config secure_account
+    mkdir -p backup log config secure_account lock
     
     # Set ownership to root
     chown -R root:root "$INSTALL_DIR"

@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Environment Library
 # File: environment.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Setup ambiente per backup
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: Fix race condition
 ##
 # ==========================================
 # PROXMOX BACKUP ENVIRONMENT SETUP MODULE
@@ -72,9 +72,21 @@ check_env_file() {
         set_exit_code "error"
         exit $EXIT_ERROR
     fi
-    
+
+    # Save DEBUG_LEVEL if set via CLI flags (parse_arguments)
+    # This prevents backup.env from overwriting CLI-specified debug level
+    local saved_debug_level="${DEBUG_LEVEL:-}"
+
     # Source the environment file
     source "$ENV_FILE"
+
+    # Restore DEBUG_LEVEL if it was set via CLI
+    # Only restore if saved value is not empty and different from backup.env default
+    if [ -n "$saved_debug_level" ] && [ "$saved_debug_level" != "${DEBUG_LEVEL}" ]; then
+        DEBUG_LEVEL="$saved_debug_level"
+        debug "DEBUG_LEVEL restored to CLI value: $DEBUG_LEVEL"
+    fi
+
     debug "Environment file loaded successfully"
     success "Environment file loaded successfully"
 }
@@ -382,9 +394,9 @@ check_required_variables() {
 # Setup directory structure
 setup_dirs() {
     step "Setting up directory structure"
-    
-    # Create all required local directories
-    mkdir -p "$LOCAL_BACKUP_PATH" "$LOCAL_LOG_PATH" || {
+
+    # Create all required local directories including lock directory
+    mkdir -p "$LOCAL_BACKUP_PATH" "$LOCAL_LOG_PATH" "${BASE_DIR}/lock" || {
         error "Failed to create local directories. Check permissions."
         exit 1
     }
@@ -410,13 +422,22 @@ setup_dirs() {
     TEMP_DIR="/tmp/proxmox-backup-${PROXMOX_TYPE:-unknown}-${TIMESTAMP}-$$"
     export TEMP_DIR
     debug "Creating temporary directory: $TEMP_DIR"
-    
+
     mkdir -p "$TEMP_DIR" || {
         error "Failed to create temporary directory: $TEMP_DIR"
         exit 1
     }
-    
-    debug "Created temporary directory: $TEMP_DIR"
+
+    # Create security marker file to verify ownership during cleanup
+    # This marker proves the directory was created by this script instance
+    local marker_file="${TEMP_DIR}/.proxmox-backup-marker"
+    echo "Created by PID $$ on $(date -u +"%Y-%m-%d %H:%M:%S UTC")" > "$marker_file" || {
+        error "Failed to create security marker file: $marker_file"
+        exit 1
+    }
+    chmod 600 "$marker_file" 2>/dev/null || true
+
+    debug "Created temporary directory with security marker: $TEMP_DIR"
     
     success "Directory structure setup completed"
 }

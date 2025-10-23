@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Metrics Library
 # File: metrics.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Sistema di metriche per backup
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: Remove duplicate function definitions (moved to utils.sh)
 ##
 
 # DEPENDENCY VALIDATION
@@ -23,10 +23,22 @@ validate_metrics_dependencies() {
     done
     
     # Optional dependencies with fallback flags
-    command -v jq &>/dev/null || METRICS_NO_JQ=true
-    command -v rclone &>/dev/null || METRICS_NO_RCLONE=true
-    command -v tar &>/dev/null || METRICS_NO_TAR=true
-    command -v top &>/dev/null || METRICS_NO_TOP=true
+    if ! command -v jq &>/dev/null; then
+        METRICS_NO_JQ=true
+        missing_optional+=("jq")
+    fi
+    if ! command -v rclone &>/dev/null; then
+        METRICS_NO_RCLONE=true
+        missing_optional+=("rclone")
+    fi
+    if ! command -v tar &>/dev/null; then
+        METRICS_NO_TAR=true
+        missing_optional+=("tar")
+    fi
+    if ! command -v top &>/dev/null; then
+        METRICS_NO_TOP=true
+        missing_optional+=("top")
+    fi
     
     # Report missing critical dependencies
     if [ ${#missing_critical[@]} -gt 0 ]; then
@@ -58,7 +70,8 @@ fi
 declare -A SYSTEM_METRICS
 
 # Lock file for metrics operations coordination with backup_manager
-declare -g METRICS_LOCK_FILE="/tmp/proxmox_backup_metrics_$$.lock"
+declare -g METRICS_LOCK_FILE="${BASE_DIR}/lock/metrics.lock"
+declare -g METRICS_LOCK_FD=200  # File descriptor dedicato per il lock
 
 # Timeout settings for various operations
 declare -g METRICS_CLOUD_TIMEOUT=300  # 5 minutes for cloud operations
@@ -117,15 +130,29 @@ declare -g EMOJI_LOG_FILE="/tmp/log_check_emoji.txt"
 acquire_metrics_lock() {
     local operation="$1"
     local timeout="${2:-$METRICS_LOCK_TIMEOUT}"
-    
+
     debug "Acquiring metrics lock for operation: $operation"
-    
-    # Try to acquire lock with timeout
-    if timeout "$timeout" flock -x "$METRICS_LOCK_FILE" true 2>/dev/null; then
+
+    # Crea il file di lock se non esiste
+    touch "$METRICS_LOCK_FILE" 2>/dev/null || {
+        warning "Cannot create lock file: $METRICS_LOCK_FILE"
+        return 1
+    }
+
+    # Apre il file sul descriptor dedicato
+    eval "exec ${METRICS_LOCK_FD}>\"${METRICS_LOCK_FILE}\"" 2>/dev/null || {
+        warning "Cannot open lock file descriptor for: $operation"
+        return 1
+    }
+
+    # Acquisisce il lock esclusivo con timeout
+    if timeout "$timeout" flock -x ${METRICS_LOCK_FD} 2>/dev/null; then
         debug "Metrics lock acquired for: $operation"
         return 0
     else
         warning "Failed to acquire metrics lock for: $operation within ${timeout}s"
+        # Chiude il descriptor in caso di timeout
+        eval "exec ${METRICS_LOCK_FD}>&-" 2>/dev/null
         return 1
     fi
 }
@@ -133,11 +160,16 @@ acquire_metrics_lock() {
 # Release metrics lock
 release_metrics_lock() {
     local operation="$1"
-    
-    if [ -f "$METRICS_LOCK_FILE" ]; then
-        rm -f "$METRICS_LOCK_FILE" 2>/dev/null
+
+    # Rilascia il lock sul file descriptor
+    if flock -u ${METRICS_LOCK_FD} 2>/dev/null; then
         debug "Metrics lock released for: $operation"
     fi
+
+    # Chiude il file descriptor
+    eval "exec ${METRICS_LOCK_FD}>&-" 2>/dev/null
+
+    return 0
 }
 
 # Function to save a metric in the system with race condition protection
@@ -721,95 +753,8 @@ count_backup_files() {
 # Centralized functions for size, compression, and performance calculations
 
 # Calcola il rapporto di compressione in diversi formati
-calculate_compression_ratio() {
-    local original_size="$1"
-    local compressed_size="$2"
-    local format="${3:-percent}"  # 'percent', 'decimal', o 'human'
-
-    # Input validation
-    if [ -z "$original_size" ] || [ -z "$compressed_size" ]; then
-        echo "Unknown"
-        return 1
-    fi
-
-    # Validate numeric inputs
-    if ! [[ "$original_size" =~ ^[0-9]+$ ]] || ! [[ "$compressed_size" =~ ^[0-9]+$ ]]; then
-        echo "Unknown"
-        return 1
-    fi
-
-    if [ "$original_size" -eq 0 ]; then
-        echo "Unknown"
-        return 1
-    fi
-
-    local ratio
-    if [ "$format" = "percent" ]; then
-        ratio=$(echo "scale=2; (1 - $compressed_size / $original_size) * 100" | bc -l 2>/dev/null || echo "0")
-        echo "${ratio}%"
-    elif [ "$format" = "human" ]; then
-        ratio=$(echo "scale=2; (1 - $compressed_size / $original_size) * 100" | bc -l 2>/dev/null || echo "0")
-        echo "riduzione ${ratio}% (${original_size} → ${compressed_size})"
-    else
-        ratio=$(echo "scale=2; $original_size / $compressed_size" | bc -l 2>/dev/null || echo "1")
-        echo "$ratio"
-    fi
-    return 0
-}
-
-# Calcola dimensione in formato human-readable con fallback
-format_size_human() {
-    local size_bytes="$1"
-
-    # Input validation
-    if [ -z "$size_bytes" ]; then
-        echo "0B"
-        return 1
-    fi
-
-    # Validate numeric input
-    if ! [[ "$size_bytes" =~ ^[0-9]+$ ]]; then
-        echo "0B"
-        return 1
-    fi
-
-    if [ "$size_bytes" -lt 1 ]; then
-        echo "0B"
-        return 1
-    fi
-
-    # Use the manual formatting function
-    format_size_manual "$size_bytes"
-}
-
-# Manual size formatting fallback
-format_size_manual() {
-    local size_bytes="$1"
-    
-    if [ "$size_bytes" -ge 1099511627776 ]; then  # >= 1TB
-        echo "$(echo "scale=1; $size_bytes / 1099511627776" | bc 2>/dev/null || echo "0")TB"
-    elif [ "$size_bytes" -ge 1073741824 ]; then   # >= 1GB
-        echo "$(echo "scale=1; $size_bytes / 1073741824" | bc 2>/dev/null || echo "0")GB"
-    elif [ "$size_bytes" -ge 1048576 ]; then      # >= 1MB
-        echo "$(echo "scale=1; $size_bytes / 1048576" | bc 2>/dev/null || echo "0")MB"
-    elif [ "$size_bytes" -ge 1024 ]; then         # >= 1KB
-        echo "$(echo "scale=1; $size_bytes / 1024" | bc 2>/dev/null || echo "0")KB"
-    else
-        echo "${size_bytes}B"
-    fi
-}
-
-# Calcola la dimensione di un file
-get_file_size() {
-    local file_path="$1"
-
-    if [ ! -f "$file_path" ]; then
-        echo "0"
-        return 1
-    fi
-
-    stat -c%s "$file_path" 2>/dev/null || echo "0"
-}
+# Note: calculate_compression_ratio, format_size_human, format_size_manual,
+# get_file_size are now defined in lib/utils.sh
 
 # Calculate transfer speed
 calculate_transfer_speed() {
@@ -934,35 +879,7 @@ calculate_backups_size() {
     get_dir_size "$backup_dir" "$pattern" "*.sha256" "$format"
 }
 
-# Funzione centralizzata per formattare la durata
-format_duration() {
-    local duration_seconds="$1"
-
-    if [ -z "$duration_seconds" ] || [ "$duration_seconds" -lt 0 ]; then
-        echo "00:00:00"
-        return 1
-    fi
-
-    printf '%02d:%02d:%02d' $((duration_seconds / 3600)) $((duration_seconds % 3600 / 60)) $((duration_seconds % 60))
-}
-
-# Funzione centralizzata per formattare la durata in modo human-readable
-format_duration_human() {
-    local duration_seconds="$1"
-
-    if [ -z "$duration_seconds" ] || [ "$duration_seconds" -lt 0 ]; then
-        echo "0s"
-        return 1
-    fi
-
-    if [ "$duration_seconds" -gt 3600 ]; then
-        echo "$(($duration_seconds / 3600))h $(($duration_seconds % 3600 / 60))m"
-    elif [ "$duration_seconds" -gt 60 ]; then
-        echo "$(($duration_seconds / 60))m $(($duration_seconds % 60))s"
-    else
-        echo "${duration_seconds}s"
-    fi
-}
+# Note: format_duration and format_duration_human are now defined in lib/utils.sh
 
 # Convert sizes between different units of measurement
 convert_size() {
@@ -1008,22 +925,19 @@ convert_size() {
 # Cleanup function for metrics module
 cleanup_metrics() {
     local exit_code="${1:-0}"
-    
+
     debug "Cleaning up metrics module resources"
-    
-    # Release any held locks
+
+    # Release any held locks (chiude anche il file descriptor)
     release_metrics_lock "cleanup"
-    
-    # Clean up temporary files
-    if [ -n "$METRICS_LOCK_FILE" ] && [ -f "$METRICS_LOCK_FILE" ]; then
-        rm -f "$METRICS_LOCK_FILE" 2>/dev/null
-    fi
-    
+
     # Clean up any orphaned temporary files from this session
     find /tmp -name "backup_process_*_$$.pid" -mtime +1 -delete 2>/dev/null || true
     find /tmp -name "backup_manager_*_$$.lock" -mtime +1 -delete 2>/dev/null || true
-    find /tmp -name "proxmox_backup_metrics_$$.lock" -mtime +1 -delete 2>/dev/null || true
-    
+
+    # NOTA: Non rimuoviamo più il lock file da /tmp perché ora è in ${BASE_DIR}/lock/
+    # Il lock file in ${BASE_DIR}/lock/metrics.lock viene gestito automaticamente da flock
+
     debug "Metrics module cleanup completed with exit code: $exit_code"
     return "$exit_code"
 }
@@ -1056,10 +970,16 @@ report_metrics_error() {
     if [ "$PROMETHEUS_ENABLED" == "true" ]; then
         case "$error_level" in
             "critical")
-                save_metric "proxmox_backup_metrics_errors_total" "1" "severity=\"critical\",operation=\"$operation\""
+                local critical_labels="severity=\"critical\",operation=\"$operation\""
+                local current_critical=$(get_metric "proxmox_backup_metrics_errors_total" "$critical_labels")
+                local new_critical=$((current_critical + 1))
+                save_metric "proxmox_backup_metrics_errors_total" "$new_critical" "$critical_labels"
                 ;;
             "warning")
-                save_metric "proxmox_backup_metrics_errors_total" "1" "severity=\"warning\",operation=\"$operation\""
+                local warning_labels="severity=\"warning\",operation=\"$operation\""
+                local current_warning=$(get_metric "proxmox_backup_metrics_errors_total" "$warning_labels")
+                local new_warning=$((current_warning + 1))
+                save_metric "proxmox_backup_metrics_errors_total" "$new_warning" "$warning_labels"
                 ;;
         esac
     fi

@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Utils Library
 # File: utils.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Funzioni di utilità per backup
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: Add formatting functions (format_size_human, format_duration, get_file_size, calculate_compression_ratio)
 ##
 # Centralized utility functions for common operations
 
@@ -66,19 +66,20 @@ count_files_in_dir() {
     local pattern="$2"
     local exclude_pattern="${3:-}"
     local max_depth="${4:-1}"
-    
+
     if [ ! -d "$dir" ]; then
         echo "0"
         return 1
     fi
-    
-    local cmd="find \"$dir\" -maxdepth $max_depth -type f -name \"$pattern\""
+
+    local count
     if [ -n "$exclude_pattern" ]; then
-        cmd="$cmd -not -name \"$exclude_pattern\""
+        count=$(find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -not -name "$exclude_pattern" 2>/dev/null | wc -l)
+    else
+        count=$(find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" 2>/dev/null | wc -l)
     fi
-    cmd="$cmd | wc -l"
-    
-    eval $cmd
+
+    echo "$count"
 }
 
 # Finds the oldest file in a directory
@@ -87,19 +88,20 @@ find_oldest_file() {
     local pattern="$2"
     local exclude_pattern="${3:-}"
     local max_depth="${4:-1}"
-    
+
     if [ ! -d "$dir" ]; then
         echo ""
         return 1
     fi
-    
-    local cmd="find \"$dir\" -maxdepth $max_depth -type f -name \"$pattern\""
+
+    local oldest_file
     if [ -n "$exclude_pattern" ]; then
-        cmd="$cmd -not -name \"$exclude_pattern\""
+        oldest_file=$(find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -not -name "$exclude_pattern" -printf "%T@ %p\n" 2>/dev/null | sort -n | head -1 | cut -d' ' -f2-)
+    else
+        oldest_file=$(find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -printf "%T@ %p\n" 2>/dev/null | sort -n | head -1 | cut -d' ' -f2-)
     fi
-    cmd="$cmd -printf \"%T@ %p\\n\" | sort -n | head -1 | cut -d' ' -f2-"
-    
-    eval $cmd
+
+    echo "$oldest_file"
 }
 
 # Finds the newest file in a directory
@@ -108,19 +110,20 @@ find_newest_file() {
     local pattern="$2"
     local exclude_pattern="${3:-}"
     local max_depth="${4:-1}"
-    
+
     if [ ! -d "$dir" ]; then
         echo ""
         return 1
     fi
-    
-    local cmd="find \"$dir\" -maxdepth $max_depth -type f -name \"$pattern\""
+
+    local newest_file
     if [ -n "$exclude_pattern" ]; then
-        cmd="$cmd -not -name \"$exclude_pattern\""
+        newest_file=$(find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -not -name "$exclude_pattern" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+    else
+        newest_file=$(find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
     fi
-    cmd="$cmd -printf \"%T@ %p\\n\" | sort -nr | head -1 | cut -d' ' -f2-"
-    
-    eval $cmd
+
+    echo "$newest_file"
 }
 
 # Gets the age of a file in days
@@ -151,18 +154,16 @@ get_file_timestamps() {
     local pattern="$2"
     local exclude_pattern="${3:-}"
     local max_depth="${4:-1}"
-    
+
     if [ ! -d "$dir" ]; then
         return 1
     fi
-    
-    local cmd="find \"$dir\" -maxdepth $max_depth -type f -name \"$pattern\""
+
     if [ -n "$exclude_pattern" ]; then
-        cmd="$cmd -not -name \"$exclude_pattern\""
+        find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -not -name "$exclude_pattern" -printf "%T@ %p\n" 2>/dev/null
+    else
+        find "$dir" -maxdepth "$max_depth" -type f -name "$pattern" -printf "%T@ %p\n" 2>/dev/null
     fi
-    cmd="$cmd -printf \"%T@ %p\\n\""
-    
-    eval $cmd
 }
 
 # Gets the size of a directory
@@ -349,6 +350,134 @@ calculate_time_difference() {
     esac
 }
 
+# ======= Functions for file size and formatting =======
+
+# Calculates file size in bytes
+get_file_size() {
+    local file_path="$1"
+
+    if [ ! -f "$file_path" ]; then
+        echo "0"
+        return 1
+    fi
+
+    stat -c%s "$file_path" 2>/dev/null || echo "0"
+}
+
+# Manual size formatting fallback
+format_size_manual() {
+    local size_bytes="$1"
+
+    if [ "$size_bytes" -ge 1099511627776 ]; then  # >= 1TB
+        echo "$(echo "scale=1; $size_bytes / 1099511627776" | bc 2>/dev/null || echo "0")TB"
+    elif [ "$size_bytes" -ge 1073741824 ]; then   # >= 1GB
+        echo "$(echo "scale=1; $size_bytes / 1073741824" | bc 2>/dev/null || echo "0")GB"
+    elif [ "$size_bytes" -ge 1048576 ]; then      # >= 1MB
+        echo "$(echo "scale=1; $size_bytes / 1048576" | bc 2>/dev/null || echo "0")MB"
+    elif [ "$size_bytes" -ge 1024 ]; then         # >= 1KB
+        echo "$(echo "scale=1; $size_bytes / 1024" | bc 2>/dev/null || echo "0")KB"
+    else
+        echo "${size_bytes}B"
+    fi
+}
+
+# Calculates size in human-readable format with fallback
+format_size_human() {
+    local size_bytes="$1"
+
+    # Input validation
+    if [ -z "$size_bytes" ]; then
+        echo "0B"
+        return 1
+    fi
+
+    # Validate numeric input
+    if ! [[ "$size_bytes" =~ ^[0-9]+$ ]]; then
+        echo "0B"
+        return 1
+    fi
+
+    if [ "$size_bytes" -lt 1 ]; then
+        echo "0B"
+        return 1
+    fi
+
+    # Use the manual formatting function
+    format_size_manual "$size_bytes"
+}
+
+# Centralized function for formatting duration (HH:MM:SS)
+format_duration() {
+    local duration_seconds="$1"
+
+    if [ -z "$duration_seconds" ] || [ "$duration_seconds" -lt 0 ]; then
+        echo "00:00:00"
+        return 1
+    fi
+
+    printf '%02d:%02d:%02d' $((duration_seconds / 3600)) $((duration_seconds % 3600 / 60)) $((duration_seconds % 60))
+}
+
+# Centralized function for formatting duration in human-readable format
+format_duration_human() {
+    local duration_seconds="$1"
+
+    if [ -z "$duration_seconds" ] || [ "$duration_seconds" -lt 0 ]; then
+        echo "0s"
+        return 1
+    fi
+
+    if [ "$duration_seconds" -gt 3600 ]; then
+        echo "$(($duration_seconds / 3600))h $(($duration_seconds % 3600 / 60))m"
+    elif [ "$duration_seconds" -gt 60 ]; then
+        echo "$(($duration_seconds / 60))m $(($duration_seconds % 60))s"
+    else
+        echo "${duration_seconds}s"
+    fi
+}
+
+# Calculates compression ratio
+calculate_compression_ratio() {
+    local original_size="$1"
+    local compressed_size="$2"
+    local format="${3:-percent}"  # 'percent', 'decimal', or 'human'
+
+    # Input validation
+    if [ -z "$original_size" ] || [ -z "$compressed_size" ]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    # Validate numeric inputs
+    if ! [[ "$original_size" =~ ^[0-9]+$ ]] || ! [[ "$compressed_size" =~ ^[0-9]+$ ]]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    if [ "$original_size" -eq 0 ]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    if [ "$compressed_size" -eq 0 ]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    local ratio
+    if [ "$format" = "percent" ]; then
+        ratio=$(echo "scale=2; (1 - $compressed_size / $original_size) * 100" | bc -l 2>/dev/null || echo "0")
+        echo "${ratio}%"
+    elif [ "$format" = "human" ]; then
+        ratio=$(echo "scale=2; (1 - $compressed_size / $original_size) * 100" | bc -l 2>/dev/null || echo "0")
+        echo "riduzione ${ratio}% (${original_size} → ${compressed_size})"
+    else
+        ratio=$(echo "scale=2; $original_size / $compressed_size" | bc -l 2>/dev/null || echo "1")
+        echo "$ratio"
+    fi
+    return 0
+}
+
 # Function to manage backup status variables
 set_backup_status() {
     local operation=$1
@@ -468,8 +597,16 @@ get_compression_data() {
 
     # Verify we have valid data to calculate compression
     trace "DEBUG COMPRESSION_DATA: Verifying path and file..."
-    trace "DEBUG COMPRESSION_DATA: Directory exists? $([ -d "$uncompressed_path" ] && echo 'YES' || echo 'NO')"
-    trace "DEBUG COMPRESSION_DATA: Compressed file exists? $([ -f "$compressed_file" ] && echo 'YES' || echo 'NO')"
+    if [ -d "$uncompressed_path" ]; then
+        trace "DEBUG COMPRESSION_DATA: Directory exists? YES"
+    else
+        trace "DEBUG COMPRESSION_DATA: Directory exists? NO"
+    fi
+    if [ -f "$compressed_file" ]; then
+        trace "DEBUG COMPRESSION_DATA: Compressed file exists? YES"
+    else
+        trace "DEBUG COMPRESSION_DATA: Compressed file exists? NO"
+    fi
     
     if [ ! -d "$uncompressed_path" ] || [ ! -f "$compressed_file" ]; then
         trace "DEBUG COMPRESSION_DATA: Invalid path or file, using estimate"
@@ -496,9 +633,11 @@ get_compression_data() {
         esac
         
         trace "DEBUG COMPRESSION_DATA: Using type-based estimate: $ratio_est"
-        
+
         if [ "$format" = "all" ]; then
-            echo "ratio=$ratio_est percent=${ratio_est/\~/} decimal=0.${ratio_est/\~/} size_before=0 size_after=0"
+            local percent="${ratio_est/\~/}"
+            percent="${percent/\%/}"
+            echo "ratio=$ratio_est percent=${ratio_est/\~/} decimal=0.${percent} size_before=0 size_after=0"
         else
             echo "$ratio_est"
         fi
@@ -544,9 +683,11 @@ get_compression_data() {
         esac
         
         trace "DEBUG COMPRESSION_DATA: Returning estimate: $ratio_est"
-        
+
         if [ "$format" = "all" ]; then
-            echo "ratio=$ratio_est percent=${ratio_est/\~/} decimal=0.${ratio_est/\~/} size_before=0 size_after=0"
+            local percent="${ratio_est/\~/}"
+            percent="${percent/\%/}"
+            echo "ratio=$ratio_est percent=${ratio_est/\~/} decimal=0.${percent} size_before=0 size_after=0"
         else
             echo "$ratio_est"
         fi

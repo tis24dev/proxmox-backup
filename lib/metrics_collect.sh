@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Metrics Collection Library
 # File: metrics_collect.sh
-# Version: 0.2.4
-# Last Modified: 2025-10-19
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: Remove duplicate system metrics collection
 ##
 
@@ -289,7 +289,8 @@ collect_metrics() {
 
         while read -r timestamp_line; do
             local timestamp=$(echo "$timestamp_line" | cut -d' ' -f1)
-            local age=$(get_file_age "$timestamp_line")
+            local file=$(echo "$timestamp_line" | cut -d' ' -f2-)
+            local age=$(get_file_age "$file")
             sum_age=$((sum_age + age))
             count=$((count + 1))
         done < "$timestamp_file"
@@ -606,4 +607,3 @@ collect_metrics() {
     debug "=== collect_metrics() completed - Final EXIT_CODE: ${EXIT_CODE} ==="
     success "Metrics collection completed"
 }
-

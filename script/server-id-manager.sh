@@ -55,7 +55,7 @@ fi
 setup_logging() {
     # Set basic logging configuration
     DEBUG_LEVEL="${DEBUG_LEVEL:-basic}"
-    CURRENT_LOG_LEVEL=3  # INFO level
+    CURRENT_LOG_LEVEL=3  # DEBUG level
     
     # Create log directory if needed
     LOCAL_LOG_PATH="${SCRIPT_DIR}/../log"

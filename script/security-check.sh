@@ -2,18 +2,18 @@
 ##
 # Proxmox Backup System - Security Check Script
 # File: security-check.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
+# Version: 1.2.0
+# Last Modified: 2025-10-23
 # Changes: Correzione discrepanza versione header
 ##
 # Script to verify backup security
 # This script verifies permissions and ownership of files and folders
 ##
 
-set -e
+set -o pipefail
 
 # Script version (autonomo)
-SECURITY_CHECK_VERSION="0.2.0"
+SECURITY_CHECK_VERSION="1.2.0"
 
 # Base directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +32,8 @@ fi
 
 # Check if script is called from proxmox-backup.sh
 CALLED_FROM_BACKUP=0
-if [[ "$0" != "${BASH_SOURCE[0]}" ]] || ps -o command= -p $PPID | grep -q "proxmox-backup.sh"; then
+parent_command=$(ps -o comm= -p "$PPID" 2>/dev/null || true)
+if [[ "$0" != "${BASH_SOURCE[0]}" ]] || [[ "$parent_command" == "proxmox-backup.sh" ]]; then
     CALLED_FROM_BACKUP=1
 fi
 
@@ -55,6 +56,10 @@ fi
 if [[ "${DISABLE_COLORS}" == "1" || "${DISABLE_COLORS}" == "true" ]]; then
     USE_COLORS=0
 fi
+# Allow forcing color enabling via ENV
+if [[ "${FORCE_COLORS}" == "1" || "${FORCE_COLORS}" == "true" ]]; then
+    USE_COLORS=1
+fi
 
 # Global variables for security levels
 SCRIPT_SEC_LEVEL=0
@@ -70,8 +75,8 @@ log_step() {
 }
 
 log_info() {
-    # If called from proxmox-backup.sh, treat as debug (don't show unless DEBUG_LEVEL is verbose)
-    if [ "$CALLED_FROM_BACKUP" -eq 1 ] && [[ "${DEBUG_LEVEL:-standard}" != "verbose" ]]; then
+    # If called from proxmox-backup.sh, treat as debug (don't show unless DEBUG_LEVEL is advanced/extreme)
+    if [ "$CALLED_FROM_BACKUP" -eq 1 ] && [[ "${DEBUG_LEVEL:-standard}" != "advanced" ]] && [[ "${DEBUG_LEVEL:-standard}" != "extreme" ]]; then
         return 0
     fi
     
@@ -120,8 +125,8 @@ ts_step() {
 }
 
 ts_info() {
-    # If called from proxmox-backup.sh, treat as debug (don't show unless DEBUG_LEVEL is verbose)
-    if [ "$CALLED_FROM_BACKUP" -eq 1 ] && [[ "${DEBUG_LEVEL:-standard}" != "verbose" ]]; then
+    # If called from proxmox-backup.sh, treat as debug (don't show unless DEBUG_LEVEL is advanced/extreme)
+    if [ "$CALLED_FROM_BACKUP" -eq 1 ] && [[ "${DEBUG_LEVEL:-standard}" != "advanced" ]] && [[ "${DEBUG_LEVEL:-standard}" != "extreme" ]]; then
         return 0
     fi
     
@@ -179,6 +184,12 @@ check_script_security() {
     # Verify main file
     ts_info "Checking permissions of main file proxmox-backup.sh"
     local script="$BASE_DIR/script/proxmox-backup.sh"
+
+    if [ ! -f "$script" ]; then
+        ts_error "Main script file not found: $script"
+        return 1
+    fi
+
     local expected_perm=700
     local actual_perm=$(stat -c '%a' "$script")
     
@@ -202,9 +213,12 @@ check_script_security() {
     # Verify MD5 hash
     ts_info "Checking MD5 hash integrity of scripts"
     local hash_file="${script}.md5"
+
+    # Calculate current hash BEFORE checking file existence (needed in both branches)
+    local current_hash=$(md5sum "$script" | awk '{print $1}')
+
     if [ -f "$hash_file" ]; then
         local stored_hash=$(cat "$hash_file")
-        local current_hash=$(md5sum "$script" | awk '{print $1}')
         
         if [ "$stored_hash" != "$current_hash" ]; then
             ts_warning "Script hash mismatch detected"
@@ -339,9 +353,13 @@ check_dependencies() {
         else
             # Manual installation - ask for confirmation only if not in automatic mode
             if [ -t 0 ]; then  # Only if stdin is a terminal (not in cron)
-                read -p "Do you want to install missing dependencies? (y/n): " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                if read -p "Do you want to install missing dependencies? (y/n): " -n 1 -r; then
+                    echo
+                else
+                    echo
+                    log_warning "Input non disponibile: installazione manuale delle dipendenze saltata."
+                fi
+                if [[ ${REPLY:-} =~ ^[Yy]$ ]]; then
                     log_info "Installing dependencies..."
                     log_info "Updating package list..."
                     if apt-get update 2>&1 | while IFS= read -r line; do log_info "APT: $line"; done; then
@@ -376,8 +394,8 @@ check_dependencies() {
 
 check_directory_structure() {
     log_step "Checking directory structure"
-    
-    local dirs=("$BASE_DIR/backup" "$BASE_DIR/env" "$BASE_DIR/log" "$BASE_DIR/script" "$BASE_DIR/secure_account")
+
+    local dirs=("$BASE_DIR/backup" "$BASE_DIR/env" "$BASE_DIR/log" "$BASE_DIR/script" "$BASE_DIR/secure_account" "$BASE_DIR/lock")
     local missing=0
     local created=0
     
@@ -544,26 +562,26 @@ check_unauthorized_files() {
             continue
         fi
         
-        local found_files=$(find "$dir" -type f -printf "%f\n")
-        
-        for file in $found_files; do
-            if [[ "$file" == *.md5 ]]; then
+        while IFS= read -r -d '' file; do
+            local base_file="${file##*/}"
+            # Skip MD5 hash files and backup files
+            if [[ "$base_file" == *.md5 ]] || [[ "$base_file" == *.backup-* ]]; then
                 continue
             fi
-            
+
             local is_authorized=0
             for auth_file in "${authorized_files[@]}"; do
-                if [ "$file" == "$auth_file" ]; then
+                if [ "$base_file" == "$auth_file" ]; then
                     is_authorized=1
                     break
                 fi
             done
             
             if [ $is_authorized -eq 0 ]; then
-                log_warning "Unauthorized file found: $dir/$file"
+                log_warning "Unauthorized file found: $dir/$base_file"
                 unauthorized=$((unauthorized + 1))
             fi
-        done
+        done < <(find "$dir" -type f -print0)
     done
     
     if [ $unauthorized -gt 0 ]; then
@@ -653,20 +671,23 @@ check_suspicious_processes() {
         fi
     done
     
-    ps aux | grep -v grep | grep -E '\[.*\]' | while read line; do
-        local process_name=$(echo "$line" | awk '{print $11}' | tr -d '[]')
-        local full_command=$(echo "$line" | awk '{$1=$2=$3=$4=$5=$6=$7=$8=$9=$10=""; print $0}' | sed 's/^[ \t]*//')
+    while read -r user state vsz pid args; do
+        [[ $args =~ ^\[.*\]$ ]] || continue
+
+        local process_name="${args#[}"
+        process_name="${process_name%]}"
+        local full_command="$args"
         local is_legitimate=0
-        local vsz=$(echo "$line" | awk '{print $5}')
-        local state=$(echo "$line" | awk '{print $8}')
-        local user=$(echo "$line" | awk '{print $1}')
+        local vsz_value="${vsz:-0}"
+        local state_value="${state:-S}"
+        local user_value="${user:-unknown}"
         
         # Check if it's a legitimate Proxmox Backup zombie process
-        if [[ "$process_name" == "proxmox-backup-"* && "$state" == "Z" && "$vsz" -eq 0 && ("$user" == "root" || "$user" == "backup") ]]; then
+        if [[ "$process_name" == "proxmox-backup-"* && "$state_value" == "Z" && "$vsz_value" -eq 0 && ("$user_value" == "root" || "$user_value" == "backup") ]]; then
             is_legitimate=1
             # Legitimate Proxmox Backup zombie process ignored: $process_name (user: $user)
         # Check standard kernel processes with VSZ=0
-        elif [[ "$vsz" -eq 0 && "$user" == "root" && ("$state" == "S" || "$state" == "S<" || "$state" == "I" || "$state" == "SN") ]]; then
+        elif [[ "$vsz_value" -eq 0 && "$user_value" == "root" && ("$state_value" == "S" || "$state_value" == "S<" || "$state_value" == "I" || "$state_value" == "SN") ]]; then
             is_legitimate=1
         else
             for kernel_proc in "${kernel_processes[@]}"; do
@@ -690,15 +711,113 @@ check_suspicious_processes() {
             log_warning "Possible suspicious kernel process: $process_name"
             # Only show detailed process information in debug mode
             if [[ "${DEBUG_LEVEL:-standard}" == "advanced" ]] || [[ "${DEBUG_LEVEL:-standard}" == "extreme" ]]; then
-                echo "$line"
+                echo "$full_command (user: $user_value, state: $state_value, vsz: $vsz_value, pid: $pid)"
             else
                 log_info "Use --debug-level advanced to see detailed process information"
             fi
             found=$((found + 1))
         fi
-    done
-    
-    local unusual_ports=$(netstat -tulpn 2>/dev/null | grep -E ':(6666|6665|1337|31337|4444|5555|4242|6324|8888)' | grep -v "127.0.0.1")
+    done < <(ps -eo user=,state=,vsz=,pid=,args= --no-headers)
+
+    # Check for suspicious listening ports (supports both ss and netstat)
+    # Default suspicious ports list (can be customized via SUSPICIOUS_PORTS env var)
+    local suspicious_ports_raw="${SUSPICIOUS_PORTS:-6666 6665 1337 31337 4444 5555 4242 6324 8888 2222 3389 5900}"
+    local suspicious_ports=()
+    if [ -n "$suspicious_ports_raw" ]; then
+        while IFS=' ,|' read -r -a tmp_ports; do
+            for port in "${tmp_ports[@]}"; do
+                [[ -z "$port" ]] && continue
+                [[ "$port" =~ ^[0-9]+$ ]] || continue
+                suspicious_ports+=("$port")
+            done
+        done <<< "$suspicious_ports_raw"
+    fi
+
+    local port_whitelist_raw="${PORT_WHITELIST:-}"
+    declare -A whitelist_map=()
+    if [ -n "$port_whitelist_raw" ]; then
+        local normalized_whitelist="${port_whitelist_raw//,/ }"
+        normalized_whitelist="${normalized_whitelist//;/ }"
+        while read -r whitelist_entry; do
+            whitelist_entry="${whitelist_entry#${whitelist_entry%%[![:space:]]*}}"
+            whitelist_entry="${whitelist_entry%${whitelist_entry##*[![:space:]]}}"
+            [ -z "$whitelist_entry" ] && continue
+            local wl_program="${whitelist_entry%:*}"
+            local wl_port="${whitelist_entry#*:}"
+            if [ -z "$wl_program" ] || [ "$wl_program" = "$whitelist_entry" ]; then
+                continue
+            fi
+            if [[ ! "$wl_port" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
+            whitelist_map["$wl_program|$wl_port"]=1
+        done <<< "$normalized_whitelist"
+    fi
+
+    local socket_dump=""
+    if command -v ss &> /dev/null; then
+        socket_dump=$(ss -tulpn 2>/dev/null || true)
+    elif command -v netstat &> /dev/null; then
+        socket_dump=$(netstat -tulpn 2>/dev/null || true)
+    else
+        log_warning "Neither ss nor netstat available, skipping suspicious ports check"
+        log_info "Install iproute2 (for ss) or net-tools (for netstat) package"
+    fi
+
+    local -a suspicious_lines=()
+    if [ -n "$socket_dump" ] && [ ${#suspicious_ports[@]} -gt 0 ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            [[ "$line" == *"127.0.0.1"* ]] && continue
+            [[ "$line" == *"[::1]"* ]] && continue
+            for port in "${suspicious_ports[@]}"; do
+                [[ "$line" =~ :$port([^0-9]|$) ]] || continue
+                suspicious_lines+=("$line")
+                break
+            done
+        done <<< "$socket_dump"
+    fi
+
+    local unusual_ports=""
+    if [ ${#suspicious_lines[@]} -gt 0 ]; then
+        local -a filtered_lines=()
+        for line in "${suspicious_lines[@]}"; do
+            local skip_line=0
+            if [ ${#whitelist_map[@]} -gt 0 ]; then
+                local program=""
+                local port=""
+
+                if [[ "$line" == *'users:("'* ]]; then
+                    local rest="${line#*users:(}"
+                    rest="${rest#(}"
+                    rest="${rest#\"}"
+                    program="${rest%%\"*}"
+                elif [[ "$line" =~ ([^[:space:]]+)/[0-9]+ ]]; then
+                    program="${BASH_REMATCH[1]}"
+                fi
+
+                if [[ "$line" =~ :([0-9]+)[[:space:]] ]]; then
+                    port="${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ :([0-9]+)/ ]]; then
+                    port="${BASH_REMATCH[1]}"
+                fi
+
+                if [ -n "$program" ] && [ -n "$port" ] && [[ ${whitelist_map["$program|$port"]+x} ]]; then
+                    skip_line=1
+                fi
+            fi
+            if [ $skip_line -eq 0 ]; then
+                filtered_lines+=("$line")
+            fi
+        done
+
+        if [ ${#filtered_lines[@]} -gt 0 ]; then
+            unusual_ports=$(printf '%s\n' "${filtered_lines[@]}")
+        else
+            unusual_ports=""
+        fi
+    fi
+
     if [ -n "$unusual_ports" ]; then
         log_warning "Found processes on suspicious ports:"
         # Only show detailed port information in debug mode
@@ -706,6 +825,27 @@ check_suspicious_processes() {
             echo "$unusual_ports"
         else
             log_info "Use --debug-level advanced to see detailed port information"
+        fi
+        found=$((found + 1))
+    fi
+
+    # Check for suspicious outbound ESTABLISHED connections
+    local suspicious_outbound=""
+    local suspicious_destinations="${SUSPICIOUS_DESTINATIONS:-:6666|:6665|:1337|:31337|:4444|:4443|:8443}"
+
+    if command -v ss &> /dev/null; then
+        # Check ESTABLISHED connections to suspicious remote ports
+        suspicious_outbound=$(ss -tn state established 2>/dev/null | grep -E "${suspicious_destinations}" | grep -v "127.0.0.1" | grep -v "\[::1\]")
+    elif command -v netstat &> /dev/null; then
+        suspicious_outbound=$(netstat -tn 2>/dev/null | grep ESTABLISHED | grep -E "${suspicious_destinations}" | grep -v "127.0.0.1" | grep -v "\[::1\]")
+    fi
+
+    if [ -n "$suspicious_outbound" ]; then
+        log_warning "Found ESTABLISHED connections to suspicious remote ports:"
+        if [[ "${DEBUG_LEVEL:-standard}" == "advanced" ]] || [[ "${DEBUG_LEVEL:-standard}" == "extreme" ]]; then
+            echo "$suspicious_outbound"
+        else
+            log_info "Use --debug-level advanced to see detailed connection information"
         fi
         found=$((found + 1))
     fi
@@ -724,12 +864,13 @@ update_script_hashes() {
     local script_files=(
         "$BASE_DIR/script/proxmox-backup.sh"
         "$BASE_DIR/script/fix-permissions.sh"
-	"$BASE_DIR/script/server-id-manager.sh"
+        "$BASE_DIR/script/server-id-manager.sh"
         "$BASE_DIR/script/security-check.sh"
         "$BASE_DIR/secure_account/setup_gdrive.sh"
         "$BASE_DIR/lib/backup_collect.sh"
         "$BASE_DIR/lib/backup_collect_pbspve.sh"
         "$BASE_DIR/lib/backup_create.sh"
+        "$BASE_DIR/lib/backup_manager.sh"
         "$BASE_DIR/lib/backup_verify.sh"
         "$BASE_DIR/lib/core.sh"
         "$BASE_DIR/lib/environment.sh"
@@ -739,6 +880,7 @@ update_script_hashes() {
         "$BASE_DIR/lib/storage.sh"
         "$BASE_DIR/lib/log.sh"
         "$BASE_DIR/lib/utils_counting.sh"
+        "$BASE_DIR/lib/utils.sh"
         "$BASE_DIR/lib/metrics_collect.sh"
     )
     
@@ -765,17 +907,25 @@ update_script_hashes() {
                 log_info "Original hash: $stored_hash"
                 log_info "Current hash: $current_hash"
                 
-                if [ "$AUTO_UPDATE_HASHES" = "true" ]; then
+                if [ "${AUTO_UPDATE_HASHES:-false}" = "true" ]; then
                     echo "$current_hash" > "$hash_file"
                     log_info "Hash automatically updated for $script"
                 else
-                    read -p "Update hash? (y/n): " -n 1 -r
-                    echo
-                    if [[ $REPLY =~ ^[Yy]$ ]]; then
-                        echo "$current_hash" > "$hash_file"
-                        log_info "Hash updated for $script"
+                    if [ -t 0 ]; then
+                        if read -p "Update hash? (y/n): " -n 1 -r; then
+                            echo
+                        else
+                            echo
+                            log_warning "Input non disponibile: hash non aggiornato automaticamente."
+                        fi
+                        if [[ ${REPLY:-} =~ ^[Yy]$ ]]; then
+                            echo "$current_hash" > "$hash_file"
+                            log_info "Hash updated for $script"
+                        else
+                            log_warning "Hash not updated. Script may have been tampered with!"
+                        fi
                     else
-                        log_warning "Hash not updated. Script may have been tampered with!"
+                        log_warning "Non-interactive mode: impossibile confermare l'aggiornamento dell'hash per $script"
                     fi
                 fi
             else
@@ -874,6 +1024,7 @@ main() {
     case "${1:-}" in
         "--script-check")
             check_script_security
+            ts_step "Calculating final exit code"
             calculate_final_exit_code
             return $?
             ;;
@@ -916,12 +1067,12 @@ main() {
     fi
     echo ""
     echo -e "${backup_color}==============================================================="
-    echo -e "      BACKUP VERIFICATION COMPLETED"
+    echo -e "      SECURITY VERIFICATION COMPLETED"
     echo -e "===============================================================${NC}"
     echo ""
 
     # Calculate and return final exit code
-    echo -e "${CYAN}$(date '+%Y-%m-%d %H:%M:%S') [STEP]${NC} Calculating final exit code"
+    ts_step "Calculating final exit code"
     calculate_final_exit_code
     return $?
 }

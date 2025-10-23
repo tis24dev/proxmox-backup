@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.2.6
-# Last Modified: 2025-10-11
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: Fix: Explicitly create the destination directory
 ##
 # Functions for backup data collection
@@ -498,34 +498,37 @@ collect_system_info() {
         mkdir -p "$target_dir"
         
         # Find all files and directories to copy, excluding log and backup directories
-        find "$BASE_DIR" -type f -o -type d | grep -v "$BASE_DIR/log" | grep -v "$BASE_DIR/backup" | while read item; do
-            # Skip the root directory
-            if [ "$item" == "$BASE_DIR" ]; then
-                continue
-            fi
-            
-            # Calculate the relative path
-            local rel_path="${item#$BASE_DIR/}"
-            local dest_path="${target_dir}/${rel_path}"
-            
-            if [ -d "$item" ]; then
-                # It's a directory, create it
-                if [ "$rel_path" != "log" ] && [ "$rel_path" != "backup" ]; then
-                    mkdir -p "$dest_path"
-                    debug "Created directory: $dest_path"
+        # NOTE: Using subshell to prevent 'find' from changing our working directory
+        (
+            find "$BASE_DIR" -type f -o -type d | grep -v "$BASE_DIR/log" | grep -v "$BASE_DIR/backup" | while read item; do
+                # Skip the root directory
+                if [ "$item" == "$BASE_DIR" ]; then
+                    continue
                 fi
-            elif [ -f "$item" ]; then
-                # It's a file, copy it
-                local dest_dir="$(dirname "$dest_path")"
-                mkdir -p "$dest_dir"
-                cp -p "$item" "$dest_path" 2>/dev/null
-                if [ $? -eq 0 ]; then
-                    debug "Copied file: $item -> $dest_path"
-                else
-                    warning "Failed to copy file: $item"
+
+                # Calculate the relative path
+                local rel_path="${item#$BASE_DIR/}"
+                local dest_path="${target_dir}/${rel_path}"
+
+                if [ -d "$item" ]; then
+                    # It's a directory, create it
+                    if [ "$rel_path" != "log" ] && [ "$rel_path" != "backup" ]; then
+                        mkdir -p "$dest_path"
+                        debug "Created directory: $dest_path"
+                    fi
+                elif [ -f "$item" ]; then
+                    # It's a file, copy it
+                    local dest_dir="$(dirname "$dest_path")"
+                    mkdir -p "$dest_dir"
+                    cp -p "$item" "$dest_path" 2>/dev/null
+                    if [ $? -eq 0 ]; then
+                        debug "Copied file: $item -> $dest_path"
+                    else
+                        warning "Failed to copy file: $item"
+                    fi
                 fi
-            fi
-        done
+            done
+        )
         
         success "Successfully backed up script repository: $BASE_DIR"
         
@@ -539,7 +542,8 @@ collect_system_info() {
                 info "Copying files from /usr/local/bin to $TEMP_DIR/usr/local/bin"
                 
                 # Use cp instead of rsync
-                find /usr/local/bin -type f -exec cp -v {} "$TEMP_DIR/usr/local/bin/" \; 2>/dev/null
+                # NOTE: Using subshell to prevent 'find' from changing our working directory
+                (find /usr/local/bin -type f -exec cp -v {} "$TEMP_DIR/usr/local/bin/" \; 2>/dev/null)
                 if [ $? -ne 0 ]; then
                     warning "Failed to backup /usr/local/bin, directory might be inaccessible"
                     set_exit_code "warning"
@@ -560,7 +564,8 @@ collect_system_info() {
                 info "Copying files from /usr/local/sbin to $TEMP_DIR/usr/local/sbin"
                 
                 # Use cp instead of rsync
-                find /usr/local/sbin -type f -exec cp -v {} "$TEMP_DIR/usr/local/sbin/" \; 2>/dev/null
+                # NOTE: Using subshell to prevent 'find' from changing our working directory
+                (find /usr/local/sbin -type f -exec cp -v {} "$TEMP_DIR/usr/local/sbin/" \; 2>/dev/null)
                 if [ $? -ne 0 ]; then
                     warning "Failed to backup /usr/local/sbin, directory might be inaccessible"
                     set_exit_code "warning"
@@ -593,16 +598,19 @@ collect_system_info() {
         if [ -d "/var/spool/cron/crontabs" ]; then
             mkdir -p "$TEMP_DIR/var/spool/cron/crontabs"
             # Find all user crontabs
-            find /var/spool/cron/crontabs -type f 2>/dev/null | while read -r crontab_file; do
-                username=$(basename "$crontab_file")
-                debug "Collecting crontab for user: $username"
-                if ! cp "$crontab_file" "$TEMP_DIR/var/spool/cron/crontabs/$username" 2>&1; then
-                    warning "Failed to backup crontab for user $username"
-                    set_exit_code "warning"
-                else
-                    debug "Successfully backed up crontab for user $username"
-                fi
-            done
+            # NOTE: Using subshell to prevent 'find' from changing our working directory
+            (
+                find /var/spool/cron/crontabs -type f 2>/dev/null | while read -r crontab_file; do
+                    username=$(basename "$crontab_file")
+                    debug "Collecting crontab for user: $username"
+                    if ! cp "$crontab_file" "$TEMP_DIR/var/spool/cron/crontabs/$username" 2>&1; then
+                        warning "Failed to backup crontab for user $username"
+                        set_exit_code "warning"
+                    else
+                        debug "Successfully backed up crontab for user $username"
+                    fi
+                done
+            )
         fi
     fi
     
@@ -613,12 +621,11 @@ collect_system_info() {
     collect_security_configs
     
     success "System information collected successfully"
-    
-    # CRITICAL: Ensure we're in a valid directory after collection
-    # Some commands (like find) may leave the process in an orphaned state
-    cd / 2>/dev/null || true
-    debug "Reset to root directory after system info collection"
-    
+
+    # NOTE: No longer needed - subshells preserve working directory automatically
+    # Working directory remains unchanged after all find operations
+    debug "Working directory preserved after system info collection: $(pwd)"
+
     return $EXIT_SUCCESS
 }
 
@@ -982,22 +989,31 @@ collect_security_configs() {
 # Create temporary directory for collecting files
 setup_temp_dir() {
     step "Setting up temporary directory for backup"
-    
+
     # Try to create a temporary directory
     TEMP_DIR=$(mktemp -d) || {
         local fallback_dir="/tmp/proxmox-backup-${PROXMOX_TYPE}-${TIMESTAMP}"
         warning "Failed to create temporary directory using mktemp, trying fallback location: $fallback_dir"
-        
+
         mkdir -p "$fallback_dir" || {
             error "Failed to create temporary directory"
             exit 1
         }
-        
+
         TEMP_DIR="$fallback_dir"
     }
-    
-    debug "Created temporary directory: $TEMP_DIR"
-    
+
+    # Create security marker file to verify ownership during cleanup
+    # This marker proves the directory was created by this script instance
+    local marker_file="${TEMP_DIR}/.proxmox-backup-marker"
+    echo "Created by PID $$ on $(date -u +"%Y-%m-%d %H:%M:%S UTC")" > "$marker_file" || {
+        error "Failed to create security marker file: $marker_file"
+        exit 1
+    }
+    chmod 600 "$marker_file" 2>/dev/null || true
+
+    debug "Created temporary directory with security marker: $TEMP_DIR"
+
     # Handle cleanup on script exit
     # trap 'cleanup' EXIT
     

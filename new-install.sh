@@ -2,7 +2,7 @@
 ##
 # Proxmox Backup System - Fresh Installer
 # File: new-install.sh
-# Version: 1.2.0
+# Version: 1.1.0
 # Last Modified: 2025-10-19
 # Changes: **Added backup verification before removal - prevents data loss from corrupted backups**
 ##
@@ -30,7 +30,7 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Fresh Installer"
-NEW_INSTALLER_VERSION="1.2.0"
+NEW_INSTALLER_VERSION="1.1.0"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh"

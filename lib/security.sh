@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Security Library
 # File: security.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: Funzioni di sicurezza per backup
 ##
 # Basic security functions for backup
@@ -121,13 +121,43 @@ verify_script_security() {
         return $EXIT_SUCCESS
     fi
 
+    # Create temporary file to capture security check output
+    local tmp_log
+    tmp_log=$(mktemp) || {
+        error "Failed to create temporary file for security check output"
+        return $EXIT_ERROR
+    }
+
     # Decide whether to run full check or script check only
     debug "Running security check (FULL_SECURITY_CHECK=${FULL_SECURITY_CHECK:-false})"
     local check_result=0
-    if [[ "${FULL_SECURITY_CHECK:-false}" == "true" ]]; then
-        bash "$security_script" || check_result=$?
+
+    set +e
+    if [ -t 1 ]; then
+        if [[ "${FULL_SECURITY_CHECK:-false}" == "true" ]]; then
+            FORCE_COLORS=1 bash "$security_script" 2>&1 | tee "$tmp_log"
+            check_result=${PIPESTATUS[0]}
+        else
+            FORCE_COLORS=1 bash "$security_script" --script-check 2>&1 | tee "$tmp_log"
+            check_result=${PIPESTATUS[0]}
+        fi
     else
-        bash "$security_script" --script-check || check_result=$?
+        if [[ "${FULL_SECURITY_CHECK:-false}" == "true" ]]; then
+            bash "$security_script" >"$tmp_log" 2>&1
+            check_result=$?
+        else
+            bash "$security_script" --script-check >"$tmp_log" 2>&1
+            check_result=$?
+        fi
+    fi
+    set -e
+
+    local expected_footer="[STEP] Calculating final exit code"
+    local footer_present="false"
+    if [[ -s "$tmp_log" ]]; then
+        if perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' "$tmp_log" | grep -Fq "$expected_footer"; then
+            footer_present="true"
+        fi
     fi
 
     # Handle security check result
@@ -137,9 +167,13 @@ verify_script_security() {
             success "Script security verification completed successfully"
             ;;
         1)
+            if [[ "$footer_present" != "true" ]]; then
+                warning "Security Check script crashed unexpectedly"
+            fi
             warning "Security check completed with warnings"
             if [[ "${ABORT_ON_SECURITY_ISSUES:-false}" == "true" ]]; then
                 error "Aborting due to security issues (ABORT_ON_SECURITY_ISSUES=true)"
+                rm -f "$tmp_log"
                 return $EXIT_ERROR
             else
                 warning "Continuing despite security warnings (ABORT_ON_SECURITY_ISSUES=false)"
@@ -147,9 +181,13 @@ verify_script_security() {
             fi
             ;;
         2)
+            if [[ "$footer_present" != "true" ]]; then
+                error "Security Check script crashed unexpectedly"
+            fi
             error "Security check failed"
             if [[ "${ABORT_ON_SECURITY_ISSUES:-false}" == "true" ]]; then
                 error "Aborting due to security issues (ABORT_ON_SECURITY_ISSUES=true)"
+                rm -f "$tmp_log"
                 return $EXIT_ERROR
             else
                 warning "Continuing despite security errors (ABORT_ON_SECURITY_ISSUES=false)"
@@ -157,6 +195,8 @@ verify_script_security() {
             fi
             ;;
     esac
+
+    rm -f "$tmp_log"
 
     return $security_status
 }
@@ -191,9 +231,13 @@ check_dependencies() {
     # Handle missing packages
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
         warning "Missing required packages: ${missing_packages[*]}"
-        
+
         if [[ "${AUTO_INSTALL_DEPENDENCIES:-false}" == "true" ]]; then
-            install_missing_packages "${missing_packages[@]}"
+            if ! install_missing_packages "${missing_packages[@]}"; then
+                error "Failed to install missing dependencies"
+                set_exit_code "error"
+                return $EXIT_ERROR
+            fi
         else
             error "Missing required packages and AUTO_INSTALL_DEPENDENCIES is disabled"
             set_exit_code "error"
@@ -255,6 +299,8 @@ install_missing_packages() {
         set_exit_code "error"
         return $EXIT_ERROR
     fi
+
+    return $EXIT_SUCCESS
 }
 
 # Improved version comparison function

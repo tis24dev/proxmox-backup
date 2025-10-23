@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Notification Library
 # File: notify.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: Sistema di notifiche per backup
 ##
 # Proxmox backup notification system
@@ -101,10 +101,10 @@ send_telegram_notification() {
     # Building Telegram message using global variables
     build_telegram_message "$status_emoji"
     
-    # Send the message 
+    # Send the message
     if curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-         -d "chat_id=${TELEGRAM_CHAT_ID}" \
-         -d "text=${telegram_message}" > /dev/null; then
+         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+         --data-urlencode "text=${telegram_message}" > /dev/null; then
         success "Telegram notification sent successfully"
         return 0
     else
@@ -206,9 +206,9 @@ send_email_notification() {
     
     # Prepare email data using global variables
     prepare_email_data "$status"
-    
+
     # Create email content
-    create_email_body "$status_color"
+    create_email_body "$status" "$status_color"
 
     # Function to encode email subject (as in working script)
     encode_subject() {
@@ -314,7 +314,8 @@ prepare_email_data() {
 
 # Create email body
 create_email_body() {
-    local status_color="$1"
+    local status="$1"
+    local status_color="$2"
     
     # SIDEBAR COLOR LOGIC:
     # - Header (PBS BACKUP REPORT): reflects global script status (status_color)

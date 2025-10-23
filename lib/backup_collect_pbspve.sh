@@ -2,11 +2,103 @@
 ##
 # Proxmox Backup System - PBS/PVE Collection Library
 # File: backup_collect_pbspve.sh
-# Version: 0.2.5
-# Last Modified: 2025-10-19
-# Changes: Optimize file scanning and improve safety
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: refactor: improve error handling and fix critical path/tracking bugs
 ##
 # Functions for backup data collection
+
+# ======= ERROR HANDLING HELPER FUNCTIONS =======
+# These functions provide standardized error handling across all operations
+#
+# Error Tracking Architecture:
+#   - Global counters (BACKUP_FILES_FAILED) track total failures for monitoring
+#   - Local counters (metadata_errors, total_stat_errors) provide detailed context
+#   - Both are complementary: global for alerting, local for debugging
+#   - All helper functions call handle_collection_error() which updates global counters
+#
+# Integration with backup_collect.sh:
+#   - handle_collection_error() updates BACKUP_FILES_FAILED (global counter)
+#   - set_exit_code() updates EXIT_CODE based on error severity
+#   - log_operation_metrics() reports global counters to monitoring system
+
+# Execute command with fallback and error handling
+# Usage: result=$(safe_command "fallback_value" "error_level" "description" command args...)
+# Returns: command output on success, fallback_value on failure
+# Note: Command is passed as array arguments to preserve quoting and special characters
+safe_command() {
+    local fallback_value="$1"
+    local error_level="${2:-warning}"
+    local description="${3:-command execution}"
+    shift 3
+
+    local result
+    if result=$("$@" 2>/dev/null); then
+        printf '%s\n' "$result"
+        return 0
+    else
+        handle_collection_error "$description" "$(printf '%s ' "$@")" "$error_level"
+        printf '%s\n' "$fallback_value"
+        return 1
+    fi
+}
+
+# Create directory with validation and error handling
+# Usage: safe_mkdir "/path/to/dir" "error_level"
+# Returns: 0 on success, 1 on failure
+safe_mkdir() {
+    local dir_path="$1"
+    local error_level="${2:-error}"
+
+    if ! mkdir -p "$dir_path" 2>/dev/null; then
+        handle_collection_error "directory creation" "$dir_path" "$error_level"
+        return 1
+    fi
+
+    if [ ! -d "$dir_path" ] || [ ! -w "$dir_path" ]; then
+        handle_collection_error "directory access" "$dir_path" "$error_level" "not writable"
+        return 1
+    fi
+
+    return 0
+}
+
+# Validate that output file was created correctly
+# Usage: validate_output_file "/path/to/file" "operation_name" "required"
+# Returns: 0 if valid, 1 if invalid
+validate_output_file() {
+    local file_path="$1"
+    local operation="$2"
+    local required="${3:-true}"
+
+    if [ ! -f "$file_path" ] || [ -L "$file_path" ]; then
+        if [ "$required" = "true" ]; then
+            handle_collection_error "$operation" "$file_path" "warning" "output file not created or is symlink"
+            return 1
+        else
+            handle_collection_error "$operation" "$file_path" "debug" "optional file not created"
+            return 0
+        fi
+    fi
+    return 0
+}
+
+# Get file size with error tracking
+# Usage: size=$(safe_stat_size "/path/to/file")
+# Returns: size in bytes or 0 if failed (with warning logged)
+safe_stat_size() {
+    local file_path="$1"
+    local size
+
+    if size=$(stat -c%s "$file_path" 2>/dev/null); then
+        echo "$size"
+        return 0
+    else
+        handle_collection_error "file size calculation" "$file_path" "warning" "stat failed"
+        echo "0"
+        return 1
+    fi
+}
 
 # ======= CENTRALIZED DATASTORE DETECTION =======
 
@@ -423,17 +515,21 @@ is_ceph_configured() {
 # Collect PVE-specific configuration
 collect_pve_configs() {
     step "Collecting PVE configuration files with enhanced features"
-    
+
     local operation_start=$(date +%s)
-    local local_files_processed=0
-    local local_files_failed=0
-    
-    # Create directories preserving original structure with configurable paths
-    mkdir -p "$TEMP_DIR${PVE_CONFIG_PATH}" && increment_file_counter "dirs"
-    mkdir -p "$TEMP_DIR${PVE_CLUSTER_PATH}" && increment_file_counter "dirs"
-    mkdir -p "$TEMP_DIR${COROSYNC_CONFIG_PATH}" && increment_file_counter "dirs"
-    mkdir -p "$TEMP_DIR/etc/pve/firewall" && increment_file_counter "dirs"
-    mkdir -p "$TEMP_DIR/etc/pve/nodes" && increment_file_counter "dirs"
+
+    # Note: Global counters BACKUP_FILES_PROCESSED and BACKUP_FILES_FAILED
+    # are automatically updated by handle_collection_error() and safe_copy()
+
+    # Create directories preserving original structure with configurable paths and validation
+    for critical_dir in "$TEMP_DIR${PVE_CONFIG_PATH}" "$TEMP_DIR${PVE_CLUSTER_PATH}" "$TEMP_DIR${COROSYNC_CONFIG_PATH}" "$TEMP_DIR/etc/pve/firewall" "$TEMP_DIR/etc/pve/nodes"; do
+        if safe_mkdir "$critical_dir" "error"; then
+            increment_file_counter "dirs"
+        else
+            error "Failed to create critical PVE directory: $critical_dir"
+            return $EXIT_ERROR
+        fi
+    done
     
     # Suggerimento 1: Gestione configurabile dei file sensibili
     
@@ -619,39 +715,87 @@ collect_pve_configs() {
                 # Create metadata for this datastore if accessible
                 if [ -d "$ds_path" ]; then
                     local ds_metadata_dir="$TEMP_DIR${PVE_CLUSTER_PATH}/info/datastores/$ds_name"
-                    mkdir -p "$ds_metadata_dir"
-                    
-                    # Collect basic information about the datastore
+
+                    # Create metadata directory with validation
+                    if ! safe_mkdir "$ds_metadata_dir" "warning"; then
+                        warning "Cannot create metadata directory for datastore: $ds_name, skipping"
+                        continue
+                    fi
+
+                    # Collect basic information about the datastore with error tracking
+                    local metadata_errors=0
                     {
                         echo "# Datastore: $ds_name"
                         echo "# Path: $ds_path"
                         echo "# Type: $ds_comment"
                         echo "# Scanned on: $(date)"
                         echo ""
-                        
-                        # Directory structure (first 2 levels only for performance)
+
+                        # Directory structure with error handling
                         echo "## Directory Structure (max 2 levels):"
-                        find "$ds_path" -maxdepth 2 -type d 2>/dev/null | head -20 || echo "# Error accessing directory structure"
+                        local dir_list
+                        if dir_list=$(find "$ds_path" -maxdepth 2 -type d 2>/dev/null | head -20); then
+                            echo "$dir_list"
+                        else
+                            handle_collection_error "directory structure scan" "$ds_path" "warning"
+                            echo "# Error: Unable to scan directory structure"
+                            echo "# WARNING: Directory structure data is incomplete"
+                            metadata_errors=$((metadata_errors + 1))
+                        fi
                         echo ""
-                        
-                        # Disk usage summary
+
+                        # Disk usage with error handling
                         echo "## Disk Usage:"
-                        du -sh "$ds_path" 2>/dev/null || echo "# Error getting disk usage"
+                        local disk_usage
+                        if disk_usage=$(du -sh "$ds_path" 2>/dev/null); then
+                            echo "$disk_usage"
+                        else
+                            handle_collection_error "disk usage calculation" "$ds_path" "warning"
+                            echo "# Error: Unable to calculate disk usage"
+                            echo "# WARNING: Disk usage data unavailable"
+                            metadata_errors=$((metadata_errors + 1))
+                        fi
                         echo ""
-                        
-                        # File type summary (sample)
+
+                        # File type summary with error tracking
                         echo "## File Types (sample):"
-                        # Use 'IFS= read -r' to safely read paths and preserve special characters
+                        local stat_errors=0
+                        local stat_success=0
                         find "$ds_path" -maxdepth 3 -type f -name "*" 2>/dev/null | head -10 | while IFS= read -r file; do
-                            echo "$(stat -c '%y %s %n' "$file" 2>/dev/null)" || true
+                            if file_info=$(stat -c '%y %s %n' "$file" 2>/dev/null); then
+                                echo "$file_info"
+                                stat_success=$((stat_success + 1))
+                            else
+                                handle_collection_error "file stat" "$file" "warning"
+                                stat_errors=$((stat_errors + 1))
+                            fi
                         done
-                        
+
+                        # Add data quality notes if errors occurred
+                        if [ $metadata_errors -gt 0 ]; then
+                            echo ""
+                            echo "## Data Quality Notes"
+                            echo "WARNING: Metadata collection encountered $metadata_errors error(s)"
+                            echo "This datastore information may be incomplete"
+                            echo ""
+                            echo "NOTE: These errors are included in the global error count."
+                            echo "      Check backup logs for complete error details."
+                        fi
+
                     } > "$ds_metadata_dir/metadata.txt"
+
+                    # Validate metadata file was created
+                    validate_output_file "$ds_metadata_dir/metadata.txt" "PVE datastore metadata" "true"
                     
                     # Detailed backup file analysis (similar to PBS .pxar analysis)
                     if [ "${BACKUP_PVE_BACKUP_FILES:-true}" == "true" ]; then
                         info "Analyzing PVE backup files in datastore: $ds_name"
-                        mkdir -p "$ds_metadata_dir/backup_analysis"
+
+                        # Create backup analysis directory with validation
+                        if ! safe_mkdir "$ds_metadata_dir/backup_analysis" "warning"; then
+                            warning "Cannot create backup_analysis directory for datastore: $ds_name, skipping analysis"
+                            continue
+                        fi
                         
                         # PVE backup file patterns
                         local pve_backup_patterns=(
@@ -718,7 +862,7 @@ collect_pve_configs() {
                             fi
                         done
                         
-                        # Create summary of all backup files (reusing cached file list)
+                        # Create summary of all backup files (reusing cached file list with error tracking)
                         local backup_summary="$ds_metadata_dir/backup_analysis/${ds_name}_backup_summary.txt"
                         {
                             echo "# PVE Backup Files Summary for datastore: $ds_name"
@@ -728,29 +872,45 @@ collect_pve_configs() {
 
                             local total_backup_files=0
                             local total_backup_size=0
+                            local total_stat_errors=0
 
                             # Process statistics from cached file list (no additional find needed)
                             for pattern in "${pve_backup_patterns[@]}"; do
                                 echo "## Files matching pattern: $pattern"
                                 local pattern_count=0
                                 local pattern_size=0
+                                local pattern_errors=0
 
                                 # Filter cached files matching current pattern
                                 for backup_file in "${all_backup_files[@]}"; do
                                     # Match pattern using bash pattern matching
                                     if [[ "$(basename "$backup_file")" == $pattern ]]; then
                                         if [ -f "$backup_file" ]; then
-                                            local file_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
+                                            # Use safe_stat_size with error tracking
+                                            local file_size
+                                            file_size=$(safe_stat_size "$backup_file")
+                                            local stat_exit=$?
+
                                             pattern_count=$((pattern_count + 1))
-                                            pattern_size=$((pattern_size + file_size))
                                             total_backup_files=$((total_backup_files + 1))
-                                            total_backup_size=$((total_backup_size + file_size))
+
+                                            if [ $stat_exit -eq 0 ]; then
+                                                pattern_size=$((pattern_size + file_size))
+                                                total_backup_size=$((total_backup_size + file_size))
+                                            else
+                                                pattern_errors=$((pattern_errors + 1))
+                                                total_stat_errors=$((total_stat_errors + 1))
+                                            fi
                                         fi
                                     fi
                                 done
 
                                 if [ "$pattern_count" -gt 0 ]; then
                                     echo "  Files: $pattern_count"
+                                    if [ "$pattern_errors" -gt 0 ]; then
+                                        echo "  Successfully analyzed: $((pattern_count - pattern_errors))"
+                                        echo "  Files with errors: $pattern_errors"
+                                    fi
                                     echo "  Total size: $(numfmt --to=iec $pattern_size 2>/dev/null || echo "${pattern_size} bytes")"
                                 else
                                     echo "  No files found"
@@ -762,16 +922,30 @@ collect_pve_configs() {
                             echo "Total backup files: $total_backup_files"
                             echo "Total backup size: $(numfmt --to=iec $total_backup_size 2>/dev/null || echo "${total_backup_size} bytes")"
 
+                            # Add data quality notes if stat errors occurred
+                            if [ $total_stat_errors -gt 0 ]; then
+                                echo ""
+                                echo "## Data Quality Notes"
+                                echo "Files with stat errors: $total_stat_errors"
+                                echo "Successfully analyzed: $((total_backup_files - total_stat_errors))"
+                                echo "WARNING: Size calculations are based on available data only"
+                                echo ""
+                                echo "NOTE: These stat errors are included in the global error count."
+                                echo "      Total errors may be higher if other types of errors occurred."
+                            fi
+
                         } > "$backup_summary"
                         
                         # Optional: Copy small backup files (similar to PBS small .pxar)
                         if [ "${BACKUP_SMALL_PVE_BACKUPS:-false}" == "true" ] && [ -n "${MAX_PVE_BACKUP_SIZE:-}" ]; then
                             info "Looking for small PVE backup files in datastore $ds_name (max size: ${MAX_PVE_BACKUP_SIZE})"
-                            
+
                             local small_backups_dir="$TEMP_DIR/var/lib/pve-cluster/small_backups/$ds_name"
-                            mkdir -p "$small_backups_dir"
-                            
-                            local copied_count=0
+                            # Create directory with validation (optional feature, use warning level)
+                            if ! safe_mkdir "$small_backups_dir" "warning"; then
+                                warning "Cannot create small_backups directory for datastore: $ds_name, skipping small backup copy"
+                            else
+                                local copied_count=0
                             for pattern in "${pve_backup_patterns[@]}"; do
                                 while IFS= read -r small_backup; do
                                     if safe_copy "$small_backup" "$small_backups_dir/$(basename "$small_backup")" "small PVE backup $(basename "$small_backup")" "debug"; then
@@ -779,20 +953,23 @@ collect_pve_configs() {
                                     fi
                                 done < <(find "$ds_path" -name "$pattern" -type f -size -${MAX_PVE_BACKUP_SIZE} 2>/dev/null)
                             done
-                            
-                            if [ $copied_count -gt 0 ]; then
-                                info "Copied $copied_count small PVE backup files from datastore $ds_name"
+
+                                if [ $copied_count -gt 0 ]; then
+                                    info "Copied $copied_count small PVE backup files from datastore $ds_name"
+                                fi
                             fi
                         fi
                         
                         # Optional: Copy backup files matching specific pattern (similar to PBS pattern matching)
                         if [ -n "${PVE_BACKUP_INCLUDE_PATTERN:-}" ]; then
                             info "Searching for PVE backup files matching pattern: $PVE_BACKUP_INCLUDE_PATTERN in datastore $ds_name"
-                            
+
                             local selected_backups_dir="$TEMP_DIR/var/lib/pve-cluster/selected_backups/$ds_name"
-                            mkdir -p "$selected_backups_dir"
-                            
-                            local pattern_count=0
+                            # Create directory with validation (optional feature, use warning level)
+                            if ! safe_mkdir "$selected_backups_dir" "warning"; then
+                                warning "Cannot create selected_backups directory for datastore: $ds_name, skipping pattern backup copy"
+                            else
+                                local pattern_count=0
                             for pattern in "${pve_backup_patterns[@]}"; do
                                 while IFS= read -r pattern_backup; do
                                     if safe_copy "$pattern_backup" "$selected_backups_dir/$(basename "$pattern_backup")" "pattern PVE backup $(basename "$pattern_backup")" "debug"; then
@@ -800,9 +977,10 @@ collect_pve_configs() {
                                     fi
                                 done < <(find "$ds_path" -name "$pattern" -type f -path "*${PVE_BACKUP_INCLUDE_PATTERN}*" 2>/dev/null)
                             done
-                            
-                            if [ $pattern_count -gt 0 ]; then
-                                info "Copied $pattern_count PVE backup files matching pattern from datastore $ds_name"
+
+                                if [ $pattern_count -gt 0 ]; then
+                                    info "Copied $pattern_count PVE backup files matching pattern from datastore $ds_name"
+                                fi
                             fi
                         fi
                         
@@ -926,14 +1104,26 @@ collect_pve_configs() {
 # Collect PBS-specific configuration
 collect_pbs_configs() {
     step "Collecting PBS configuration files with enhanced error handling"
-    
+
     local operation_start=$(date +%s)
-    local local_files_processed=0
-    local local_files_failed=0
-    
-    # Create necessary directories preserving original structure
-    mkdir -p "$TEMP_DIR/etc/proxmox-backup" && increment_file_counter "dirs"
-    mkdir -p "$TEMP_DIR/var/lib/proxmox-backup" && increment_file_counter "dirs"
+
+    # Note: Global counters BACKUP_FILES_PROCESSED and BACKUP_FILES_FAILED
+    # are automatically updated by handle_collection_error() and safe_copy()
+
+    # Create necessary directories preserving original structure with validation
+    if safe_mkdir "$TEMP_DIR/etc/proxmox-backup" "error"; then
+        increment_file_counter "dirs"
+    else
+        error "Failed to create critical directory: $TEMP_DIR/etc/proxmox-backup"
+        return $EXIT_ERROR
+    fi
+
+    if safe_mkdir "$TEMP_DIR/var/lib/proxmox-backup" "error"; then
+        increment_file_counter "dirs"
+    else
+        error "Failed to create critical directory: $TEMP_DIR/var/lib/proxmox-backup"
+        return $EXIT_ERROR
+    fi
     
     # Collect configuration files using original paths with unified error handling
     if [ -d "/etc/proxmox-backup" ]; then
@@ -968,9 +1158,12 @@ collect_pbs_configs() {
     local pxar_success=true
     if [ "${BACKUP_PXAR_FILES:-false}" == "true" ]; then
         info "Collecting .pxar file metadata with enhanced processing using auto-detection"
-        
-        # Directory where to save the list and metadata
-        mkdir -p "$TEMP_DIR/var/lib/proxmox-backup/pxar_metadata"
+
+        # Directory where to save the list and metadata with validation
+        if ! safe_mkdir "$TEMP_DIR/var/lib/proxmox-backup/pxar_metadata" "error"; then
+            error "Failed to create pxar_metadata directory"
+            pxar_success=false
+        else
         
         # Use centralized datastore detection instead of manual path
         local detected_datastores
@@ -1001,11 +1194,14 @@ collect_pbs_configs() {
                 # Create the file with datastore subdirectories list
                 local datastore_file="$TEMP_DIR/var/lib/proxmox-backup/pxar_metadata/${ds_name}_subdirs.txt"
                 
-                # Write the list directly to file using safe method
+                # Write the list directly to file using safe method with error handling
                 if ! {
                     echo "# Datastore subdirectories in $datastore_base_path generated on $(date)"
                     echo "# Datastore: $ds_name ($ds_comment)"
-                    ls -1 "$datastore_base_path/" 2>/dev/null || echo "# Error reading datastore subdirectories"
+                    if ! ls -1 "$datastore_base_path/" 2>/dev/null; then
+                        handle_collection_error "datastore subdirectories listing" "$datastore_base_path" "warning"
+                        echo "# Error: Unable to list subdirectories"
+                    fi
                 } > "$datastore_file"; then
                     handle_collection_error "datastore subdirectories list creation" "$datastore_file" "warning"
                     pxar_success=false
@@ -1089,27 +1285,45 @@ collect_pbs_configs() {
                         if [ "${BACKUP_SMALL_PXAR:-false}" == "true" ] && [ -n "${MAX_PXAR_SIZE:-}" ]; then
                             debug "Looking for small .pxar files in datastore $ds_name/$subdir (max size: ${MAX_PXAR_SIZE})"
 
-                            # Destination directory for small .pxar files
+                            # Destination directory for small .pxar files with validation
                             local small_pxar_dir="$TEMP_DIR/var/lib/proxmox-backup/small_pxar/${ds_name}/${subdir}"
-                            mkdir -p "$small_pxar_dir"
-
-                            # Filter cached files by size instead of running another find
-                            local copied_count=0
-                            for small_pxar in "${all_pxar_files[@]}"; do
-                                if [ -f "$small_pxar" ]; then
-                                    local file_size=$(stat -c%s "$small_pxar" 2>/dev/null || echo "0")
-                                    # Convert MAX_PXAR_SIZE to bytes (supports K, M, G suffixes)
-                                    local max_size_bytes=$(numfmt --from=iec "${MAX_PXAR_SIZE}" 2>/dev/null || echo "${MAX_PXAR_SIZE}")
-                                    if [ "$file_size" -lt "$max_size_bytes" ]; then
-                                        if safe_copy "$small_pxar" "$small_pxar_dir/$(basename "$small_pxar")" "small .pxar file $(basename "$small_pxar")" "debug"; then
-                                            copied_count=$((copied_count + 1))
-                                        fi
+                            if ! safe_mkdir "$small_pxar_dir" "warning"; then
+                                warning "Cannot create small_pxar directory for datastore: $ds_name/$subdir, skipping"
+                            else
+                                # Validate MAX_PXAR_SIZE format and convert to bytes
+                                local max_size_bytes
+                                if ! max_size_bytes=$(numfmt --from=iec "${MAX_PXAR_SIZE}" 2>/dev/null); then
+                                    # Check if already in bytes (numeric only)
+                                    if [[ "${MAX_PXAR_SIZE}" =~ ^[0-9]+$ ]]; then
+                                        max_size_bytes="${MAX_PXAR_SIZE}"
+                                    else
+                                        warning "Invalid MAX_PXAR_SIZE format: ${MAX_PXAR_SIZE}, skipping small file copy for $ds_name/$subdir"
+                                        max_size_bytes=""
                                     fi
                                 fi
-                            done
 
-                            if [ $copied_count -gt 0 ]; then
-                                info "Copied $copied_count small .pxar files from datastore $ds_name/$subdir"
+                                # Filter cached files by size instead of running another find
+                                if [ -n "$max_size_bytes" ]; then
+                                    local copied_count=0
+                                    for small_pxar in "${all_pxar_files[@]}"; do
+                                        if [ -f "$small_pxar" ]; then
+                                            # Use safe_stat_size with error tracking
+                                            local file_size
+                                            file_size=$(safe_stat_size "$small_pxar")
+                                            [ $? -ne 0 ] && continue  # Skip file if stat failed
+
+                                            if [ "$file_size" -lt "$max_size_bytes" ]; then
+                                                if safe_copy "$small_pxar" "$small_pxar_dir/$(basename "$small_pxar")" "small .pxar file $(basename "$small_pxar")" "debug"; then
+                                                    copied_count=$((copied_count + 1))
+                                                fi
+                                            fi
+                                        fi
+                                    done
+
+                                    if [ $copied_count -gt 0 ]; then
+                                        info "Copied $copied_count small .pxar files from datastore $ds_name/$subdir"
+                                    fi
+                                fi
                             fi
                         fi
 
@@ -1117,23 +1331,25 @@ collect_pbs_configs() {
                         if [ -n "${PXAR_INCLUDE_PATTERN:-}" ]; then
                             debug "Searching for .pxar files matching pattern: $PXAR_INCLUDE_PATTERN in datastore $ds_name/$subdir"
 
-                            # Destination directory for selected .pxar files
+                            # Destination directory for selected .pxar files with validation
                             local selected_pxar_dir="$TEMP_DIR/var/lib/proxmox-backup/selected_pxar/${ds_name}/${subdir}"
-                            mkdir -p "$selected_pxar_dir"
-
-                            # Filter cached files by pattern instead of running another find
-                            local pattern_count=0
-                            for pattern_pxar in "${all_pxar_files[@]}"; do
-                                # Match pattern in file path using bash pattern matching
-                                if [[ "$pattern_pxar" == *"${PXAR_INCLUDE_PATTERN}"* ]]; then
-                                    if safe_copy "$pattern_pxar" "$selected_pxar_dir/$(basename "$pattern_pxar")" "pattern .pxar file $(basename "$pattern_pxar")" "debug"; then
-                                        pattern_count=$((pattern_count + 1))
+                            if ! safe_mkdir "$selected_pxar_dir" "warning"; then
+                                warning "Cannot create selected_pxar directory for datastore: $ds_name/$subdir, skipping"
+                            else
+                                # Filter cached files by pattern instead of running another find
+                                local pattern_count=0
+                                for pattern_pxar in "${all_pxar_files[@]}"; do
+                                    # Match pattern in file path using bash pattern matching
+                                    if [[ "$pattern_pxar" == *"${PXAR_INCLUDE_PATTERN}"* ]]; then
+                                        if safe_copy "$pattern_pxar" "$selected_pxar_dir/$(basename "$pattern_pxar")" "pattern .pxar file $(basename "$pattern_pxar")" "debug"; then
+                                            pattern_count=$((pattern_count + 1))
+                                        fi
                                     fi
-                                fi
-                            done
+                                done
 
-                            if [ $pattern_count -gt 0 ]; then
-                                info "Copied $pattern_count .pxar files matching pattern from datastore $ds_name/$subdir"
+                                if [ $pattern_count -gt 0 ]; then
+                                    info "Copied $pattern_count .pxar files matching pattern from datastore $ds_name/$subdir"
+                                fi
                             fi
                         fi
                     else
@@ -1146,12 +1362,13 @@ collect_pbs_configs() {
                 pxar_success=false
             fi
         done
-        
+
         if [ "$pxar_success" = true ]; then
             success "Collected .pxar file metadata successfully using auto-detection"
         else
             warning "Collected .pxar file metadata with some errors"
         fi
+        fi  # Close the safe_mkdir else block
     else
         debug "Backup of .pxar files is disabled"
         pxar_success=true  # Consider as success if the feature is disabled

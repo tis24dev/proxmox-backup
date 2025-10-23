@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Backup Creation Library
 # File: backup_create.sh
-# Version: 0.2.2
-# Last Modified: 2025-10-11
+# Version: 0.3.0
+# Last Modified: 2025-10-23
 # Changes: added debug
 ##
 # =============================================================================
@@ -41,20 +41,45 @@ readonly RETRY_MAX_DELAY=30
 # Sanitize and validate input strings to prevent injection attacks
 # Usage: sanitize_input "string_to_sanitize"
 # Returns: Sanitized string safe for use in commands
+#
+# This function removes ONLY genuinely dangerous characters for shell injection:
+# - Semicolons, pipes, ampersands (command chaining: ; | & || &&)
+# - Unescaped dollar signs (variable expansion)
+# - Backticks (command substitution)
+# - Null bytes (string termination attacks)
+# - Newlines and carriage returns (multiline injection)
+#
+# PRESERVED characters (safe for filesystem paths):
+# - Brackets: [] () {} (valid in filenames, archives, configs)
+# - Backslash: \ (path separators on Windows, escape char)
+# - Dots, dashes, underscores: . - _ (common in filenames)
+# - Forward slash: / (directory separators)
+#
+# Examples:
+#   sanitize_input "/backup/archive[2025]"  → "/backup/archive[2025]"  ✓
+#   sanitize_input "file.txt; rm -rf /"     → "file.txt rm -rf /"      ✓ (safe)
+#   sanitize_input 'test$(whoami).log'      → "test.log"                ✓
 sanitize_input() {
     local input="$1"
     local sanitized
-    
-    # Remove potentially dangerous characters and sequences
-    sanitized=$(echo "$input" | sed 's/[;&|`$(){}[\]\\]//g' | tr -d '\n\r')
-    
+
+    # Remove ONLY dangerous characters for shell injection:
+    # - ; | & for command chaining
+    # - $ ` for command/variable substitution
+    # - \x00 for null byte injection
+    # - Newlines and carriage returns
+    # Note: Using printf instead of echo to avoid adding newlines
+    sanitized=$(printf '%s' "$input" | sed 's/[;&|`$]//g' | tr -d '\n\r\000')
+
     # Limit length to prevent buffer overflow attacks
     if [ ${#sanitized} -gt 1000 ]; then
         sanitized="${sanitized:0:1000}"
-        warning "Input truncated to 1000 characters for security"
+        # Redirect warning to stderr to avoid polluting output
+        warning "Input truncated to 1000 characters for security" >&2
     fi
-    
-    echo "$sanitized"
+
+    # Use printf to avoid adding trailing newline
+    printf '%s' "$sanitized"
 }
 
 # Validate that required compression tools are available
@@ -792,53 +817,19 @@ perform_file_deduplication() {
 perform_content_preprocessing() {
     local processed_files=0
     local failed_files=0
-    
+
     debug "Starting content preprocessing for better compression"
-    
+
     # Normalize text files and logs
     # Remove carriage returns and normalize line endings
+    # NOTE: Using subshell to prevent 'find' from changing our working directory
     debug "Normalizing text files and logs"
-    find "$TEMP_DIR" -type f \( -name "*.txt" -o -name "*.log" -o -name "*.md" \) 2>/dev/null | while read -r file; do
-        if [ -f "$file" ] && file "$file" 2>/dev/null | grep -q text; then
-            # Create backup and normalize
-            if cp "$file" "$file.bak" 2>/dev/null; then
-                if tr -d '\r' < "$file.bak" > "$file" 2>/dev/null; then
-                    rm -f "$file.bak"
-                    processed_files=$((processed_files + 1))
-                else
-                    mv "$file.bak" "$file"  # Restore on failure
-                    failed_files=$((failed_files + 1))
-                fi
-            fi
-        fi
-    done
-    
-    # Optimize configuration files
-    # Remove comments and sort lines for better compression
-    debug "Optimizing configuration files"
-    find "$TEMP_DIR" -type f \( -name "*.conf" -o -name "*.cfg" -o -name "*.ini" \) 2>/dev/null | while read -r file; do
-        if [ -f "$file" ] && grep -q "^[a-zA-Z0-9_]*=" "$file" 2>/dev/null; then
-            if cp "$file" "$file.bak" 2>/dev/null; then
-                # Remove comments and sort, but preserve structure
-                if grep -v "^#" "$file.bak" 2>/dev/null | sort > "$file" 2>/dev/null; then
-                    rm -f "$file.bak"
-                    processed_files=$((processed_files + 1))
-                else
-                    mv "$file.bak" "$file"  # Restore on failure
-                    failed_files=$((failed_files + 1))
-                fi
-            fi
-        fi
-    done
-    
-    # Optimize JSON files if jq is available
-    # Minify JSON for better compression
-    if command -v jq >/dev/null 2>&1; then
-        debug "Minifying JSON files"
-        find "$TEMP_DIR" -type f -name "*.json" 2>/dev/null | while read -r file; do
-            if [ -f "$file" ]; then
+    (
+        find "$TEMP_DIR" -type f \( -name "*.txt" -o -name "*.log" -o -name "*.md" \) 2>/dev/null | while read -r file; do
+            if [ -f "$file" ] && file "$file" 2>/dev/null | grep -q text; then
+                # Create backup and normalize
                 if cp "$file" "$file.bak" 2>/dev/null; then
-                    if jq -c '.' "$file.bak" > "$file" 2>/dev/null; then
+                    if tr -d '\r' < "$file.bak" > "$file" 2>/dev/null; then
                         rm -f "$file.bak"
                         processed_files=$((processed_files + 1))
                     else
@@ -848,36 +839,81 @@ perform_content_preprocessing() {
                 fi
             fi
         done
+    )
+
+    # Optimize configuration files
+    # Remove comments and sort lines for better compression
+    # NOTE: Using subshell to prevent 'find' from changing our working directory
+    debug "Optimizing configuration files"
+    (
+        find "$TEMP_DIR" -type f \( -name "*.conf" -o -name "*.cfg" -o -name "*.ini" \) 2>/dev/null | while read -r file; do
+            if [ -f "$file" ] && grep -q "^[a-zA-Z0-9_]*=" "$file" 2>/dev/null; then
+                if cp "$file" "$file.bak" 2>/dev/null; then
+                    # Remove comments and sort, but preserve structure
+                    if grep -v "^#" "$file.bak" 2>/dev/null | sort > "$file" 2>/dev/null; then
+                        rm -f "$file.bak"
+                        processed_files=$((processed_files + 1))
+                    else
+                        mv "$file.bak" "$file"  # Restore on failure
+                        failed_files=$((failed_files + 1))
+                    fi
+                fi
+            fi
+        done
+    )
+
+    # Optimize JSON files if jq is available
+    # Minify JSON for better compression
+    # NOTE: Using subshell to prevent 'find' from changing our working directory
+    if command -v jq >/dev/null 2>&1; then
+        debug "Minifying JSON files"
+        (
+            find "$TEMP_DIR" -type f -name "*.json" 2>/dev/null | while read -r file; do
+                if [ -f "$file" ]; then
+                    if cp "$file" "$file.bak" 2>/dev/null; then
+                        if jq -c '.' "$file.bak" > "$file" 2>/dev/null; then
+                            rm -f "$file.bak"
+                            processed_files=$((processed_files + 1))
+                        else
+                            mv "$file.bak" "$file"  # Restore on failure
+                            failed_files=$((failed_files + 1))
+                        fi
+                    fi
+                fi
+            done
+        )
     else
         debug "jq not available, skipping JSON optimization"
     fi
-    
+
     # Optimize log files by removing timestamps and deduplicating
     # This can significantly improve compression for repetitive logs
+    # NOTE: Using subshell to prevent 'find' from changing our working directory
     debug "Optimizing log files"
-    find "$TEMP_DIR" -type f -name "*.log" 2>/dev/null | while read -r file; do
-        if [ -f "$file" ] && [ -s "$file" ]; then
-            if cp "$file" "$file.bak" 2>/dev/null; then
-                # Remove timestamps and sort unique lines
-                if sed -r 's/^[0-9]{4}(-|\/)[0-9]{2}(-|\/)[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? //g' "$file.bak" 2>/dev/null | \
-                   sort 2>/dev/null | uniq > "$file" 2>/dev/null; then
-                    rm -f "$file.bak"
-                    processed_files=$((processed_files + 1))
-                else
-                    mv "$file.bak" "$file"  # Restore on failure
-                    failed_files=$((failed_files + 1))
+    (
+        find "$TEMP_DIR" -type f -name "*.log" 2>/dev/null | while read -r file; do
+            if [ -f "$file" ] && [ -s "$file" ]; then
+                if cp "$file" "$file.bak" 2>/dev/null; then
+                    # Remove timestamps and sort unique lines
+                    if sed -r 's/^[0-9]{4}(-|\/)[0-9]{2}(-|\/)[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? //g' "$file.bak" 2>/dev/null | \
+                       sort 2>/dev/null | uniq > "$file" 2>/dev/null; then
+                        rm -f "$file.bak"
+                        processed_files=$((processed_files + 1))
+                    else
+                        mv "$file.bak" "$file"  # Restore on failure
+                        failed_files=$((failed_files + 1))
+                    fi
                 fi
             fi
-        fi
-    done
-    
+        done
+    )
+
     info "Content preprocessing completed: $processed_files files processed, $failed_files failed"
-    
-    # CRITICAL: Return to a safe directory after find operations
-    # find internally changes directories and can leave shell orphaned
-    cd /tmp 2>/dev/null || cd / 2>/dev/null || true
-    debug "Reset to safe directory after preprocessing"
-    
+
+    # NOTE: No longer needed - subshells preserve working directory automatically
+    # Working directory remains unchanged after all find operations
+    debug "Working directory preserved after preprocessing: $(pwd)"
+
     # Return success if we processed some files or had no failures
     if [ $failed_files -eq 0 ] || [ $processed_files -gt 0 ]; then
         return 0
@@ -894,59 +930,62 @@ perform_smart_chunking() {
     local chunk_dir="$TEMP_DIR/chunked_files"
     local chunk_size="10M"
     local size_threshold="50M"
-    
+
     debug "Starting smart chunking for files larger than $size_threshold"
-    
+
     # Create chunked files directory
     if ! mkdir -p "$chunk_dir"; then
         error "Failed to create chunk directory: $chunk_dir"
         return 1
     fi
-    
+
     # Find files larger than threshold and split them
-    find "$TEMP_DIR" -type f -size "+$size_threshold" 2>/dev/null | while read -r file; do
-        # Skip files in the chunk directory to avoid recursion
-        if [[ "$file" == "$chunk_dir"* ]]; then
-            continue
-        fi
-        
-        local rel_path="${file#$TEMP_DIR/}"
-        local chunk_base="$chunk_dir/$rel_path"
-        local chunk_parent_dir
-        
-        # Sanitize paths
-        rel_path=$(sanitize_input "$rel_path")
-        chunk_base=$(sanitize_input "$chunk_base")
-        
-        # Create parent directory for chunks
-        chunk_parent_dir=$(dirname "$chunk_base")
-        if ! mkdir -p "$chunk_parent_dir"; then
-            warning "Failed to create chunk parent directory: $chunk_parent_dir"
-            continue
-        fi
-        
-        debug "Chunking large file: $file ($(du -h "$file" 2>/dev/null | cut -f1))"
-        
-        # Split file into chunks with consistent boundaries
-        if split --numeric-suffixes=1 --additional-suffix=.chunk -b "$chunk_size" "$file" "$chunk_base." 2>/dev/null; then
-            # Remove original file and create marker
-            if rm "$file" && touch "$file.chunked"; then
-                large_file_count=$((large_file_count + 1))
-                debug "Successfully chunked: $file"
-            else
-                warning "Failed to remove original file after chunking: $file"
+    # NOTE: Using subshell to prevent 'find' from changing our working directory
+    (
+        find "$TEMP_DIR" -type f -size "+$size_threshold" 2>/dev/null | while read -r file; do
+            # Skip files in the chunk directory to avoid recursion
+            if [[ "$file" == "$chunk_dir"* ]]; then
+                continue
             fi
-        else
-            warning "Failed to chunk file: $file"
-        fi
-    done
-    
+
+            local rel_path="${file#$TEMP_DIR/}"
+            local chunk_base="$chunk_dir/$rel_path"
+            local chunk_parent_dir
+
+            # Sanitize paths (now preserves brackets, parentheses, etc.)
+            rel_path=$(sanitize_input "$rel_path")
+            chunk_base=$(sanitize_input "$chunk_base")
+
+            # Create parent directory for chunks
+            chunk_parent_dir=$(dirname "$chunk_base")
+            if ! mkdir -p "$chunk_parent_dir"; then
+                warning "Failed to create chunk parent directory: $chunk_parent_dir"
+                continue
+            fi
+
+            debug "Chunking large file: $file ($(du -h "$file" 2>/dev/null | cut -f1))"
+
+            # Split file into chunks with consistent boundaries
+            if split --numeric-suffixes=1 --additional-suffix=.chunk -b "$chunk_size" "$file" "$chunk_base." 2>/dev/null; then
+                # Remove original file and create marker
+                if rm "$file" && touch "$file.chunked"; then
+                    large_file_count=$((large_file_count + 1))
+                    debug "Successfully chunked: $file"
+                else
+                    warning "Failed to remove original file after chunking: $file"
+                fi
+            else
+                warning "Failed to chunk file: $file"
+            fi
+        done
+    )
+
     info "Smart chunking completed: $large_file_count large files processed"
-    
-    # CRITICAL: Return to a safe directory after find operations
-    cd /tmp 2>/dev/null || cd / 2>/dev/null || true
-    debug "Reset to safe directory after chunking"
-    
+
+    # NOTE: No longer needed - subshell preserves working directory automatically
+    # Working directory remains unchanged after find operations
+    debug "Working directory preserved after chunking: $(pwd)"
+
     return 0
 }
 
