@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Automatic Installer
 # File: install.sh
-# Version: 1.1.1
-# Last Modified: 2025-10-11
-# Changes: Installer automatico del sistema
+# Version: 1.1.2
+# Last Modified: 2025-10-23
+# Changes: fixed zombie directory
 ##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - AUTOMATIC INSTALLER
@@ -441,6 +441,7 @@ clone_repository() {
     
     # Clone repository
     git clone "$REPO_URL" "$INSTALL_DIR"
+    chmod 744 "$INSTALL_DIR/install.sh" "$INSTALL_DIR/new-install.sh"
     
     if [[ ! -d "$INSTALL_DIR" ]]; then
         print_error "Failed to clone repository"
@@ -787,6 +788,13 @@ main() {
     
     # Run installation steps
     check_root
+
+    # Ensure installer runs from a safe working directory before filesystem operations
+    if ! cd "$(dirname "$INSTALL_DIR")" 2>/dev/null; then
+        cd /
+    fi
+    print_status "Working directory set to $(pwd)"
+
     check_requirements
     install_dependencies
     clone_repository

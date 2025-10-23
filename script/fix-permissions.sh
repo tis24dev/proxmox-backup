@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Fix Permissions Script
 # File: fix-permissions.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Applicazione permessi corretti
+# Version: 0.3.0
+# Last Modified: 2025-10-23
+# Changes: Fix permission install.sh new-install.sh
 ##
 # Script per applicare i permessi corretti a tutti i file del sistema di backup
 # Questo script deve essere eseguito come root
@@ -108,12 +108,22 @@ fix_script_permissions() {
         "$BASE_DIR/script/server-id-manager.sh"
         "$BASE_DIR/script/fix-permissions.sh"
         "$BASE_DIR/secure_account/setup_gdrive.sh"
-    )
+    
+        "$BASE_DIR/install.sh"
+        "$BASE_DIR/new-install.sh")
     
     for script in "${scripts[@]}"; do
         if [ -f "$script" ]; then
-            log_info "Imposto permessi 700 su $script"
-            chmod 700 "$script"
+            if [[ "$script" == "$BASE_DIR/install.sh" || "$script" == "$BASE_DIR/new-install.sh" ]]; then
+                log_info "Imposto permessi 744 su $script"
+            else
+                log_info "Imposto permessi 700 su $script"
+            fi
+            if [[ "$script" == "$BASE_DIR/install.sh" || "$script" == "$BASE_DIR/new-install.sh" ]]; then
+                chmod 744 "$script"
+            else
+                chmod 700 "$script"
+            fi
             chown root:root "$script"
             
             # Aggiorna anche il file hash se esiste
