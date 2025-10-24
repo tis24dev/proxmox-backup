@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.1] - 2025-10-18 - Standalone Script: security-check.sh
+### Add
+- Color and text change at the end of the script for different exitcode
+
 ## [1.1.2] - 2025-10-18 - Standalone Script: install.sh
 ###Fix
 - Forced switching to a safe directory before cloning or copying files, preventing fatal: Unable to read current working directory errors
