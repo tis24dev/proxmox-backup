@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Security Library
 # File: security.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Funzioni di sicurezza per backup
+# Version: 0.4.0
+# Last Modified: 2025-10-24
+# Changes: Logging Enhancements
 ##
 # Basic security functions for backup
 
@@ -43,6 +43,55 @@ refresh_command_cache() {
     local cmd="$1"
     clear_command_cache "$cmd"
     command_exists "$cmd"  # This will rebuild the cache
+}
+
+# Merge detailed security-check output into the primary log file
+append_security_log_to_main() {
+    local src_file="$1"
+
+    if [ "${ENABLE_LOG_MANAGEMENT:-true}" != "true" ] || [ -z "${LOG_FILE:-}" ]; then
+        return 0
+    fi
+
+    if [ -z "$src_file" ] || [ ! -f "$src_file" ]; then
+        return 0
+    fi
+
+    local sanitized
+    sanitized=$(mktemp "/tmp/proxmox-security-log-XXXX.log" 2>/dev/null) || {
+        debug "Unable to create temporary file for security log merge"
+        return 0
+    }
+
+    if ! sed -r "s/\x1B\[[0-9;]*[[:alpha:]]//g" "$src_file" > "$sanitized" 2>/dev/null; then
+        debug "Failed to sanitize security-check output"
+        rm -f "$sanitized"
+        return 0
+    fi
+
+    local current_level=${CURRENT_LOG_LEVEL:-2}
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+
+        local tag priority
+        tag=$(printf '%s\n' "$line" | sed -n 's/^[^[]*\[\([^]]*\)\].*/\1/p' | head -n1)
+
+        case "$tag" in
+            ERROR)   priority=0 ;;
+            WARNING) priority=1 ;;
+            DEBUG)   priority=3 ;;
+            TRACE)   priority=4 ;;
+            STEP|SUCCESS|INFO|SKIP) priority=2 ;;
+            *)       priority=2 ;;
+        esac
+
+        if [ "$priority" -le "$current_level" ]; then
+            printf '%s\n' "$line" >> "$LOG_FILE"
+        fi
+    done < "$sanitized"
+
+    rm -f "$sanitized"
+    return 0
 }
 
 # Function to detect available package manager
@@ -173,6 +222,7 @@ verify_script_security() {
             warning "Security check completed with warnings"
             if [[ "${ABORT_ON_SECURITY_ISSUES:-false}" == "true" ]]; then
                 error "Aborting due to security issues (ABORT_ON_SECURITY_ISSUES=true)"
+                append_security_log_to_main "$tmp_log"
                 rm -f "$tmp_log"
                 return $EXIT_ERROR
             else
@@ -187,6 +237,7 @@ verify_script_security() {
             error "Security check failed"
             if [[ "${ABORT_ON_SECURITY_ISSUES:-false}" == "true" ]]; then
                 error "Aborting due to security issues (ABORT_ON_SECURITY_ISSUES=true)"
+                append_security_log_to_main "$tmp_log"
                 rm -f "$tmp_log"
                 return $EXIT_ERROR
             else
@@ -196,6 +247,7 @@ verify_script_security() {
             ;;
     esac
 
+    append_security_log_to_main "$tmp_log"
     rm -f "$tmp_log"
 
     return $security_status

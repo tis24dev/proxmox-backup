@@ -43,6 +43,22 @@ All notable changes to this project are documented in this file.
 ****Add
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
+## [0.4.0] - 2025-10-24 - Logging Enhancements
+### /script/proxmox-backup.sh
+**Add**
+- Introduced a bootstrap log buffer in `/tmp` that captures all pre-initialisation output before `setup_logging` runs, then merges those lines into the final log once logging is active, respecting the requested verbosity (`standard`/`advanced`/`extreme`).
+- Added automatic merge/cleanup logic for the bootstrap file so warning/abort paths still preserve early output.
+
+**Fix**
+- Prevented loss of startup messages when the script runs non-interactively.
+
+### /lib/security.sh
+**Add**
+- Added `append_security_log_to_main`, sanitising `security-check.sh` output and appending it to the primary log with level-aware filtering (INFO/STEP always, DEBUG/TRACE only when `-v`/`-x` is used).
+
+**Fix**
+- Ensured the full security-check transcript is saved even when execution aborts (`ABORT_ON_SECURITY_ISSUES=true`), by merging the temporary log before deletion.
+
 ## [0.3.0] - 2025-10-19
 ### /lib/utils_counting.sh
 **Fix bugs**

@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: improve error handling and fix critical path/tracking bugs and fix race condition
+# Version: 0.4.0
+# Last Modified: 2025-10-24
+# Changes: Logging Enhancements
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.
@@ -16,6 +16,81 @@ SCRIPT_REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 export SCRIPT_DIR="$(dirname "$SCRIPT_REAL_PATH")"
 export BASE_DIR="$(dirname "$SCRIPT_DIR")"
 export ENV_FILE="${BASE_DIR}/env/backup.env"
+
+# ======= Session timestamp (shared across bootstrap logging) =======
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+
+
+# ======= Bootstrap logging (captures output before primary logger) =======
+BOOTSTRAP_LOG_FILE=""
+BOOTSTRAP_LOG_ACTIVE=false
+
+# Create a temporary file to collect early log lines before the main logger is ready.
+bootstrap_init_logging() {
+    if [ "$BOOTSTRAP_LOG_ACTIVE" = "true" ] && [ -n "$BOOTSTRAP_LOG_FILE" ]; then
+        return 0
+    fi
+
+    local tmp_file
+    if tmp_file=$(mktemp "/tmp/proxmox-backup-bootstrap-${TIMESTAMP}-XXXX.log" 2>/dev/null); then
+        BOOTSTRAP_LOG_FILE="$tmp_file"
+        BOOTSTRAP_LOG_ACTIVE=true
+        return 0
+    fi
+
+    echo "[WARNING] Unable to create bootstrap log file; early log entries will only appear on console." >&2
+    BOOTSTRAP_LOG_FILE=""
+    BOOTSTRAP_LOG_ACTIVE=false
+    return 1
+}
+
+# Append an entry to the bootstrap log using the final log format.
+bootstrap_record() {
+    local level="${1:-INFO}"
+    shift || true
+    local message="$*"
+
+    if [ -z "$message" ]; then
+        return 0
+    fi
+
+    if [ "$BOOTSTRAP_LOG_ACTIVE" != "true" ] || [ -z "$BOOTSTRAP_LOG_FILE" ]; then
+        bootstrap_init_logging || return 0
+    fi
+
+    local normalized_level
+    case "$level" in
+        ERROR|WARNING|INFO|DEBUG|TRACE|STEP|SUCCESS|SKIP)
+            normalized_level="$level"
+            ;;
+        *)
+            normalized_level="INFO"
+            ;;
+    esac
+
+    local tag
+    case "$normalized_level" in
+        ERROR)   tag="[ERROR]" ;;
+        WARNING) tag="[WARNING]" ;;
+        DEBUG)   tag="[DEBUG]" ;;
+        TRACE)   tag="[TRACE]" ;;
+        STEP)    tag="[STEP]" ;;
+        SUCCESS) tag="[SUCCESS]" ;;
+        SKIP)    tag="[SKIP]" ;;
+        *)       tag="[INFO]" ;;
+    esac
+
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local line="${timestamp} ${tag} ${message}"
+
+    if [ "$BOOTSTRAP_LOG_ACTIVE" = "true" ] && [ -n "$BOOTSTRAP_LOG_FILE" ]; then
+        printf '%s\n' "$line" >> "$BOOTSTRAP_LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+# Prepare bootstrap logging immediately so early outputs can be captured.
+bootstrap_init_logging
 
 # ==========================================
 # INITIAL CONFIGURATION
@@ -48,8 +123,11 @@ fi
 if [[ -f "$ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$ENV_FILE"
-    echo "Proxmox Backup Script Version: ${SCRIPT_VERSION:-0.0.0}"
+    version_message="Proxmox Backup Script Version: ${SCRIPT_VERSION:-0.0.0}"
+    bootstrap_record "INFO" "$version_message"
+    echo "$version_message"
 else
+    bootstrap_record "WARNING" "Configuration file not found: $ENV_FILE"
     echo "[WARNING] Configuration file not found: $ENV_FILE"
     SCRIPT_VERSION="${SCRIPT_VERSION:-0.0.0}"
 fi
@@ -68,14 +146,13 @@ set -o nounset
 # ==========================================
 
 PROXMOX_TYPE=""
-TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 START_TIME=$(date +%s)
 END_TIME=""
 BACKUP_DURATION=""
 BACKUP_DURATION_FORMATTED=""
 HOSTNAME=$(hostname -f)
 EXIT_CODE=0
-LOG_FILE=""
+LOG_FILE="${BOOTSTRAP_LOG_FILE:-}"
 BACKUP_FILE=""
 METRICS_FILE="/tmp/proxmox_backup_metrics_$$.prom"
 
@@ -99,6 +176,113 @@ source "${BASE_DIR}/lib/security.sh"
 source "${BASE_DIR}/lib/backup_manager.sh"
 source "${BASE_DIR}/lib/utils_counting.sh"
 source "${BASE_DIR}/lib/metrics_collect.sh" 
+
+# Bootstrap logging adjustments for pre-initialization phase
+if [ "$BOOTSTRAP_LOG_ACTIVE" = "true" ] && [ -n "$BOOTSTRAP_LOG_FILE" ]; then
+    CURRENT_LOG_LEVEL=4
+fi
+
+# ==========================================
+# BOOTSTRAP LOGGING HELPERS
+# ==========================================
+
+merge_bootstrap_log() {
+    if [ "${BOOTSTRAP_LOG_ACTIVE:-false}" != "true" ]; then
+        return 0
+    fi
+
+    if [ -z "${BOOTSTRAP_LOG_FILE:-}" ] || [ ! -f "$BOOTSTRAP_LOG_FILE" ]; then
+        BOOTSTRAP_LOG_ACTIVE=false
+        return 0
+    fi
+
+    if [ "${LOG_FILE:-}" = "$BOOTSTRAP_LOG_FILE" ] || [ -z "${LOG_FILE:-}" ]; then
+        debug "Bootstrap log remains standalone (LOG_FILE='${LOG_FILE:-unset}')."
+        BOOTSTRAP_LOG_ACTIVE=false
+        return 0
+    fi
+
+    local final_log="$LOG_FILE"
+    if [ ! -f "$final_log" ]; then
+        warning "Primary log file not found when merging bootstrap log: $final_log"
+        BOOTSTRAP_LOG_ACTIVE=false
+        return 1
+    fi
+
+    local filtered
+    if ! filtered=$(mktemp "/tmp/proxmox-backup-bootstrap-filtered-${TIMESTAMP}-XXXX.log" 2>/dev/null); then
+        warning "Failed to create temporary file while filtering bootstrap log"
+        return 1
+    fi
+
+    local bootstrap_level="${CURRENT_LOG_LEVEL:-2}"
+    while IFS= read -r line; do
+        local tag priority
+        tag=$(printf "%s\n" "$line" | sed -n "s/^[^[]*\[\([^]]*\)\].*/\1/p" | head -n1)
+        case "$tag" in
+            ERROR) priority=0 ;;
+            WARNING) priority=1 ;;
+            DEBUG) priority=3 ;;
+            TRACE) priority=4 ;;
+            STEP|SUCCESS|INFO|SKIP|LOG|"") priority=2 ;;
+            *) priority=2 ;;
+        esac
+
+        if [ "$priority" -le "$bootstrap_level" ]; then
+            printf "%s\n" "$line" >> "$filtered"
+        fi
+    done < "$BOOTSTRAP_LOG_FILE"
+
+    local merged
+    if ! merged=$(mktemp "/tmp/proxmox-backup-log-merge-${TIMESTAMP}-XXXX.log" 2>/dev/null); then
+        rm -f "$filtered"
+        warning "Failed to create temporary merge file for bootstrap log"
+        return 1
+    fi
+
+    cat "$filtered" > "$merged"
+    cat "$final_log" >> "$merged"
+
+    local final_perms
+    final_perms=$(stat -c "%a" "$final_log" 2>/dev/null || echo "")
+
+    if mv "$merged" "$final_log"; then
+        if [ -n "$final_perms" ]; then
+            chmod "$final_perms" "$final_log" 2>/dev/null || true
+        fi
+    else
+        rm -f "$merged"
+        rm -f "$filtered"
+        warning "Failed to replace primary log with merged bootstrap entries"
+        return 1
+    fi
+
+    rm -f "$filtered"
+    rm -f "$BOOTSTRAP_LOG_FILE" 2>/dev/null || true
+    BOOTSTRAP_LOG_ACTIVE=false
+    BOOTSTRAP_LOG_FILE=""
+    debug "Merged bootstrap log into $final_log"
+    return 0
+}
+
+cleanup_bootstrap_log() {
+    if [ -z "${BOOTSTRAP_LOG_FILE:-}" ] || [ ! -f "$BOOTSTRAP_LOG_FILE" ]; then
+        BOOTSTRAP_LOG_ACTIVE=false
+        BOOTSTRAP_LOG_FILE=""
+        return 0
+    fi
+
+    if [ "${LOG_FILE:-}" = "$BOOTSTRAP_LOG_FILE" ]; then
+        debug "Retaining bootstrap log file as primary log: $BOOTSTRAP_LOG_FILE"
+        return 0
+    fi
+
+    debug "Removing bootstrap log file: $BOOTSTRAP_LOG_FILE"
+    rm -f "$BOOTSTRAP_LOG_FILE" 2>/dev/null || true
+    BOOTSTRAP_LOG_ACTIVE=false
+    BOOTSTRAP_LOG_FILE=""
+    return 0
+}
 
 # ==========================================
 # MAIN FUNCTIONS
@@ -229,6 +413,8 @@ cleanup_handler() {
         done
     fi
     
+    cleanup_bootstrap_log
+
     debug "Final EXIT_CODE: $EXIT_CODE"
     debug "=== END CLEANUP_HANDLER ==="
 }
@@ -260,6 +446,7 @@ main() {
     check_proxmox_type
     setup_logging
     start_logging
+    merge_bootstrap_log
     verify_script_security
     
     # Configura Telegram all'inizio, subito dopo i controlli di sicurezza
