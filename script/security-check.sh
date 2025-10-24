@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Security Check Script
 # File: security-check.sh
-# Version: 1.2.0
+# Version: 1.2.1
 # Last Modified: 2025-10-23
-# Changes: Correzione discrepanza versione header
+# Changes: Improved log
 ##
 # Script to verify backup security
 # This script verifies permissions and ownership of files and folders
@@ -13,7 +13,7 @@
 set -o pipefail
 
 # Script version (autonomo)
-SECURITY_CHECK_VERSION="1.2.0"
+SECURITY_CHECK_VERSION="1.2.1"
 
 # Base directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1058,16 +1058,30 @@ main() {
     check_suspicious_processes
     update_script_hashes
 
-    # Show colored footer
+    # Show colored footer with status text matching severity
     local backup_color=$GREEN
-    if [ "$BACKUP_SEC_LEVEL" -eq 2 ]; then
-        backup_color=$RED
-    elif [ "$BACKUP_SEC_LEVEL" -eq 1 ]; then
-        backup_color=$YELLOW
-    fi
+    local backup_status_text="SECURITY VERIFICATION SUCCESS"
+    case "$BACKUP_SEC_LEVEL" in
+        2)
+            backup_color=$RED
+            backup_status_text="SECURITY VERIFICATION FAILED"
+            ;;
+        1)
+            backup_color=$YELLOW
+            backup_status_text="SECURITY VERIFICATION WARNING"
+            ;;
+        0)
+            backup_color=$GREEN
+            backup_status_text="SECURITY VERIFICATION SUCCESS"
+            ;;
+        *)
+            backup_color=$RED
+            backup_status_text="SECURITY VERIFICATION UNKNOWN"
+            ;;
+    esac
     echo ""
     echo -e "${backup_color}==============================================================="
-    echo -e "      SECURITY VERIFICATION COMPLETED"
+    echo -e "      ${backup_status_text}"
     echo -e "===============================================================${NC}"
     echo ""
 
