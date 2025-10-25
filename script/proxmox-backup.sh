@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.4.0
-# Last Modified: 2025-10-24
-# Changes: Logging Enhancements
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: Early argument parsing to prevent DEBUG logs in standard mode during bootstrap
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.
@@ -133,6 +133,25 @@ else
 fi
 
 # ==========================================
+# EARLY ARGUMENT PARSING FOR DEBUG LEVEL
+# ==========================================
+
+# Pre-parse arguments to detect debug flags before bootstrap
+# This ensures DEBUG_LEVEL is set before any logging occurs
+DEBUG_LEVEL="${DEBUG_LEVEL:-standard}"
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose)
+            DEBUG_LEVEL="advanced"
+            ;;
+        -x|--extreme)
+            DEBUG_LEVEL="extreme"
+            ;;
+    esac
+done
+export DEBUG_LEVEL
+
+# ==========================================
 # SHELL CONFIGURATION
 # ==========================================
 
@@ -178,8 +197,19 @@ source "${BASE_DIR}/lib/utils_counting.sh"
 source "${BASE_DIR}/lib/metrics_collect.sh" 
 
 # Bootstrap logging adjustments for pre-initialization phase
+# Respect DEBUG_LEVEL even during bootstrap to avoid unwanted DEBUG logs
 if [ "$BOOTSTRAP_LOG_ACTIVE" = "true" ] && [ -n "$BOOTSTRAP_LOG_FILE" ]; then
-    CURRENT_LOG_LEVEL=4
+    case "${DEBUG_LEVEL:-standard}" in
+        extreme)
+            CURRENT_LOG_LEVEL=4  # TRACE level
+            ;;
+        advanced)
+            CURRENT_LOG_LEVEL=3  # DEBUG level
+            ;;
+        *)
+            CURRENT_LOG_LEVEL=2  # INFO level (standard mode)
+            ;;
+    esac
 fi
 
 # ==========================================

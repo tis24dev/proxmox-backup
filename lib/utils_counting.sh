@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Counting Utils Library
 # File: utils_counting.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Handle pipe-separated compression extensions and prevent PROXMOX_TYPE regex injection
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: Hardened metrics functions with error recovery and safe fallback values
 ##
 
 # ======= AUTONOMOUS COUNTING SYSTEM - DOCUMENTATION =======

@@ -2,15 +2,18 @@
 ##
 # Proxmox Backup System - Metrics Collection Library
 # File: metrics_collect.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Remove duplicate system metrics collection
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: Fixed silent crash from BACKUP_START_TIME bug and added comprehensive error trapping
 ##
 
 # Funzione per raccogliere tutte le metriche del backup
 collect_metrics() {
     step "Collecting system metrics"
     debug "=== collect_metrics() started - Initial EXIT_CODE: ${EXIT_CODE} ==="
+
+    # TRAP TEMPORANEO PER DEBUG - cattura errori silenziosi
+    trap 'debug "ERR $? in command \"$BASH_COMMAND\" (line $LINENO)"' ERR
 
     # Collect system statistics (now variables are already declared)
     SYSTEM_LOAD_AVG=$(cat /proc/loadavg 2>/dev/null | awk '{print $1" "$2" "$3}' || echo "N/A")
@@ -479,14 +482,17 @@ collect_metrics() {
         fi
 
         # Calculate backup speed if execution time is available
-        if [ -n "${BACKUP_START_TIME+x}" ] && [ "$BACKUP_START_TIME" != "" ]; then
+        # Use START_TIME instead of BACKUP_START_TIME (which is not set anywhere)
+        if [ -n "${START_TIME+x}" ] && [ "$START_TIME" != "" ] && [ "$START_TIME" -gt 0 ]; then
             local current_time=$(date +%s)
-            local elapsed_time=$((current_time - BACKUP_START_TIME))
+            local elapsed_time=$((current_time - START_TIME))
+            debug "Backup speed calculation: elapsed=${elapsed_time}s, size=${BACKUP_SIZE} bytes"
 
             if [ "$elapsed_time" -gt 0 ] && [ "$BACKUP_SIZE" -gt 0 ]; then
                 # Use centralized function to calculate speed
-                BACKUP_SPEED=$(calculate_transfer_speed "$BACKUP_SIZE" "$elapsed_time" "bytes")
-                BACKUP_SPEED_HUMAN=$(calculate_transfer_speed "$BACKUP_SIZE" "$elapsed_time" "human")
+                BACKUP_SPEED=$(calculate_transfer_speed "$BACKUP_SIZE" "$elapsed_time" "bytes" || { warning "Failed to calculate backup speed (bytes), using fallback value 0"; echo "0"; })
+                BACKUP_SPEED_HUMAN=$(calculate_transfer_speed "$BACKUP_SIZE" "$elapsed_time" "human" || { warning "Failed to calculate backup speed (human), using fallback value 0 MB/s"; echo "0 MB/s"; })
+                debug "Backup speed: $BACKUP_SPEED_HUMAN"
             else
                 BACKUP_SPEED=0
                 BACKUP_SPEED_HUMAN="0 MB/s"
@@ -594,6 +600,11 @@ collect_metrics() {
     fi
 
     # Se non abbiamo i timestamp espliciti, prova a ricavarli dal file di backup principale
+    if ! [[ "${BACKUP_PRI_CREATION_TIME:-}" =~ ^[0-9]+$ ]]; then
+        debug "Invalid BACKUP_PRI_CREATION_TIME='${BACKUP_PRI_CREATION_TIME:-}' – forcing 0"
+        BACKUP_PRI_CREATION_TIME=0
+    fi
+
     if [ "$BACKUP_PRI_CREATION_TIME" -eq 0 ] && [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
         local file_timestamp=$(get_file_timestamp "$BACKUP_FILE")
         if [ -n "$file_timestamp" ]; then
@@ -602,8 +613,15 @@ collect_metrics() {
         fi
     fi
     # Raccolta informazioni sui file di backup
+    debug "ABOUT TO CALL count_backup_files - TEMP_DIR='${TEMP_DIR:-UNSET}'"
+    debug "TEMP_DIR exists on disk: $([ -d "${TEMP_DIR:-/nonexistent}" ] && echo YES || echo NO)"
     count_backup_files
+    debug "RETURNED FROM count_backup_files"
 
     debug "=== collect_metrics() completed - Final EXIT_CODE: ${EXIT_CODE} ==="
+
+    # Mantieni trap attivo per debugging continuo (non rimuovere!)
+    # trap - ERR
+
     success "Metrics collection completed"
 }

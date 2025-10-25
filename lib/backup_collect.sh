@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Fix: Explicitly create the destination directory
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: Fix: Added variable expansion and glob pattern support for blacklist matching
 ##
 # Functions for backup data collection
 
@@ -742,13 +742,48 @@ collect_custom_files() {
                     # Check if this item should be blacklisted
                     local skip_item=false
                     for blacklist_path in "${blacklist_paths[@]}"; do
-                        if [[ "$item" == "$blacklist_path"* ]]; then
-                            debug "Skipping blacklisted item: $item"
+                        # Expand variables in blacklist_path (e.g., ${BASE_DIR})
+                        local expanded_path=$(eval echo "$blacklist_path")
+
+                        # Support different matching strategies:
+                        # 1. Exact prefix match (e.g., /root/.cache matches /root/.cache/*)
+                        # 2. Glob pattern match (e.g., /root/.* matches /root/.npm)
+                        # 3. Wildcard anywhere (e.g., *_cacache* matches any path with _cacache)
+
+                        # Strategy 1: Exact prefix match (original behavior)
+                        if [[ "$item" == "$expanded_path"* ]]; then
+                            debug "Skipping blacklisted item (prefix match): $item (matches: $expanded_path)"
                             skip_item=true
                             break
                         fi
+
+                        # Strategy 2: Glob pattern match
+                        # Convert glob pattern to regex for matching
+                        # Pattern like /root/.* should match /root/.npm, /root/.cache, etc.
+                        if [[ "$expanded_path" == *"/.*" ]]; then
+                            # Handle patterns like /root/.* (hidden files only)
+                            # Extract the base path without the pattern
+                            local base_path="${expanded_path%/.*}"
+
+                            # Match only hidden files/dirs (starting with dot after the last slash)
+                            if [[ "$item" == "$base_path/".* ]]; then
+                                debug "Skipping blacklisted item (hidden file pattern): $item (matches: $expanded_path)"
+                                skip_item=true
+                                break
+                            fi
+                        elif [[ "$expanded_path" == *"*"* ]]; then
+                            # Handle other wildcard patterns (e.g., *_cacache*, *.tmp)
+                            # Use bash case pattern matching for wildcards
+                            case "$item" in
+                                $expanded_path*)
+                                    debug "Skipping blacklisted item (wildcard pattern): $item (matches: $expanded_path)"
+                                    skip_item=true
+                                    break
+                                    ;;
+                            esac
+                        fi
                     done
-                    
+
                     [ "$skip_item" = true ] && continue
                     
                     # Verify that the element does not contain prohibited patterns
