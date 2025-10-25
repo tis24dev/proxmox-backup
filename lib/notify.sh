@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Notification Library
 # File: notify.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Sistema di notifiche per backup
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: 
 ##
 # Proxmox backup notification system
 
@@ -219,11 +219,18 @@ send_email_notification() {
     
     # Encode subject
     local encoded_subject=$(encode_subject "$subject")
+
+    local list_id_header
+    if [ -n "${LIST_ID_HEADER:-}" ]; then
+        list_id_header="$LIST_ID_HEADER"
+    else
+        list_id_header="<backup-reports.$(hostname -f 2>/dev/null || hostname)>"
+    fi
     
     # Send email using sendmail with working script format
     if command -v /usr/sbin/sendmail >/dev/null 2>&1; then
         info "Send email to $recipient"
-        if echo -e "Subject: ${encoded_subject}\nTo: ${recipient}\nMIME-Version: 1.0\nContent-Type: text/html; charset=UTF-8\n\n$email_body" | /usr/sbin/sendmail -t "$recipient"; then
+        if echo -e "Subject: ${encoded_subject}\nTo: ${recipient}\nList-ID: ${list_id_header}\nAuto-Submitted: auto-generated\nX-Auto-Response-Suppress: All\nMIME-Version: 1.0\nContent-Type: text/html; charset=UTF-8\n\n$email_body" | /usr/sbin/sendmail -t "$recipient"; then
             success "Email notification sent successfully to $recipient"
             EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS
             return 0
