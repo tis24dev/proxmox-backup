@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Creation Library
 # File: backup_create.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: added debug
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: Added guard clause for unset TEMP_DIR in count_missing_files()
 ##
 # =============================================================================
 # BACKUP CREATION FUNCTIONS
@@ -1341,15 +1341,24 @@ is_pve_cluster_configured_for_validation() {
 #
 # Returns: Number of missing critical files
 count_missing_files() {
+    debug "count_missing_files called - TEMP_DIR='${TEMP_DIR:-UNSET}'" >&2
+
+    # Guard clause: se TEMP_DIR non è valorizzato, ritorna 0
+    if [ -z "${TEMP_DIR:-}" ]; then
+        warning "TEMP_DIR not set in count_missing_files, returning 0" >&2
+        echo "0"
+        return 0
+    fi
+
     local missing_files=0
     local critical_files=()
     local proxmox_type
-    
+
     # Sanitize and validate Proxmox type
     proxmox_type=$(sanitize_input "${PROXMOX_TYPE:-unknown}")
-    
+
     debug "Checking for missing critical files (Proxmox type: $proxmox_type)" >&2
-    
+
     # Define critical files based on Proxmox type
     case "$proxmox_type" in
         "pve")
@@ -1360,7 +1369,7 @@ count_missing_files() {
                 "${TEMP_DIR}/etc/pve/datacenter.cfg"
                 "${TEMP_DIR}/var/lib/pve-cluster/config.db"
             )
-            
+
             # Add corosync.conf only if cluster is configured
             if is_pve_cluster_configured_for_validation; then
                 debug "Cluster detected, including corosync.conf in critical files check" >&2
@@ -1384,7 +1393,7 @@ count_missing_files() {
             return 1
             ;;
     esac
-    
+
     # Check each critical file
     for file in "${critical_files[@]}"; do
         local sanitized_file
@@ -1443,7 +1452,7 @@ count_missing_files() {
     else
         warning "Found $missing_files missing or invalid critical files" >&2
     fi
-    
+
     echo "$missing_files"
 }
 

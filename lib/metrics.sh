@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Metrics Library
 # File: metrics.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Remove duplicate function definitions (moved to utils.sh)
+# Version: 0.4.1
+# Last Modified: 2025-10-25
+# Changes: 
 ##
 
 # DEPENDENCY VALIDATION
@@ -172,6 +172,20 @@ release_metrics_lock() {
     return 0
 }
 
+# Diagnostic function for file descriptor status
+check_fd_status() {
+    local fd=$METRICS_LOCK_FD
+
+    if { true >&${fd}; } 2>/dev/null; then
+        debug "FD $fd is OPEN"
+        if [ -e "/proc/$$/fd/$fd" ]; then
+            debug "FD $fd points to: $(readlink /proc/$$/fd/$fd 2>/dev/null || echo 'unknown')"
+        fi
+    else
+        debug "FD $fd is CLOSED"
+    fi
+}
+
 # Function to save a metric in the system with race condition protection
 save_metric() {
     local metric_name="$1"
@@ -179,20 +193,24 @@ save_metric() {
     local metric_labels="${3:-}"
 
     # Validate input parameters
-    if [ -z "$metric_name" ] || [ -z "$metric_value" ]; then
-        warning "Invalid metric parameters: name='$metric_name', value='$metric_value'"
-        return 1
-    fi
+   if [ -z "$metric_name" ] || [ -z "$metric_value" ]; then
+       warning "Invalid metric parameters: name='$metric_name', value='$metric_value'"
+       return 1
+   fi
 
     # Acquire lock for thread-safe operation
+    check_fd_status
     if acquire_metrics_lock "save_metric"; then
+        check_fd_status
         # Create a unique key combining name and labels
         local metric_key="${metric_name}${metric_labels:+|$metric_labels}"
         SYSTEM_METRICS["$metric_key"]="$metric_value"
         release_metrics_lock "save_metric"
+        check_fd_status
         return 0
     else
         warning "Failed to save metric due to lock timeout: $metric_name"
+        check_fd_status
         return 1
     fi
 }
@@ -220,33 +238,56 @@ update_prometheus_metrics() {
         return 0
     fi
 
-    # Make sure the metrics file exists
-    if [ ! -f "$METRICS_FILE" ]; then
-        error "Metrics file not found: $METRICS_FILE"
-        return 1
-    fi
-
     local metric_name="$1"
     local metric_type="$2"
     local metric_help="$3"
     local metric_value="$4"
     local metric_labels="${5:-}"
 
-    # Save the metric in the system
-    save_metric "$metric_name" "$metric_value" "$metric_labels"
+    if [ -z "$metric_name" ]; then
+        warning "Prometheus metric update skipped: empty metric name"
+        return 0
+    fi
+
+    # Ensure metrics file exists (attempt lazy initialization if missing)
+    if [ ! -f "$METRICS_FILE" ]; then
+        warning "Metrics file not found (${METRICS_FILE}), attempting initialization"
+        if ! echo "# Proxmox Backup Metrics - Generated at $(date '+%Y-%m-%d %H:%M:%S')" > "$METRICS_FILE"; then
+            error "Unable to create metrics file at ${METRICS_FILE}"
+            return 0
+        fi
+    fi
+
+    # Save the metric in the system registry
+    if ! save_metric "$metric_name" "$metric_value" "$metric_labels"; then
+        warning "Failed to persist metric ${metric_name}${metric_labels:+ [$metric_labels]}"
+        return 0
+    fi
 
     # Add metric header if it doesn't already exist
     if ! grep -q "^# HELP ${metric_name} " "$METRICS_FILE"; then
-        echo "# HELP ${metric_name} ${metric_help}" >> "$METRICS_FILE"
-        echo "# TYPE ${metric_name} ${metric_type}" >> "$METRICS_FILE"
+        if ! echo "# HELP ${metric_name} ${metric_help}" >> "$METRICS_FILE"; then
+            error "Failed to write HELP header for metric ${metric_name}"
+            return 0
+        fi
+        if ! echo "# TYPE ${metric_name} ${metric_type}" >> "$METRICS_FILE"; then
+            error "Failed to write TYPE header for metric ${metric_name}"
+            return 0
+        fi
     fi
 
     # Add the metric with any labels
     if [ -n "$metric_labels" ]; then
-        echo "${metric_name}{${metric_labels}} ${metric_value}" >> "$METRICS_FILE"
+        if ! echo "${metric_name}{${metric_labels}} ${metric_value}" >> "$METRICS_FILE"; then
+            error "Failed to append metric ${metric_name} with labels ${metric_labels}"
+        fi
     else
-        echo "${metric_name} ${metric_value}" >> "$METRICS_FILE"
+        if ! echo "${metric_name} ${metric_value}" >> "$METRICS_FILE"; then
+            error "Failed to append metric ${metric_name}"
+        fi
     fi
+
+    return 0
 }
 
 # Funzione per esportare tutte le metriche di sistema in Prometheus
@@ -732,8 +773,31 @@ count_backup_files() {
     FILE_MISSING=0
 
     if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
-        FILES_INCLUDED=$(count_files_in_backup "$BACKUP_FILE")
-        FILE_MISSING=$(count_missing_files)
+        local count_result
+        if ! count_result=$(count_files_in_backup "$BACKUP_FILE"); then
+            warning "count_files_in_backup failed for ${BACKUP_FILE}, defaulting FILES_INCLUDED=0"
+            if declare -f report_metrics_error >/dev/null 2>&1; then
+                report_metrics_error "count_files_in_backup" "Unable to enumerate files in backup archive ${BACKUP_FILE}" "warning"
+            fi
+            if declare -f set_exit_code >/dev/null 2>&1; then
+                set_exit_code "warning"
+            fi
+            count_result="0"
+        fi
+        FILES_INCLUDED="$count_result"
+
+        local missing_result
+        if ! missing_result=$(count_missing_files); then
+            warning "count_missing_files failed, defaulting FILE_MISSING=0"
+            if declare -f report_metrics_error >/dev/null 2>&1; then
+                report_metrics_error "count_missing_files" "Unable to determine missing critical files for ${PROXMOX_TYPE:-unknown}" "warning"
+            fi
+            if declare -f set_exit_code >/dev/null 2>&1; then
+                set_exit_code "warning"
+            fi
+            missing_result="0"
+        fi
+        FILE_MISSING="$missing_result"
 
         # Aggiorna metriche Prometheus se abilitato
         if [ "$PROMETHEUS_ENABLED" == "true" ]; then
@@ -973,13 +1037,17 @@ report_metrics_error() {
                 local critical_labels="severity=\"critical\",operation=\"$operation\""
                 local current_critical=$(get_metric "proxmox_backup_metrics_errors_total" "$critical_labels")
                 local new_critical=$((current_critical + 1))
-                save_metric "proxmox_backup_metrics_errors_total" "$new_critical" "$critical_labels"
+                if ! save_metric "proxmox_backup_metrics_errors_total" "$new_critical" "$critical_labels"; then
+                    warning "Failed to update metrics error counter (critical) for operation ${operation}"
+                fi
                 ;;
             "warning")
                 local warning_labels="severity=\"warning\",operation=\"$operation\""
                 local current_warning=$(get_metric "proxmox_backup_metrics_errors_total" "$warning_labels")
                 local new_warning=$((current_warning + 1))
-                save_metric "proxmox_backup_metrics_errors_total" "$new_warning" "$warning_labels"
+                if ! save_metric "proxmox_backup_metrics_errors_total" "$new_warning" "$warning_labels"; then
+                    warning "Failed to update metrics error counter (warning) for operation ${operation}"
+                fi
                 ;;
         esac
     fi

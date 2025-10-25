@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Automatic Installer
 # File: install.sh
-# Version: 1.1.2
-# Last Modified: 2025-10-23
-# Changes: fixed zombie directory
+# Version: 1.1.3
+# Last Modified: 2025-10-25
+# Changes: Automatic migration from wildcard to specific blacklist exclusions
 ##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - AUTOMATIC INSTALLER
@@ -45,7 +45,7 @@ RESET='\033[0m'
 
 # Script information
 SCRIPT_NAME="Proxmox Backup System Installer"
-INSTALLER_VERSION="1.1.1"
+INSTALLER_VERSION="1.1.3"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
 
@@ -311,6 +311,67 @@ add_storage_monitoring_config() {
     print_success "Storage monitoring configuration added successfully"
 }
 
+# Function to update blacklist configuration
+update_blacklist_config() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+
+    # Define required entries
+    local required_entries=("/root/.npm" "/root/.dotnet" "/root/.local" "/root/.gnupg")
+
+    # Check if ALL required entries are already present
+    local all_present=true
+    for entry in "${required_entries[@]}"; do
+        if ! grep -q "^${entry}\$" "$config_file"; then
+            all_present=false
+            break
+        fi
+    done
+
+    if [[ "$all_present" == "true" ]]; then
+        print_status "Blacklist configuration already contains all required entries"
+        return 0
+    fi
+
+    print_status "Updating blacklist configuration (ensuring all /root exclusions are present)..."
+
+    # Create backup
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+
+    # Use awk to process the file
+    # - Remove /root/.* if present
+    # - Remove any existing required entries (to avoid duplicates when re-adding)
+    # - Insert all 4 entries in a block after /root/.cache
+    awk '
+        # Remove /root/.* wildcard pattern if present
+        /^\/root\/\.\*$/ { next }
+
+        # Remove any existing entries that will be re-added (avoid duplicates)
+        /^\/root\/\.npm$/ { next }
+        /^\/root\/\.dotnet$/ { next }
+        /^\/root\/\.local$/ { next }
+        /^\/root\/\.gnupg$/ { next }
+
+        # Insert all 4 entries after /root/.cache
+        /^\/root\/\.cache$/ {
+            print
+            print "/root/.npm"
+            print "/root/.dotnet"
+            print "/root/.local"
+            print "/root/.gnupg"
+            next
+        }
+
+        # Print all other lines as-is
+        { print }
+    ' "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
+
+    print_success "Blacklist configuration updated successfully"
+}
+
 # Function to update configuration header if needed
 update_config_header() {
     local config_file="$INSTALL_DIR/env/backup.env"
@@ -318,16 +379,43 @@ update_config_header() {
     if [[ ! -f "$config_file" ]]; then
         return 0
     fi
-    
-    # Check if the new header format is already present
-    if grep -q "Version: 1.0.1" "$config_file" && grep -q "configurazione iniziale con sistema di versioning" "$config_file"; then
-        print_status "Configuration header already up to date"
-        return 0
-    fi
-    
+
     # Check if the file has the configuration section marker
     if ! grep -q "# 1. GENERAL SYSTEM CONFIGURATION" "$config_file"; then
         print_warning "Configuration file format not recognized, skipping header update"
+        return 0
+    fi
+
+    # Extract current header from user's file (first 20 lines until the body marker)
+    local current_header=$(head -n 20 "$config_file")
+
+    # Define reference header (must match HEADER_EOF below)
+    local reference_header=$(cat <<'REFERENCE_EOF'
+#!/bin/bash
+# ============================================================================
+# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
+# File: backup.env
+# Version: 1.1.3
+# Last Modified: 2025-10-25
+# Changes: Automatic migration from wildcard to specific blacklist exclusions
+# ============================================================================
+# Main configuration file for Proxmox backup system
+# This file contains all configurations needed for automated backup
+# of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
+#
+# IMPORTANT:
+# - This file must have 600 permissions and be owned by root
+# - Always verify configuration before running backups in production
+# - Keep backup copies of this configuration file
+# - La versione del SISTEMA viene caricata dal file VERSION
+# - La versione QUI indica la versione del formato di configurazione
+# ============================================================================
+REFERENCE_EOF
+)
+
+    # Compare headers - skip if identical
+    if [[ "$current_header" == "$reference_header" ]]; then
+        print_status "Configuration header already up to date"
         return 0
     fi
     
@@ -367,15 +455,15 @@ update_config_header() {
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
 # File: backup.env
-# Version: 1.0.1
-# Last Modified: 2025-10-11
-# Changes: Configurazione iniziale con sistema di versioning
+# Version: 1.1.3
+# Last Modified: 2025-10-25
+# Changes: Automatic migration from wildcard to specific blacklist exclusions
 # ============================================================================
 # Main configuration file for Proxmox backup system
 # This file contains all configurations needed for automated backup
 # of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
 #
-# IMPORTANT: 
+# IMPORTANT:
 # - This file must have 600 permissions and be owned by root
 # - Always verify configuration before running backups in production
 # - Keep backup copies of this configuration file
@@ -468,6 +556,7 @@ setup_configuration() {
         if [[ -f /tmp/proxmox_backup_was_update ]]; then
             update_config_header
             add_storage_monitoring_config
+            update_blacklist_config
         fi
     else
         print_warning "Configuration file not found, creating basic config"
