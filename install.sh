@@ -319,6 +319,7 @@ update_blacklist_config() {
         return 0
     fi
 
+<<<<<<< HEAD
     # Define required entries
     local required_entries=("/root/.npm" "/root/.dotnet" "/root/.local" "/root/.gnupg")
 
@@ -337,10 +338,26 @@ update_blacklist_config() {
     fi
 
     print_status "Updating blacklist configuration (ensuring all /root exclusions are present)..."
+=======
+    # Check if the old wildcard pattern is present
+    if ! grep -q "^/root/\.\*" "$config_file"; then
+        print_status "Blacklist configuration already updated (no /root/.* pattern found)"
+        return 0
+    fi
+
+    # Check if new entries are already present (avoid duplicates)
+    if grep -q "^/root/\.npm" "$config_file" && grep -q "^/root/\.dotnet" "$config_file"; then
+        print_status "Blacklist configuration already contains new entries"
+        return 0
+    fi
+
+    print_status "Updating blacklist configuration (replacing /root/.* with specific exclusions)..."
+>>>>>>> 942d7d65efc610512cc49c1662cbb448f118f7e7
 
     # Create backup
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
+<<<<<<< HEAD
     # Use awk to process the file
     # - Remove /root/.* if present
     # - Remove any existing required entries (to avoid duplicates when re-adding)
@@ -358,14 +375,22 @@ update_blacklist_config() {
         # Insert all 4 entries after /root/.cache
         /^\/root\/\.cache$/ {
             print
+=======
+    # Use awk to replace /root/.* with specific exclusions
+    awk '
+        /^\/root\/\.\*/ {
+>>>>>>> 942d7d65efc610512cc49c1662cbb448f118f7e7
             print "/root/.npm"
             print "/root/.dotnet"
             print "/root/.local"
             print "/root/.gnupg"
             next
         }
+<<<<<<< HEAD
 
         # Print all other lines as-is
+=======
+>>>>>>> 942d7d65efc610512cc49c1662cbb448f118f7e7
         { print }
     ' "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
 
