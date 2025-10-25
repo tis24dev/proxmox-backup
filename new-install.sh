@@ -2,7 +2,7 @@
 ##
 # Proxmox Backup System - Fresh Installer
 # File: new-install.sh
-# Version: 1.1.0-dev
+# Version: 1.1.0
 # Last Modified: 2025-10-19
 # Changes: **Added backup verification before removal - prevents data loss from corrupted backups**
 ##
