@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.4.1
+# Version: 0.4.2
 # Last Modified: 2025-10-25
-# Changes: Early argument parsing to prevent DEBUG logs in standard mode during bootstrap
+# Changes: Optimize blacklist handling in custom backup
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.

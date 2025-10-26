@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.4.1
-# Last Modified: 2025-10-25
-# Changes: Fix: Added variable expansion and glob pattern support for blacklist matching
+# Version: 0.4.2
+# Last Modified: 2025-10-26
+# Changes: Optimize blacklist handling in custom backup
 ##
 # Functions for backup data collection
 
@@ -649,6 +649,9 @@ collect_custom_files() {
 
         # Create an array of excluded paths from BACKUP_BLACKLIST
         local blacklist_paths=()
+        local blacklist_dir_prune=()
+        local blacklist_single_files=()
+        local blacklist_patterns=()
         if [ -n "$BACKUP_BLACKLIST" ]; then
             # Extract paths between quotes or separated by spaces
             while read -r line; do
@@ -673,6 +676,25 @@ collect_custom_files() {
                 # Skip empty paths
                 [ -z "$path" ] && continue
                 debug "Blacklisted path: $path"
+
+                # Expand variables to classify the entry
+                local expanded_path
+                expanded_path=$(eval echo "$path")
+
+                # Keep track of wildcard-based patterns for later checks
+                if [[ "$expanded_path" == *"*"* || "$expanded_path" == *"?"* || "$expanded_path" == *"["* ]]; then
+                    blacklist_patterns+=("$expanded_path")
+                    continue
+                fi
+
+                # Separate directory paths we can prune directly in find
+                if [ -d "$expanded_path" ] || [[ "$expanded_path" == */ ]]; then
+                    blacklist_dir_prune+=("${expanded_path%/}")
+                    continue
+                fi
+
+                # Track single files so we can skip them later
+                blacklist_single_files+=("$expanded_path")
             done
         fi
         
@@ -730,7 +752,18 @@ collect_custom_files() {
                 # this will allow us to avoid processing prohibited directories completely
                 local find_exclude_args=""
                 for pattern in "${prohibited_patterns[@]}"; do
-                    find_exclude_args="$find_exclude_args -path '*/$pattern*' -prune -o"
+                    local quoted_pattern
+                    printf -v quoted_pattern "%q" "*/$pattern*"
+                    find_exclude_args="$find_exclude_args -path $quoted_pattern -prune -o"
+                done
+
+                # Incorporate blacklisted directories into prune arguments
+                for prune_path in "${blacklist_dir_prune[@]}"; do
+                    # Skip if blank after trimming
+                    [ -z "$prune_path" ] && continue
+                    local quoted_prune
+                    printf -v quoted_prune "%q" "$prune_path"
+                    find_exclude_args="$find_exclude_args -path $quoted_prune -prune -o"
                 done
                 
                 # For directories, walk through all files and directories
@@ -741,48 +774,44 @@ collect_custom_files() {
                     
                     # Check if this item should be blacklisted
                     local skip_item=false
-                    for blacklist_path in "${blacklist_paths[@]}"; do
-                        # Expand variables in blacklist_path (e.g., ${BASE_DIR})
-                        local expanded_path=$(eval echo "$blacklist_path")
-
-                        # Support different matching strategies:
-                        # 1. Exact prefix match (e.g., /root/.cache matches /root/.cache/*)
-                        # 2. Glob pattern match (e.g., /root/.* matches /root/.npm)
-                        # 3. Wildcard anywhere (e.g., *_cacache* matches any path with _cacache)
-
-                        # Strategy 1: Exact prefix match (original behavior)
-                        if [[ "$item" == "$expanded_path"* ]]; then
-                            debug "Skipping blacklisted item (prefix match): $item (matches: $expanded_path)"
+                    for prune_path in "${blacklist_dir_prune[@]}"; do
+                        if [[ "$item" == "$prune_path" || "$item" == "$prune_path/"* ]]; then
+                            debug "Skipping blacklisted item (directory prune match): $item (matches: $prune_path)"
                             skip_item=true
                             break
                         fi
+                    done
 
-                        # Strategy 2: Glob pattern match
-                        # Convert glob pattern to regex for matching
-                        # Pattern like /root/.* should match /root/.npm, /root/.cache, etc.
-                        if [[ "$expanded_path" == *"/.*" ]]; then
-                            # Handle patterns like /root/.* (hidden files only)
-                            # Extract the base path without the pattern
-                            local base_path="${expanded_path%/.*}"
-
-                            # Match only hidden files/dirs (starting with dot after the last slash)
-                            if [[ "$item" == "$base_path/".* ]]; then
-                                debug "Skipping blacklisted item (hidden file pattern): $item (matches: $expanded_path)"
+                    if [ "$skip_item" = false ]; then
+                        for single_path in "${blacklist_single_files[@]}"; do
+                            if [[ "$item" == "$single_path" ]]; then
+                                debug "Skipping blacklisted item (single file match): $item"
                                 skip_item=true
                                 break
                             fi
-                        elif [[ "$expanded_path" == *"*"* ]]; then
-                            # Handle other wildcard patterns (e.g., *_cacache*, *.tmp)
-                            # Use bash case pattern matching for wildcards
-                            case "$item" in
-                                $expanded_path*)
-                                    debug "Skipping blacklisted item (wildcard pattern): $item (matches: $expanded_path)"
+                        done
+                    fi
+
+                    if [ "$skip_item" = false ]; then
+                        for pattern in "${blacklist_patterns[@]}"; do
+                            if [[ "$pattern" == *"/.*" ]]; then
+                                base_path="${pattern%/.*}"
+                                if [[ "$item" == "$base_path/".* ]]; then
+                                    debug "Skipping blacklisted item (hidden file pattern): $item (matches: $pattern)"
                                     skip_item=true
                                     break
-                                    ;;
-                            esac
-                        fi
-                    done
+                                fi
+                            else
+                                case "$item" in
+                                    $pattern*)
+                                        debug "Skipping blacklisted item (wildcard pattern): $item (matches: $pattern)"
+                                        skip_item=true
+                                        break
+                                        ;;
+                                esac
+                            fi
+                        done
+                    fi
 
                     [ "$skip_item" = true ] && continue
                     
@@ -828,13 +857,34 @@ collect_custom_files() {
             else
                 # It's a file, check against blacklist
                 local skip_item=false
-                for blacklist_path in "${blacklist_paths[@]}"; do
-                    if [[ "$abs_path" == "$blacklist_path"* ]]; then
+                for single_path in "${blacklist_single_files[@]}"; do
+                    if [[ "$abs_path" == "$single_path" ]]; then
                         info "Skipping blacklisted file: $abs_path"
                         skip_item=true
                         break
                     fi
                 done
+
+                if [ "$skip_item" = false ]; then
+                    for pattern in "${blacklist_patterns[@]}"; do
+                        if [[ "$pattern" == *"/.*" ]]; then
+                            local base_path="${pattern%/.*}"
+                            if [[ "$abs_path" == "$base_path/".* ]]; then
+                                info "Skipping blacklisted file (hidden pattern): $abs_path"
+                                skip_item=true
+                                break
+                            fi
+                        else
+                            case "$abs_path" in
+                                $pattern*)
+                                    info "Skipping blacklisted file (pattern match): $abs_path"
+                                    skip_item=true
+                                    break
+                                    ;;
+                            esac
+                        fi
+                    done
+                fi
                 
                 [ "$skip_item" = true ] && continue
                 

@@ -62,6 +62,14 @@ All notable changes to this project are documented in this file.
 **Add***
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
+## [0.4.2] - 2025-10-26
+###/lib/backup_collect.sh
+***Fix***
+- Eliminated the full scan of excluded directories that previously caused major slowdowns.
+###Add
+- Directly prune blacklisted directories during the find traversal while preserving wildcard and single-file checks
+- Automatically classify blacklist entries into directories, single files, or wildcard patterns.
+
 ## [0.4.1] - 2025-10-25
 ###/script/proxmox-backup.sh
 ***Fix***
