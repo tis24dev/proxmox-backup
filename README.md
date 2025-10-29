@@ -4,6 +4,9 @@
 [![Bash](https://img.shields.io/badge/Bash-4.4+-blue.svg)](https://www.gnu.org/software/bash/)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-green.svg)](https://www.proxmox.com/)
 
+[![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
+[![☕ Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://buymeacoffee.com/tis24dev)
+
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
 
@@ -75,6 +78,7 @@ With these backups you can **completely restore** your Proxmox system on a new s
 
 ### 📢 **Notifications and Monitoring**
 - **Email notifications** - Detailed email notifications with complete reports
+- **Cloud Email Service** - Centralized system to send email notifications
 - **Telegram notifications** - Rich Telegram notifications with emoji and formatting
 - **Simplified Telegram activation** - Unified Telegram activation with dedicated bot and unique code (10 seconds)
 - **Centralized Telegram infrastructure** - Currently running on temporary infrastructure, fully functional but will be expanded in the future. Future expansions should not cause any disruption to existing users.
