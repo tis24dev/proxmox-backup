@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Fix Permissions Script
 # File: fix-permissions.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: Fix permission install.sh new-install.sh
+# Version: 0.3.1
+# Last Modified: 2025-10-28
+# Changes: Add new file check
 ##
 # Script per applicare i permessi corretti a tutti i file del sistema di backup
 # Questo script deve essere eseguito come root
@@ -161,6 +161,7 @@ fix_config_permissions() {
         "$BASE_DIR/lib/storage.sh"
         "$BASE_DIR/lib/utils.sh"
 		"$BASE_DIR/lib/utils_counting.sh"
+		"$BASE_DIR/lib/email_relay.sh"
     )
     
     for config in "${config_files[@]}"; do

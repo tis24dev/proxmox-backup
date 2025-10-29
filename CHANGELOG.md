@@ -2,11 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.2] - 2025-10-28 - Standalone Script: security-check.sh
+**Add**
+- Added new secure files to the whitelist
+- Added additional files to perform security checks on
+
+## [1.2.0] - 2025-10-28 - Standalone file: backup.env
+**Add**
+- Added cloud email functionalities
+
+## [1.2.0] - 2025-10-28 - Standalone Script: install.sh
+**Add**
+- Added log entries for env file check routine steps
+**Fix**
+- Modified and updated the email section in the env file during upgrade to include new required data
+- Corrected initial env file template which was using an outdated version
+
 ## [1.1.3] - 2025-10-25 - Standalone Script: install.sh
 **Add**
 - Added `update_blacklist_config()` function to automatically migrate BACKUP_BLACKLIST configuration during system updates
 - Integrated automatic blacklist update in `setup_configuration()` workflow (called after `add_storage_monitoring_config`)
-
 **Fix**
 - Replaced generic `/root/.*` wildcard pattern with specific exclusions to prevent unintended file exclusions
 - Now automatically migrates user configurations from `/root/.*` to targeted exclusions: `/root/.npm`, `/root/.dotnet`, `/root/.local`, `/root/.gnupg`
@@ -62,11 +77,37 @@ All notable changes to this project are documented in this file.
 **Add***
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
+---------------------------------------------------------------------------------------
+
+## [0.5.1] - 2025-10-28
+###/script/proxmox-backup.sh
+***Fix***
+- Fix call list funcion
+
+## [0.5.0] - 2025-10-28
+###/script/proxmox-backup.sh
+***Add***
+- Added cloud email system integration
+
+###/lib/email_relay.sh
+***New***
+- New file for new functionality
+
+###/lib/notify.sh
+***Add***
+- Added cloud email system
+- Added MAC address display in email reports
+
+###/lib/log.sh
+***Add***
+- Added MAC address display
+- Added display of email delivery status via cloud service
+
 ## [0.4.2] - 2025-10-26
 ###/lib/backup_collect.sh
 ***Fix***
 - Eliminated the full scan of excluded directories that previously caused major slowdowns.
-###Add
+***Add***
 - Directly prune blacklisted directories during the find traversal while preserving wildcard and single-file checks
 - Automatically classify blacklist entries into directories, single files, or wildcard patterns.
 
@@ -75,7 +116,7 @@ All notable changes to this project are documented in this file.
 ***Fix***
 - Fixed DEBUG log messages appearing in standard mode during bootstrap phase by implementing early argument parsing to detect -v|--verbose and -x|--extreme flags before module loading
 - Modified bootstrap log level logic to respect DEBUG_LEVEL setting during pre-initialization phase instead of always using TRACE level (4)
-###Add
+***Add***
 - Added early argument parsing section (lines 135-152) to pre-detect debug flags before bootstrap logging initialization
 - Added conditional log level assignment in bootstrap phase based on DEBUG_LEVEL value (standard→INFO level 2, advanced→DEBUG level 3, extreme→TRACE level 4)
 
