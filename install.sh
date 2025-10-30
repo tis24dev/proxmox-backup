@@ -390,7 +390,8 @@ update_email_config() {
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
     # Extract existing EMAIL_RECIPIENT value if present (preserve user customization)
-    local existing_recipient=$(grep "^EMAIL_RECIPIENT=" "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
+    # Stop at # character to remove inline comments, then trim trailing spaces
+    local existing_recipient=$(grep "^EMAIL_RECIPIENT=" "$config_file" 2>/dev/null | sed -n 's/^EMAIL_RECIPIENT="\([^#"]*\).*/\1/p' | sed 's/[[:space:]]*$//' || echo "")
 
     # Inform user if preserving a custom value
     if [[ -n "$existing_recipient" ]]; then
