@@ -2,8 +2,9 @@
 ##
 # Proxmox Backup System - Email Relay Functions
 # File: email_relay.sh (formerly email_ses.sh)
-# Version: 0.6.0
-# Last Modified: 2025-10-28
+# Version: 0.5.2
+# Last Modified: 2025-10-30
+# Changes: Fix name process
 #
 # This module provides cloud email relay delivery via Cloudflare Worker
 # with HMAC signature authentication and automatic fallback to sendmail.
@@ -300,7 +301,7 @@ send_email_via_relay() {
         # Handle HTTP response codes
         case "$http_code" in
             200)
-                success "Email sent successfully via cloud relay"
+                success "Cloud relay accepted request (HTTP 200)"
                 debug "Worker confirmed email delivery"
                 success=true
                 EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS

@@ -83,6 +83,15 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.5.2] - 2025-10-30
+###/lib/email_relay.sh
+***Add***
+- Fix name process
+
+###/lib/notify.sh
+***Add***
+- Fix name process
+
 ## [0.5.1] - 2025-10-28
 ###/script/proxmox-backup.sh
 ***Fix***

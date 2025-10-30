@@ -2,10 +2,11 @@
 ##
 # Proxmox Backup System - Notification Library
 # File: notify.sh
-# Version: 0.5.1
-# Last Modified: 2025-10-28
-# Changes: Migrated to provider-agnostic email relay terminology
+# Version: 0.5.2
+# Last Modified: 2025-10-30
+# Changes: Fix name process
 ##
+
 # Proxmox backup notification system
 
 # Source email relay functions
@@ -248,7 +249,7 @@ send_email_notification() {
             info "Sending email via cloud relay service"
 
             if send_email_via_relay "$recipient" "$subject" "$email_body" "$EMAIL_REPORT_DATA_JSON"; then
-                success "Email sent successfully via cloud relay"
+                success "Email delivered successfully via cloud relay"
                 EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS
                 return 0
             else
