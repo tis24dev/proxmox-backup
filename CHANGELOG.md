@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.1] - 2025-10-28 - Standalone Script: install.sh
+**Fix**
+- Added lost funcion to inject email setting update
+
 ## [1.2.2] - 2025-10-28 - Standalone Script: security-check.sh
 **Add**
 - Added new secure files to the whitelist

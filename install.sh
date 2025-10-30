@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Automatic Installer
 # File: install.sh
-# Version: 1.2.0
-# Last Modified: 2025-10-27
-# Changes: Change Env Email section in upgrade
+# Version: 1.2.1
+# Last Modified: 2025-10-30
+# Changes: Added email configuration update with EMAIL_RECIPIENT preservation
 ##
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - AUTOMATIC INSTALLER
@@ -372,6 +372,68 @@ update_blacklist_config() {
     print_success "Blacklist configuration updated successfully"
 }
 
+# Function to update email configuration
+update_email_config() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+
+    if grep -q '# Email delivery method: "relay" (Cloud relay) or "sendmail" (local SMTP)' "$config_file"; then
+        print_status "Email configuration already in new format"
+        return 0
+    fi
+
+    print_status "Updating email configuration section to new format..."
+
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+
+    # Extract existing EMAIL_RECIPIENT value if present (preserve user customization)
+    local existing_recipient=$(grep "^EMAIL_RECIPIENT=" "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
+
+    # Inform user if preserving a custom value
+    if [[ -n "$existing_recipient" ]]; then
+        print_status "Preserving existing EMAIL_RECIPIENT: $existing_recipient"
+    fi
+
+    # Use AWK to update the email section, passing the preserved recipient value
+    awk -v recipient="$existing_recipient" '
+        /^# ---------- Email Configuration ----------$/ {
+            print "# ---------- Email Configuration ----------"
+            print "# Email delivery method: \"relay\" (Cloud relay) or \"sendmail\" (local SMTP)"
+            print "# Note: \"ses\" is deprecated but still supported for backward compatibility (treated as \"relay\")"
+            print "EMAIL_DELIVERY_METHOD=\"relay\""
+            print ""
+            print "# Fallback to sendmail if cloud relay fails (rate limit, network error, etc.)"
+            print "EMAIL_FALLBACK_SENDMAIL=\"true\""
+            print ""
+            print "# Email recipient (if empty, uses root email from Proxmox)"
+            print "EMAIL_RECIPIENT=\"" recipient "\""
+            print ""
+            print "# Email sender (configured in Worker, cannot be overridden)"
+            print "# This value is informational only - Worker uses no-reply@proxmox.tis24.it"
+            print "EMAIL_FROM=\"no-reply@proxmox.tis24.it\""
+            print ""
+            print "# Email subject prefix"
+            print "EMAIL_SUBJECT_PREFIX=\"[Proxmox-Backup]\""
+            print ""
+            skip=1
+            next
+        }
+        skip {
+            if (/^# =============/ || /^# ---------- Prometheus Configuration ----------$/) {
+                skip=0
+                print
+            }
+            next
+        }
+        { print }
+    ' "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
+
+    print_success "Email configuration updated successfully"
+}
+
 # Function to update configuration header if needed
 update_config_header() {
     local config_file="$INSTALL_DIR/env/backup.env"
@@ -557,6 +619,7 @@ setup_configuration() {
             update_config_header
             add_storage_monitoring_config
             update_blacklist_config
+            update_email_config
         fi
     else
         print_warning "Configuration file not found, creating basic config"

@@ -2,7 +2,7 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.5.1
+# Version: 0.5.2
 # Last Modified: 2025-10-28
 # Changes: Added email cloud system
 #
