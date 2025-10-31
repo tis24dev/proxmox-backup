@@ -1286,19 +1286,19 @@ detect_install_state() {
 prompt_install_action() {
     local choice
     while true; do
-        echo >&2
-        print_status "Choose installation mode:" >&2
-        echo "  [1] Update existing installation (preserve data)" >&2
-        echo "  [2] Reinstall from scratch (REMOVE-EVERYTHING)" >&2
-        echo "  [3] Cancel" >&2
-        read -p "Select option (1-3): " -r choice
+        echo >/dev/tty
+        print_status "Choose installation mode:" >/dev/tty
+        echo "  [1] Update existing installation (preserve data)" >/dev/tty
+        echo "  [2] Reinstall from scratch (REMOVE-EVERYTHING)" >/dev/tty
+        echo "  [3] Cancel" >/dev/tty
+        read -p "Select option (1-3): " -r choice </dev/tty
         case "$choice" in
             1|2|3)
                 echo "$choice"
                 return
                 ;;
             *)
-                print_warning "Invalid choice. Please select 1, 2 or 3." >&2
+                print_warning "Invalid choice. Please select 1, 2 or 3." >/dev/tty
                 ;;
         esac
     done
