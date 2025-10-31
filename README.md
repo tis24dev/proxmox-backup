@@ -9,27 +9,15 @@
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
 
-**Install or Update (Stable)**
+**Install or Update or Reinstall (Stable)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**Development Version (Latest Features)**
+**Development Version or Reinstall (Latest Features)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
 ```
-
-**Forced Reinstall - Remove & Clean Install (Stable)**
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall
-```
-
-**Forced Reinstall - Development Version**
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall dev
-```
-
-> **Note:** The installer automatically detects existing installations and asks what to do. Use `--reinstall` only if you want to force a complete removal without prompts.
 
 ## 🎯 What does this script do?
 

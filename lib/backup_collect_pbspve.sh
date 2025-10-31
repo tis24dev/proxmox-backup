@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - PBS/PVE Collection Library
 # File: backup_collect_pbspve.sh
-# Version: 0.3.0
-# Last Modified: 2025-10-23
-# Changes: refactor: improve error handling and fix critical path/tracking bugs
+# Version: 0.6.1
+# Last Modified: 2025-10-31
+# Changes: fix wrong detect pbs/pve
 ##
 # Functions for backup data collection
 
@@ -334,38 +334,59 @@ detect_all_datastores() {
     
     # Fallback to manual configuration if no datastores were auto-detected
     if [ ${#datastores_found[@]} -eq 0 ]; then
-        warning "No datastores auto-detected from PBS or PVE systems"
-        
+        # Generate system-specific warning messages based on detected system types
+        local is_pbs=false
+        local is_pve=false
+
+        for sys_type in "${system_types_detected[@]}"; do
+            case "$sys_type" in
+                "PBS") is_pbs=true ;;
+                "PVE") is_pve=true ;;
+            esac
+        done
+
+        # Generate appropriate warnings based on system type
+        if [ "$is_pbs" = true ] && [ "$is_pve" = true ]; then
+            warning "No datastores auto-detected from PBS system"
+            warning "No storages auto-detected from PVE system"
+        elif [ "$is_pbs" = true ]; then
+            warning "No datastores found on PBS system"
+        elif [ "$is_pve" = true ]; then
+            warning "No storages found on PVE system"
+        else
+            warning "No PBS or PVE system detected"
+        fi
+
         # Check for manual PBS_DATASTORE_PATH configuration
         if [ -n "${PBS_DATASTORE_PATH:-}" ]; then
             info "Using manual PBS_DATASTORE_PATH: $PBS_DATASTORE_PATH"
             datastores_found+=("MANUAL|pbs_manual|$PBS_DATASTORE_PATH|Manual configuration")
         fi
-        
+
         # Check for standard PVE backup directories
         local standard_pve_paths=(
             "/var/lib/vz/dump"
             "/mnt/pve"
         )
-        
+
         for std_path in "${standard_pve_paths[@]}"; do
             if [ -d "$std_path" ]; then
                 info "Found standard PVE directory: $std_path"
                 datastores_found+=("MANUAL|pve_standard|$std_path|Standard PVE location")
             fi
         done
-        
+
         if [ ${#datastores_found[@]} -eq 0 ]; then
             # CRITICAL: Ensure this only generates WARNING (exit code 1), never ERROR (exit code 2)
-            warning "No datastores found - neither auto-detected nor in custom paths. Using default fallback."
-            warning "This is expected behavior when no Proxmox datastores are available."
-            
+            warning "No backup locations found - neither auto-detected nor in custom paths. Using default fallback."
+            warning "This is expected behavior when no Proxmox backup locations are available."
+
             # Set warning exit code explicitly to ensure we never generate critical error
             set_exit_code "warning"
-            
+
             # Use default fallback to ensure backup can still proceed
             datastores_found+=("FALLBACK|default|/var/lib/proxmox-backup/datastore|Default fallback")
-            
+
             info "Using fallback datastore path: /var/lib/proxmox-backup/datastore"
             info "You can configure a custom path in the env file using PBS_DATASTORE_PATH"
         fi
