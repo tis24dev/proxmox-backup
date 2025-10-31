@@ -7,7 +7,8 @@ All notable changes to this project are documented in this file.
 **Add**
 - Branch selection support: add `-- dev` parameter to install development branch
 - Dynamic GitHub URL generation based on selected branch
-- Remote branch existence verification before clone with helpful error messages
+- User confirmation prompt when installing dev branch (with cancel option)
+- Remote branch existence verification as first operation (before system checks/dependencies)
 - Branch verification after git clone with mismatch warning
 - Branch display in installation banner with dev warning
 **Fix**
@@ -17,6 +18,7 @@ All notable changes to this project are documented in this file.
 ### Standalone Script: new-install.sh
 **Add**
 - Branch selection support with same syntax as install.sh
+- User confirmation prompt when installing dev branch (with cancel option)
 - Remote branch existence verification before removal to prevent data loss
 - Pass branch parameter to install.sh: `bash -s -- "$INSTALL_BRANCH"`
 **Fix**

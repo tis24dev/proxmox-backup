@@ -546,6 +546,24 @@ main() {
     # Check if running as root
     check_root
 
+    # Confirm installation from dev branch
+    if [[ "$INSTALL_BRANCH" == "dev" ]]; then
+        echo
+        print_warning "You are about to install from the DEVELOPMENT branch"
+        print_warning "This version may contain untested features and bugs"
+        echo
+        read -p "Do you want to continue with dev branch installation? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            print_error "Installation cancelled by user"
+            echo
+            print_status "To install the stable version, use:"
+            echo "  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)\""
+            exit 0
+        fi
+        print_success "User confirmed dev branch installation"
+    fi
+
     # Check if branch exists before proceeding
     echo
     if ! check_remote_branch "$INSTALL_BRANCH"; then
