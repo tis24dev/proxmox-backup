@@ -1261,6 +1261,13 @@ show_completion() {
     echo -e "- $INSTALL_DIR/doc/README.md"
     echo -e "- $INSTALL_DIR/doc/CONFIGURATION.md"
     echo
+    echo -e "${BOLD}${PURPLE}Quick commands:${RESET}"
+    echo -e "- Backup: ${CYAN}proxmox-backup${RESET}"
+    echo -e "- Test mode: ${CYAN}proxmox-backup --dry-run${RESET}"
+    echo -e "- Security: ${CYAN}proxmox-backup-security${RESET}"
+    echo -e "- Permissions: ${CYAN}proxmox-backup-permissions${RESET}"
+    echo -e "- Restore: ${CYAN}proxmox-restore${RESET}"
+    echo
     if [[ -n "$BACKUP_ARCHIVE_PATH" && -f "$BACKUP_ARCHIVE_PATH" ]]; then
         local size
         size=$(du -h "$BACKUP_ARCHIVE_PATH" 2>/dev/null | cut -f1)
