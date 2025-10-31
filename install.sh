@@ -659,12 +659,8 @@ clone_repository() {
         fi
     fi
 
-    # Check if branch exists on remote before attempting clone
-    if ! check_remote_branch "$INSTALL_BRANCH"; then
-        exit 1
-    fi
-
     # Clone repository with specified branch
+    # Note: Branch existence is already verified in main() before calling this function
     print_status "Cloning repository from branch: $INSTALL_BRANCH"
     git clone -b "$INSTALL_BRANCH" "$REPO_URL" "$INSTALL_DIR"
     chmod 744 "$INSTALL_DIR/install.sh" "$INSTALL_DIR/new-install.sh"
@@ -1310,6 +1306,14 @@ main() {
 
     check_requirements
     install_dependencies
+
+    # Check if branch exists before any filesystem operations
+    echo
+    if ! check_remote_branch "$INSTALL_BRANCH"; then
+        print_error "Cannot proceed with installation - branch does not exist"
+        exit 1
+    fi
+
     clone_repository
     setup_configuration
     set_permissions
