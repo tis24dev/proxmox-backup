@@ -149,6 +149,16 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.6.1] - 2025-10-31
+###/lib/backup_collect_pbspve.sh
+**Fix**
+- Improved warning messages in `detect_all_datastores()` function to correctly distinguish between PBS datastores and PVE storages
+- Now uses `system_types_detected` array to generate system-specific warnings
+- Corrected terminology usage: "datastores" for PBS, "storages" for PVE
+- Fixed PVE storage detection failing due to unsupported `--noborder` and `--output-format=json` options
+- Corrected exit code check and expanded storage type support (added pbs, zfspool, rbd, cephfs)
+- Improved path resolution from `/etc/pve/storage.cfg` for all storage types
+
 ## [0.5.2] - 2025-10-30
 ###/lib/email_relay.sh
 ***Add***

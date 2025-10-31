@@ -213,115 +213,113 @@ detect_all_datastores() {
         fi
     fi
     
-    # Detect PVE datastores
+    # Detect PVE storages
     if command -v pvesm >/dev/null 2>&1; then
         info "PVE system detected - scanning for PVE storage"
         system_types_detected+=("PVE")
-        
-        local pve_storage_json
-        # Try first with JSON output format (newer versions)
-        if pvesm status --noborder --output-format=json >/dev/null 2>&1; then
-            info "Using JSON output format for pvesm status"
-            pve_storage_json=$(pvesm status --noborder --output-format=json 2>/dev/null)
-        else
-            info "JSON output not supported, parsing standard output format"
-            # Fallback to standard output and convert to JSON-like format
-            local pve_storage_raw
-            pve_storage_raw=$(pvesm status 2>/dev/null)
-            
-            if [ $? -eq 0 ] && [ -n "$pve_storage_raw" ]; then
-                # Convert standard output to JSON-like format for compatibility
-                # Skip header line and process each storage entry
-                pve_storage_json=""
-                while IFS= read -r line; do
-                    # Skip header and empty lines
-                    if [[ "$line" =~ ^Name.*Type.*Status ]] || [[ -z "$line" ]]; then
+
+        local pve_storage_raw
+        pve_storage_raw=$(pvesm status 2>/dev/null)
+        local pvesm_exit_code=$?
+
+        if [ $pvesm_exit_code -eq 0 ] && [ -n "$pve_storage_raw" ]; then
+            local pve_count=0
+
+            while IFS= read -r line; do
+                # Skip header and empty lines
+                if [[ "$line" =~ ^Name.*Type.*Status ]] || [[ -z "$line" ]]; then
+                    continue
+                fi
+
+                # Parse the line (Name Type Status Total Used Available %)
+                local storage_info
+                IFS=' ' read -ra storage_info <<< "$line"
+
+                if [ ${#storage_info[@]} -ge 3 ]; then
+                    local storage="${storage_info[0]}"
+                    local type="${storage_info[1]}"
+                    local status="${storage_info[2]}"
+                    local path=""
+                    local content="mixed"
+
+                    # Only process active storage
+                    if [ "$status" != "active" ]; then
+                        debug "Skipping inactive storage: $storage (status: $status)"
                         continue
                     fi
 
-                    # Parse the line (Name Type Status Total Used Available %)
-                    # Use 'read -ra' to safely split the line and prevent glob expansion
-                    local storage_info
-                    IFS=' ' read -ra storage_info <<< "$line"
-                    if [ ${#storage_info[@]} -ge 3 ]; then
-                        local storage_name="${storage_info[0]}"
-                        local storage_type="${storage_info[1]}"
-                        local storage_status="${storage_info[2]}"
-                        
-                        # Only process active storage
-                        if [ "$storage_status" = "active" ]; then
-                            # Create a simple JSON-like entry for compatibility
-                            if [ -n "$pve_storage_json" ]; then
-                                pve_storage_json="$pve_storage_json"$'\n'
+                    # Determine path based on storage type
+                    case "$type" in
+                        "dir")
+                            # For directory storage, get path from config file
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^dir: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*path" | awk '{print $2}' 2>/dev/null)
                             fi
-                            pve_storage_json="${pve_storage_json}{\"storage\":\"$storage_name\",\"type\":\"$storage_type\",\"status\":\"$storage_status\"}"
-                        fi
-                    fi
-                done <<< "$pve_storage_raw"
-            else
-                warning "Failed to get storage status from pvesm"
-                pve_storage_json=""
-            fi
-        fi
-        
-        if [ $? -eq 0 ] && [ -n "$pve_storage_json" ]; then
-            local pve_count=0
-            while IFS= read -r storage_info; do
-                if [ -n "$storage_info" ]; then
-                    local storage
-                    local type
-                    local path=""
-                    local content="unknown"
-                    
-                    # Try to parse as JSON first, then as simple format
-                    if command -v jq >/dev/null 2>&1 && echo "$storage_info" | jq -e . >/dev/null 2>&1; then
-                        # JSON format
-                        storage=$(echo "$storage_info" | jq -r '.storage' 2>/dev/null)
-                        type=$(echo "$storage_info" | jq -r '.type' 2>/dev/null)
-                        path=$(echo "$storage_info" | jq -r '.path // empty' 2>/dev/null)
-                        content=$(echo "$storage_info" | jq -r '.content // "unknown"' 2>/dev/null)
-                    else
-                        # Simple format from fallback conversion
-                        if [[ "$storage_info" =~ \"storage\":\"([^\"]+)\".*\"type\":\"([^\"]+)\" ]]; then
-                            storage="${BASH_REMATCH[1]}"
-                            type="${BASH_REMATCH[2]}"
-                            
-                            # Try to determine path based on storage type and name
-                            case "$type" in
-                                "dir")
-                                    # For directory storage, try to get path from config
-                                    if [ -f "/etc/pve/storage.cfg" ]; then
-                                        path=$(grep -A 10 "^$type: $storage" /etc/pve/storage.cfg | grep "path" | head -1 | awk '{print $2}' 2>/dev/null)
-                                    fi
-                                    # Default paths for common storage names
-                                    if [ -z "$path" ]; then
-                                        case "$storage" in
-                                            "local") path="/var/lib/vz" ;;
-                                            "backup_ext"|"backup_usb") path="/mnt/pve/$storage" ;;
-                                            *) path="/mnt/pve/$storage" ;;
-                                        esac
-                                    fi
-                                    ;;
-                                "zfspool")
-                                    path="/dev/zvol/$storage"
-                                    ;;
-                                *)
-                                    path=""
-                                    ;;
-                            esac
-                            content="mixed"
-                        fi
-                    fi
-                    
-                    # Only include storage types that are relevant for backups
-                    if [[ "$type" =~ ^(dir|nfs|cifs|glusterfs|zfs|lvm|lvmthin)$ ]] && [ -n "$path" ] && [ "$path" != "null" ] && [ "$path" != "empty" ]; then
+                            # Fallback to common default paths if not found in config
+                            if [ -z "$path" ]; then
+                                case "$storage" in
+                                    "local") path="/var/lib/vz" ;;
+                                    *) path="/mnt/pve/$storage" ;;
+                                esac
+                            fi
+                            ;;
+                        "nfs"|"cifs"|"glusterfs")
+                            # For network storage, get path from config
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^$type: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*path" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="/mnt/pve/$storage"
+                            ;;
+                        "zfspool")
+                            # ZFS pool storage - use pool name as identifier
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^zfspool: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*pool" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="$storage"
+                            content="zfspool"
+                            ;;
+                        "lvm"|"lvmthin")
+                            # LVM storage - use volume group name
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^$type: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*vgname" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="$storage"
+                            content="$type"
+                            ;;
+                        "pbs")
+                            # Proxmox Backup Server storage - remote, use datastore name
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^pbs: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*datastore" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="$storage"
+                            content="pbs-remote"
+                            ;;
+                        "rbd"|"cephfs")
+                            # Ceph storage - use pool/fs name
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^$type: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*pool\|^\s*fs-name" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="$storage"
+                            content="ceph"
+                            ;;
+                        *)
+                            # Unknown type - skip
+                            debug "Skipping unsupported storage type: $storage ($type)"
+                            continue
+                            ;;
+                    esac
+
+                    # Add storage to list if path was determined
+                    if [ -n "$path" ] && [ "$path" != "null" ]; then
                         datastores_found+=("PVE|$storage|$path|$type ($content)")
                         pve_count=$((pve_count + 1))
                         debug "Found PVE storage: $storage ($type) -> $path"
+                    else
+                        debug "Skipping storage with no path: $storage ($type)"
                     fi
                 fi
-            done < <(echo "$pve_storage_json" | grep -v '^$')
-            
+            done <<< "$pve_storage_raw"
+
             if [ $pve_count -gt 0 ]; then
                 success "Found $pve_count PVE storage location(s)"
             else
