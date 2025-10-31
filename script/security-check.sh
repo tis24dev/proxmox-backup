@@ -652,6 +652,7 @@ check_suspicious_processes() {
         "khungtaskd" "oom_reaper" "ksmd" "kauditd" "cpuhp" "idle_inject" "irq/" 
         "pool_workqueue" "spl_" "ecryptfs-" "txg_" "mmp" "dp_"
         "z_"
+        "arc_reap"
     )
     
     local suspicious_names=("ncat " "cryptominer" "miner" "xmrig" "kdevtmpfsi" "kinsing")
