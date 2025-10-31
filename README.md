@@ -3,19 +3,33 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Bash](https://img.shields.io/badge/Bash-4.4+-blue.svg)](https://www.gnu.org/software/bash/)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-green.svg)](https://www.proxmox.com/)
+[![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
+[![☕ Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://buymeacoffee.com/tis24dev)
 
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
 
-**First Install & Upgrade**
+**Install or Update (Stable)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**Remove & Clean Install**
+**Development Version (Latest Features)**
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
 ```
+
+**Forced Reinstall - Remove & Clean Install (Stable)**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall
+```
+
+**Forced Reinstall - Development Version**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall dev
+```
+
+> **Note:** The installer automatically detects existing installations and asks what to do. Use `--reinstall` only if you want to force a complete removal without prompts.
 
 ## 🎯 What does this script do?
 
@@ -75,6 +89,7 @@ With these backups you can **completely restore** your Proxmox system on a new s
 
 ### 📢 **Notifications and Monitoring**
 - **Email notifications** - Detailed email notifications with complete reports
+- **Cloud Email Service** - Centralized system to send email notifications
 - **Telegram notifications** - Rich Telegram notifications with emoji and formatting
 - **Simplified Telegram activation** - Unified Telegram activation with dedicated bot and unique code (10 seconds)
 - **Centralized Telegram infrastructure** - Currently running on temporary infrastructure, fully functional but will be expanded in the future. Future expansions should not cause any disruption to existing users.
@@ -96,24 +111,45 @@ With these backups you can **completely restore** your Proxmox system on a new s
 
 ### Installation Options
 
-#### 🔄 **Update Installation (Recommended)**
-*Preserves existing configuration, backups, and settings*
+#### 🔄 **Automatic Installation (Recommended)**
+*Smart installer that detects existing installations and asks what to do*
 
+**Stable version (main branch):**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**What is preserved:**
+**Development version (dev branch - latest features):**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
+```
+
+**How it works:**
+- 🔍 Automatically detects if an installation exists
+- 📋 If found, presents an interactive menu:
+  - **[1] Update** - Preserves all your data and settings
+  - **[2] Reinstall** - Complete fresh installation (requires typing `REMOVE-EVERYTHING`)
+  - **[3] Cancel** - Exit without changes
+- 🆕 If no installation exists, proceeds with fresh install automatically
+
+**What is preserved during Update:**
 - ✅ Configuration file (`backup.env`)
 - ✅ Server identity and security settings
 - ✅ Existing backups and logs
 - ✅ Custom configurations and credentials
+- ✅ Lock files and temporary data
 
-#### 🆕 **Fresh Installation**
-*Completely removes existing installation and starts fresh*
+#### 🔁 **Forced Reinstall (Advanced)**
+*Skips interactive menu and forces complete removal*
 
+**Stable version (main branch):**
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall
+```
+
+**Development version (dev branch):**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall dev
 ```
 
 **⚠️ Warning:** This will remove ALL existing data including:
@@ -121,14 +157,46 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 - ❌ Backups and logs
 - ❌ Server identity
 - ❌ All custom settings
+- ❌ Cron jobs and symlinks
 
 *Requires typing `REMOVE-EVERYTHING` to confirm*
 
+**When to use --reinstall:**
+- You want to start completely from scratch
+- You're troubleshooting a corrupted installation
+- You're moving to a new server identity
+- You want to bypass the interactive menu
+
+#### 📌 **Branch Information**
+
+The installation system supports two branches:
+
+- **main** - Stable, tested releases (recommended for production)
+- **dev** - Development branch with latest features (may contain untested code)
+
+The dev branch is useful for testing new features before they are released to the main branch.
+
+**Branch selection works with all modes:**
+```bash
+# Automatic mode with dev branch
+bash -c "$(curl -fsSL .../install.sh)" -- dev
+
+# Forced reinstall with dev branch
+bash -c "$(curl -fsSL .../install.sh)" -- --reinstall dev
+
+# Verbose mode for debugging
+bash -c "$(curl -fsSL .../install.sh)" -- --verbose
+```
+
 #### 📥 **Manual Installation**
 ```bash
-# Clone the repository
+# Clone the repository (main branch - stable)
 git clone https://github.com/tis24dev/proxmox-backup.git
 cd proxmox-backup
+
+# OR clone dev branch (latest features)
+# git clone -b dev https://github.com/tis24dev/proxmox-backup.git
+# cd proxmox-backup
 
 # Configure the system
 cp env/backup.env.example env/backup.env
@@ -172,17 +240,17 @@ proxmox-backup
 
 #### Installation Method Selection Guide
 
-**Choose Update Installation if:**
-- ✅ You have an existing installation
-- ✅ You want to preserve your configuration
-- ✅ You have important backups to maintain
-- ✅ You're doing regular updates
+**Use Default Automatic Mode (Recommended) if:**
+- ✅ You want the installer to detect and ask what to do
+- ✅ You're not sure if an installation already exists
+- ✅ You want to choose between update or reinstall interactively
+- ✅ You prefer a guided installation process
 
-**Choose Fresh Installation if:**
-- ❌ You want to start completely from scratch
-- ❌ You're troubleshooting a corrupted installation
-- ❌ You're moving to a new server identity
-- ❌ You don't mind losing existing data
+**Use --reinstall Flag if:**
+- ⚡ You want to force a complete reinstallation without prompts
+- ⚡ You're running automated deployment scripts
+- ⚡ You know for certain you want a fresh start
+- ⚡ You want to bypass all interactive confirmations (except REMOVE-EVERYTHING)
 
 ## 📊 Project Structure
 
@@ -290,11 +358,20 @@ This project is distributed under the MIT license. See the `LICENSE` file for mo
 
 ### Installation Commands
 ```bash
-# Update (preserves data) - RECOMMENDED
+# Automatic installation (detects existing and asks) - RECOMMENDED - Stable
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 
-# Fresh installation (removes everything)
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+# Automatic installation (detects existing and asks) - Development
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
+
+# Forced reinstall (removes everything without asking) - Stable
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall
+
+# Forced reinstall (removes everything without asking) - Development
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall dev
+
+# Verbose mode for debugging - Stable
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --verbose
 ```
 
 ### System Commands

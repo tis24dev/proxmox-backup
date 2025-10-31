@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Security Check Script
 # File: security-check.sh
-# Version: 1.2.1
+# Version: 1.2.2
 # Last Modified: 2025-10-23
-# Changes: Improved log
+# Changes: Added trust file
 ##
 # Script to verify backup security
 # This script verifies permissions and ownership of files and folders
@@ -440,14 +440,14 @@ check_critical_files() {
     # File critici che devono sempre esistere
     declare -A critical_files=(
         ["$BASE_DIR/script/proxmox-backup.sh"]="700:root:root"
-	["$BASE_DIR/script/server-id-manager.sh"]="700:root:root"
+		["$BASE_DIR/script/server-id-manager.sh"]="700:root:root"
         ["$BASE_DIR/script/fix-permissions.sh"]="700:root:root"
         ["$BASE_DIR/env/backup.env"]="400:root:root"
         ["$BASE_DIR/secure_account/setup_gdrive.sh"]="700:root:root"
-	["$BASE_DIR/lib/backup_collect.sh"]="400:root:root"
-	["$BASE_DIR/lib/backup_collect_pbspve.sh"]="400:root:root"
+		["$BASE_DIR/lib/backup_collect.sh"]="400:root:root"
+		["$BASE_DIR/lib/backup_collect_pbspve.sh"]="400:root:root"
         ["$BASE_DIR/lib/backup_create.sh"]="400:root:root"
-	["$BASE_DIR/lib/backup_manager.sh"]="400:root:root"
+		["$BASE_DIR/lib/backup_manager.sh"]="400:root:root"
         ["$BASE_DIR/lib/backup_verify.sh"]="400:root:root"
         ["$BASE_DIR/lib/core.sh"]="400:root:root"
         ["$BASE_DIR/lib/environment.sh"]="400:root:root"
@@ -459,6 +459,7 @@ check_critical_files() {
         ["$BASE_DIR/lib/utils.sh"]="400:root:root"
         ["$BASE_DIR/lib/utils_counting.sh"]="400:root:root"
         ["$BASE_DIR/lib/metrics_collect.sh"]="400:root:root"
+        ["$BASE_DIR/lib/email_relay.sh"]="400:root:root"
     )
     
     # File opzionali di configurazione
@@ -553,7 +554,7 @@ check_unauthorized_files() {
     log_step "Checking for unauthorized files"
     
     local secure_dirs=("$BASE_DIR/script" "$BASE_DIR/secure_account" "$BASE_DIR/lib")
-    local authorized_files=("proxmox-backup.sh" "security-check.sh" "fix-permissions.sh" "proxmox-restore.sh" "gdrive.conf" "get_gdrive_token.sh" "setup_gdrive.sh" "README.md" "pbs1.json" "backup_collect.sh" "backup_create.sh" "backup_manager.sh" "backup_verify.sh" "core.sh" "environment.sh" "log.sh" "metrics.sh" "notify.sh" "security.sh" "storage.sh" "utils.sh" "server-id-manager.sh" "utils_counting.sh" "metrics_collect.sh" "backup_collect_pbspve.sh")
+    local authorized_files=("proxmox-backup.sh" "security-check.sh" "fix-permissions.sh" "proxmox-restore.sh" "gdrive.conf" "get_gdrive_token.sh" "setup_gdrive.sh" "README.md" "pbs1.json" "backup_collect.sh" "backup_create.sh" "backup_manager.sh" "backup_verify.sh" "core.sh" "environment.sh" "log.sh" "metrics.sh" "notify.sh" "security.sh" "storage.sh" "utils.sh" "email_relay.sh" "server-id-manager.sh" "utils_counting.sh" "metrics_collect.sh" "backup_collect_pbspve.sh")
     local unauthorized=0
     
     for dir in "${secure_dirs[@]}"; do
@@ -882,6 +883,7 @@ update_script_hashes() {
         "$BASE_DIR/lib/utils_counting.sh"
         "$BASE_DIR/lib/utils.sh"
         "$BASE_DIR/lib/metrics_collect.sh"
+        "$BASE_DIR/lib/email_relay.sh"
     )
     
     # File opzionali per aggiornamento hash (solo se esistono)

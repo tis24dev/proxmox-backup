@@ -819,6 +819,27 @@ log_summary() {
     fi
     
     info "Duration: $BACKUP_DURATION_FORMATTED"
+
+    # Prefer shared helper if available to keep MAC detection consistent across outputs
+    local server_mac_address=""
+    if command -v get_primary_mac_address >/dev/null 2>&1; then
+        server_mac_address=$(get_primary_mac_address)
+    else
+        # Fallback: resolve MAC from default route interface or first non-loopback interface
+        local primary_iface
+        primary_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -n1)
+        if [ -n "$primary_iface" ]; then
+            server_mac_address=$(ip link show "$primary_iface" 2>/dev/null | awk '/link\/ether/ {print $2}')
+        fi
+        if [ -z "$server_mac_address" ]; then
+            primary_iface=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+            if [ -n "$primary_iface" ]; then
+                server_mac_address=$(ip link show "$primary_iface" 2>/dev/null | awk '/link\/ether/ {print $2}')
+            fi
+        fi
+    fi
+    [ -z "$server_mac_address" ] && server_mac_address="unknown"
+    info "Server MAC Address: $server_mac_address"
     info "Server Unique ID: ${SERVER_ID:-UNKNOWN}"
     info "Exit Status: ${EXIT_CODE:-unknown} ${BACKUP_STATUS_EMOJI:-❓}"
     echo "==============================================================="

@@ -83,32 +83,61 @@ Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Bac
 
 ### Installation Methods
 
-#### 🔄 **Method 1: Update Installation (Recommended)**
-*Preserves existing configuration, backups, and settings*
+#### 🔄 **Method 1: Automatic Installation (Recommended)**
+*Smart installer that detects existing installations and presents interactive options*
 
+**Stable version (main branch):**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**Features:**
+**Development version (dev branch - latest features):**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
+```
+
+**How the installer works:**
+1. 🔍 **Automatic Detection** - Scans for existing installation in `/opt/proxmox-backup/`
+2. 📋 **Interactive Menu** (if installation found):
+   - **[1] Update** - Preserves all data and settings, updates code only
+   - **[2] Reinstall** - Complete fresh installation (requires `REMOVE-EVERYTHING` confirmation)
+   - **[3] Cancel** - Exit without making any changes
+3. 🆕 **Direct Installation** (if no installation found) - Proceeds with fresh install automatically
+
+**Features during Update (Option 1):**
 - ✅ **Preserves configuration** (`backup.env`) with all your custom settings
 - ✅ **Preserves server identity** (`.server_identity`) maintaining backup continuity
 - ✅ **Preserves existing backups** and logs in their original locations
 - ✅ **Preserves security settings** (`secure_account/`) including credentials
+- ✅ **Preserves lock files** and temporary data directories
 - ✅ **Updates code only** while maintaining all data and configurations
-- ✅ **Safe update process** with automatic rollback on errors
+- ✅ **Safe update process** with backup verification before removal
+
+**Additional flags:**
+- `--verbose` - Show detailed output during installation (useful for debugging)
+- `--reinstall` - Skip interactive menu and force complete reinstall (see Method 2)
 
 **When to use:**
-- For updating existing installations
-- When you want to preserve your current configuration
-- For regular maintenance and security updates
-- When you have important backups and logs to maintain
+- ✅ First-time installation on new system
+- ✅ Regular updates and maintenance
+- ✅ When you're not sure what mode you need
+- ✅ When you want guided installation process
 
-#### 🆕 **Method 2: Fresh Installation**
-*Completely removes existing installation and starts fresh*
+**Branch selection:**
+- **main** - Stable, tested releases (recommended for production)
+- **dev** - Development branch with latest features (may contain untested code)
 
+#### 🔁 **Method 2: Forced Reinstall (Advanced)**
+*Skips interactive menu and forces complete removal*
+
+**Stable version (main branch):**
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall
+```
+
+**Development version (dev branch - latest features):**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall dev
 ```
 
 **⚠️ CRITICAL WARNING:**
@@ -117,28 +146,44 @@ This method will **COMPLETELY REMOVE**:
 - ❌ **Server identity** (new backups will have different identity)
 - ❌ **All existing backups** and logs
 - ❌ **All security settings** and credentials
+- ❌ **Cron jobs** and system symlinks
 - ❌ **Everything** in `/opt/proxmox-backup/`
 
 **Safety measures:**
+- Creates temporary backup in `/tmp/` before removal
 - Requires typing `REMOVE-EVERYTHING` to confirm
 - Shows detailed warning of what will be removed
-- Removes cron jobs and system symlinks
-- Forces removal of protected files
-- Automatic cleanup of temporary files
+- Removes cron jobs and system symlinks automatically
+- Forces removal of protected/immutable files
+- Verifies backup integrity before proceeding
 
 **When to use:**
-- For completely new installations
-- When you want to start with default settings
-- For troubleshooting corrupted installations
-- When moving to a new server identity
+- ⚡ Completely new installations bypassing the menu
+- ⚡ Troubleshooting corrupted installations
+- ⚡ Moving to a new server identity
+- ⚡ Automated deployment scripts
+- ⚡ When you want to start with default settings
+
+**Combining flags:**
+```bash
+# Forced reinstall with dev branch
+bash -c "$(curl -fsSL .../install.sh)" -- --reinstall dev
+
+# Forced reinstall with verbose output
+bash -c "$(curl -fsSL .../install.sh)" -- --reinstall --verbose
+```
 
 #### 📥 **Method 3: Manual Installation**
 *For developers or advanced users*
 
 ```bash
-# Clone repository
+# Clone repository (main branch - stable)
 git clone https://github.com/tis24dev/proxmox-backup.git
 cd proxmox-backup
+
+# OR clone dev branch (latest features)
+# git clone -b dev https://github.com/tis24dev/proxmox-backup.git
+# cd proxmox-backup
 
 # Configure system
 cp env/backup.env.example env/backup.env

@@ -2,11 +2,15 @@
 ##
 # Proxmox Backup System - Notification Library
 # File: notify.sh
-# Version: 0.4.1
-# Last Modified: 2025-10-25
-# Changes: 
+# Version: 0.5.2
+# Last Modified: 2025-10-30
+# Changes: Fix name process
 ##
+
 # Proxmox backup notification system
+
+# Source email relay functions
+source "${BASE_DIR}/lib/email_relay.sh"
 
 # Central management of all notifications
 send_notifications() {
@@ -210,6 +214,9 @@ send_email_notification() {
     # Create email content
     create_email_body "$status" "$status_color"
 
+    # Build structured report data for Cloudflare Worker
+    collect_email_report_data "$status" "$message"
+
     # Function to encode email subject (as in working script)
     encode_subject() {
         local subject="$1"
@@ -220,34 +227,80 @@ send_email_notification() {
     # Encode subject
     local encoded_subject=$(encode_subject "$subject")
 
-    local list_id_header
-    if [ -n "${LIST_ID_HEADER:-}" ]; then
-        list_id_header="$LIST_ID_HEADER"
-    else
-        list_id_header="<backup-reports.$(hostname -f 2>/dev/null || hostname)>"
+    # Determine delivery method
+    local delivery_method="${EMAIL_DELIVERY_METHOD:-sendmail}"
+    local fallback_enabled="${EMAIL_FALLBACK_SENDMAIL:-true}"
+
+    debug "Email delivery method: $delivery_method"
+    debug "Fallback to sendmail: $fallback_enabled"
+    debug "Recipient: $recipient"
+
+    # Normalize delivery method for backward compatibility
+    # "ses" (legacy) is treated as "relay"
+    if [ "$delivery_method" = "ses" ]; then
+        delivery_method="relay"
+        debug "EMAIL_DELIVERY_METHOD='ses' is deprecated, using 'relay'"
     fi
-    
-    # Send email using sendmail with working script format
-    if command -v /usr/sbin/sendmail >/dev/null 2>&1; then
-        info "Send email to $recipient"
-        if echo -e "Subject: ${encoded_subject}\nTo: ${recipient}\nList-ID: ${list_id_header}\nAuto-Submitted: auto-generated\nX-Auto-Response-Suppress: All\nMIME-Version: 1.0\nContent-Type: text/html; charset=UTF-8\n\n$email_body" | /usr/sbin/sendmail -t "$recipient"; then
-            success "Email notification sent successfully to $recipient"
-            EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS
-            return 0
-        else
-            warning "Unable to send email notification to $recipient (sendmail error)"
-            debug "Checking mail configuration..."
-            if [ ! -f "/etc/mail/sendmail.cf" ] && [ ! -f "/etc/postfix/main.cf" ]; then
-                warning "Email configuration files not found. Mail server might not be configured"
+
+    # Attempt primary delivery method
+    case "$delivery_method" in
+        "relay")
+            # Primary: Cloud relay service via Cloudflare Worker
+            info "Sending email via cloud relay service"
+
+            if send_email_via_relay "$recipient" "$subject" "$email_body" "$EMAIL_REPORT_DATA_JSON"; then
+                success "Email delivered successfully via cloud relay"
+                EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS
+                return 0
+            else
+                warning "Failed to send email via cloud relay"
+
+                # Attempt fallback if enabled
+                if [ "$fallback_enabled" = "true" ]; then
+                    warning "Attempting fallback to sendmail"
+
+                    if send_email_via_sendmail "$recipient" "$encoded_subject" "$email_body"; then
+                        success "Email sent successfully via sendmail (fallback)"
+                        EXIT_EMAIL_NOTIFICATION=$EXIT_WARNING  # Warning because primary method failed
+                        return 0
+                    else
+                        error "Both cloud relay and sendmail delivery failed"
+                        EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
+                        return 1
+                    fi
+                else
+                    error "Email delivery failed and fallback is disabled"
+                    warning "To enable fallback, set EMAIL_FALLBACK_SENDMAIL=true in backup.env"
+                    EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
+                    return 1
+                fi
             fi
+            ;;
+
+        "sendmail")
+            # Direct sendmail (cloud relay disabled)
+            info "Sending email via local sendmail (cloud relay disabled)"
+
+            if send_email_via_sendmail "$recipient" "$encoded_subject" "$email_body"; then
+                success "Email sent successfully via sendmail"
+                EXIT_EMAIL_NOTIFICATION=$EXIT_SUCCESS
+                return 0
+            else
+                error "Failed to send email via sendmail"
+                EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
+                return 1
+            fi
+            ;;
+
+        *)
+            # Invalid configuration
+            error "Invalid EMAIL_DELIVERY_METHOD: $delivery_method"
+            warning "Valid options: 'relay' (or legacy 'ses') or 'sendmail'"
+            warning "Check EMAIL_DELIVERY_METHOD in backup.env"
             EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
             return 1
-        fi
-    else
-        warning "sendmail command not found. Install sendmail or postfix"
-        EXIT_EMAIL_NOTIFICATION=$EXIT_ERROR
-        return 1
-    fi
+            ;;
+    esac
 }
 
 # Prepare data for email using global variables from collect_metrics
@@ -362,7 +415,12 @@ create_email_body() {
             error_summary_color="#FF9800"  # Orange if there are warnings
         fi
     fi
-	
+
+    # Get server MAC address for display
+    local SERVER_MAC_ADDRESS
+    SERVER_MAC_ADDRESS=$(get_primary_mac_address)
+    [ -z "$SERVER_MAC_ADDRESS" ] && SERVER_MAC_ADDRESS="N/A"
+
     # Create a clean and modern HTML email template
     email_body="<!DOCTYPE html>
 <html>
@@ -652,6 +710,10 @@ create_email_body() {
                         <td>${COMPRESSION_MODE}</td>
                     </tr>
                     <tr>
+                        <td>Server MAC Address</td>
+                        <td>${SERVER_MAC_ADDRESS}</td>
+                    </tr>
+                    <tr>
                         <td>Server ID</td>
                         <td>${SERVER_ID:-N/A}</td>
                     </tr>
@@ -702,6 +764,262 @@ create_email_body() {
     </div>
 </body>
 </html>"
+}
+
+# Collect structured data for worker-side rendering
+collect_email_report_data() {
+    local status="$1"
+    local message="$2"
+
+    # Storage metrics (local)
+    local local_space="N/A"
+    local local_used="N/A"
+    local local_free="N/A"
+    local local_percent="0%"
+    local local_percent_num=0
+
+    if [ -d "$LOCAL_BACKUP_PATH" ]; then
+        local df_output
+        df_output=$(df -h "$LOCAL_BACKUP_PATH" | tail -1)
+        local_space=$(echo "$df_output" | awk '{print $2}')
+        local_used=$(echo "$df_output" | awk '{print $3}')
+        local_free=$(echo "$df_output" | awk '{print $4}')
+        local_percent=$(echo "$df_output" | awk '{print $5}')
+        local_percent_num=$(echo "$local_percent" | tr -cd '0-9')
+        [[ -z "$local_percent_num" ]] && local_percent_num=0
+    fi
+
+    # Storage metrics (secondary)
+    local secondary_space="N/A"
+    local secondary_used="N/A"
+    local secondary_free="N/A"
+    local secondary_percent="0%"
+    local secondary_percent_num=0
+
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -d "$SECONDARY_BACKUP_PATH" ]; then
+        local df_secondary
+        df_secondary=$(df -h "$SECONDARY_BACKUP_PATH" | tail -1)
+        secondary_space=$(echo "$df_secondary" | awk '{print $2}')
+        secondary_used=$(echo "$df_secondary" | awk '{print $3}')
+        secondary_free=$(echo "$df_secondary" | awk '{print $4}')
+        secondary_percent=$(echo "$df_secondary" | awk '{print $5}')
+        secondary_percent_num=$(echo "$secondary_percent" | tr -cd '0-9')
+        [[ -z "$secondary_percent_num" ]] && secondary_percent_num=0
+    fi
+
+    # Metrics defaults
+    local files_included="${FILES_INCLUDED:-0}"
+    [[ "$files_included" =~ ^[0-9]+$ ]] || files_included=0
+
+    local file_missing="${FILE_MISSING:-0}"
+    [[ "$file_missing" =~ ^[0-9]+$ ]] || file_missing=0
+
+    local count_backup_primary="${COUNT_BACKUP_PRIMARY:-0}"
+    [[ "$count_backup_primary" =~ ^[0-9]+$ ]] || count_backup_primary=0
+
+    local count_backup_secondary="${COUNT_BACKUP_SECONDARY:-0}"
+    [[ "$count_backup_secondary" =~ ^[0-9]+$ ]] || count_backup_secondary=0
+
+    local count_backup_cloud="${COUNT_BACKUP_CLOUD:-0}"
+    [[ "$count_backup_cloud" =~ ^[0-9]+$ ]] || count_backup_cloud=0
+
+    # Log summary
+    local error_count=0
+    local warning_count=0
+    local log_categories_json="[]"
+
+    if [ -f "$LOG_FILE" ]; then
+        error_count=$(grep -c "\[ERROR\]" "$LOG_FILE" 2>/dev/null || echo "0")
+        warning_count=$(grep -c "\[WARNING\]" "$LOG_FILE" 2>/dev/null || echo "0")
+        [[ "$error_count" =~ ^[0-9]+$ ]] || error_count=0
+        [[ "$warning_count" =~ ^[0-9]+$ ]] || warning_count=0
+
+        # Parse error/warning categories for Worker
+        local -A category_counts
+        local -A category_types
+        local -A category_examples
+
+        # Process errors
+        while IFS= read -r line; do
+            local category=$(echo "$line" | sed -n 's/.*\[ERROR\] \([^:]*\).*/\1/p')
+            if [ -n "$category" ]; then
+                category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
+                category_types["$category"]="ERROR"
+                if [ -z "${category_examples["$category"]:-}" ]; then
+                    if echo "$line" | grep -q "\[ERROR\] [^:]*:"; then
+                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[ERROR\] [^:]*: \(.*\)/\1/' | cut -c 1-100)
+                    else
+                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[ERROR\] \(.*\)/\1/' | cut -c 1-100)
+                    fi
+                fi
+            fi
+        done < <(grep "\[ERROR\]" "$LOG_FILE" 2>/dev/null || true)
+
+        # Process warnings
+        while IFS= read -r line; do
+            local category=""
+            if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
+                category=$(echo "$line" | sed -n 's/.*\[WARNING\] \([^:]*\):.*/\1/p')
+            else
+                category=$(echo "$line" | sed -n 's/.*\[WARNING\] \(.*\)/\1/p')
+            fi
+
+            if [ -n "$category" ]; then
+                if [ -z "${category_types["$category"]:-}" ]; then
+                    category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
+                    category_types["$category"]="WARNING"
+                    if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
+                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[WARNING\] [^:]*: \(.*\)/\1/' | cut -c 1-100)
+                    else
+                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[WARNING\] \(.*\)/\1/' | cut -c 1-100)
+                    fi
+                elif [ "${category_types["$category"]}" = "WARNING" ]; then
+                    category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
+                fi
+            fi
+        done < <(grep "\[WARNING\]" "$LOG_FILE" 2>/dev/null || true)
+
+        # Build JSON array of categories
+        if [ ${#category_counts[@]} -gt 0 ]; then
+            local json_items=()
+            for cat in "${!category_counts[@]}"; do
+                local escaped_cat=$(echo "$cat" | sed 's/"/\\"/g')
+                local escaped_example=$(echo "${category_examples["$cat"]}" | sed 's/"/\\"/g')
+                json_items+=("{\"label\":\"$escaped_cat\",\"type\":\"${category_types["$cat"]}\",\"count\":${category_counts["$cat"]},\"example\":\"$escaped_example\"}")
+            done
+            log_categories_json="[$(IFS=,; echo "${json_items[*]}")]"
+        fi
+    fi
+
+    local total_issues=$((error_count + warning_count))
+
+    local script_version="${SCRIPT_VERSION:-0.0.0}"
+    local backup_date_str="${backup_date:-$(date '+%Y-%m-%d %H:%M:%S')}"
+    local server_id_value="${SERVER_ID:-}"
+    local status_color_value="${status_color:-#1976d2}"
+    local compression_ratio_value="${COMPRESSION_RATIO:-N/A}"
+    local telegram_status_value="${TELEGRAM_SERVER_STATUS:-N/A}"
+
+    # Build cloud display path
+    local cloud_display_path=""
+    if command -v rclone &> /dev/null && [ -n "${RCLONE_REMOTE:-}" ] && rclone listremotes | grep -q "^${RCLONE_REMOTE}:"; then
+        cloud_display_path="${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}"
+    fi
+
+    EMAIL_REPORT_DATA_JSON=$(jq -n \
+        --arg status "$status" \
+        --arg message "$message" \
+        --arg status_color "$status_color_value" \
+        --arg subject "$subject" \
+        --arg proxmox_type "$PROXMOX_TYPE" \
+        --arg hostname "$HOSTNAME" \
+        --arg server_id "$server_id_value" \
+        --arg backup_date "$backup_date_str" \
+        --arg script_version "$script_version" \
+        --arg emoji_primary "$EMOJI_PRI" \
+        --arg emoji_secondary "$EMOJI_SEC" \
+        --arg emoji_cloud "$EMOJI_CLO" \
+        --arg emoji_email "${EMOJI_EMAIL:-}" \
+        --arg backup_primary_status "$BACKUP_PRI_STATUS_STR" \
+        --arg backup_secondary_status "$BACKUP_SEC_STATUS_STR" \
+        --arg backup_cloud_status "$BACKUP_CLO_STATUS_STR" \
+        --arg backup_file_name "$backup_file_name" \
+        --arg backup_size "$backup_size" \
+        --arg duration "$BACKUP_DURATION_FORMATTED" \
+        --arg compression_ratio "$compression_ratio_value" \
+        --arg compression_type "$COMPRESSION_TYPE" \
+        --arg compression_level "$COMPRESSION_LEVEL" \
+        --arg compression_mode "$COMPRESSION_MODE" \
+        --arg telegram_status "$telegram_status_value" \
+        --arg local_space "$local_space" \
+        --arg local_used "$local_used" \
+        --arg local_free "$local_free" \
+        --arg local_percent "$local_percent" \
+        --arg secondary_space "$secondary_space" \
+        --arg secondary_used "$secondary_used" \
+        --arg secondary_free "$secondary_free" \
+        --arg secondary_percent "$secondary_percent" \
+        --arg cloud_path "$CLOUD_BACKUP_PATH" \
+        --arg cloud_display "$cloud_display_path" \
+        --arg local_path "$LOCAL_BACKUP_PATH" \
+        --arg secondary_path "$SECONDARY_BACKUP_PATH" \
+        --arg note "${EMAIL_SUBJECT_PREFIX:-}" \
+        --argjson files_included "$files_included" \
+        --argjson file_missing "$file_missing" \
+        --argjson error_count "$error_count" \
+        --argjson warning_count "$warning_count" \
+        --argjson total_issues "$total_issues" \
+        --arg log_file "$LOG_FILE" \
+        --argjson log_categories "$log_categories_json" \
+        --argjson local_percent_num "$local_percent_num" \
+        --argjson secondary_percent_num "$secondary_percent_num" \
+        --argjson count_backup_primary "$count_backup_primary" \
+        --argjson count_backup_secondary "$count_backup_secondary" \
+        --argjson count_backup_cloud "$count_backup_cloud" \
+        '{
+            status: $status,
+            status_message: $message,
+            status_color: $status_color,
+            subject: $subject,
+            proxmox_type: $proxmox_type,
+            hostname: $hostname,
+            server_id: $server_id,
+            backup_date: $backup_date,
+            script_version: $script_version,
+            emojis: {
+                primary: $emoji_primary,
+                secondary: $emoji_secondary,
+                cloud: $emoji_cloud,
+                email: $emoji_email
+            },
+            backup: {
+                primary: { status: $backup_primary_status, emoji: $emoji_primary, count: $count_backup_primary },
+                secondary: { status: $backup_secondary_status, emoji: $emoji_secondary, count: $count_backup_secondary },
+                cloud: { status: $backup_cloud_status, emoji: $emoji_cloud, count: $count_backup_cloud }
+            },
+            storage: {
+                local: {
+                    space: $local_space,
+                    used: $local_used,
+                    free: $local_free,
+                    percent: $local_percent,
+                    percent_num: $local_percent_num
+                },
+                secondary: {
+                    space: $secondary_space,
+                    used: $secondary_used,
+                    free: $secondary_free,
+                    percent: $secondary_percent,
+                    percent_num: $secondary_percent_num
+                }
+            },
+            metrics: {
+                backup_file_name: $backup_file_name,
+                files_included: $files_included,
+                file_missing: $file_missing,
+                duration: $duration,
+                backup_size: $backup_size,
+                compression_ratio: $compression_ratio,
+                compression_type: $compression_type,
+                compression_level: $compression_level,
+                compression_mode: $compression_mode,
+                telegram_status: $telegram_status
+            },
+            log_summary: {
+                errors: $error_count,
+                warnings: $warning_count,
+                total: $total_issues,
+                log_file: $log_file,
+                categories: $log_categories
+            },
+            paths: {
+                local: $local_path,
+                secondary: $secondary_path,
+                cloud: $cloud_path,
+                cloud_display: $cloud_display
+            },
+            notes: $note
+        }')
 }
 
 # Add error summary to email
