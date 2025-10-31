@@ -63,6 +63,15 @@ All notable changes to this project are documented in this file.
 **Fix**
 - Added lost funcion to inject email setting update
 
+## [1.2.3] - 2025-10-31 - Standalone Script: security-check.sh
+**Add**
+- Added PID display in warning messages for suspicious processes by name
+- Added PID and User display in warning messages for suspicious kernel processes
+**Fix**
+- Removed redundant final warning message "Found X potential suspicious processes!"
+- Improved clarity by showing essential process information (PIDs, User) in standard mode
+- Detailed process information still available via `--debug-level advanced` or `--extreme`
+
 ## [1.2.2] - 2025-10-28 - Standalone Script: security-check.sh
 **Add**
 - Added new secure files to the whitelist

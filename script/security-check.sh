@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Security Check Script
 # File: security-check.sh
-# Version: 1.2.2
+# Version: 1.2.3
 # Last Modified: 2025-10-23
-# Changes: Added trust file
+# Changes: Show name of suspicious processes; fix minor bugs
 ##
 # Script to verify backup security
 # This script verifies permissions and ownership of files and folders
@@ -661,7 +661,9 @@ check_suspicious_processes() {
     for proc in "${suspicious_names[@]}"; do
         local matches=$(ps aux | grep -v grep | grep "$proc" | grep -v "check_suspicious_processes")
         if [ -n "$matches" ]; then
-            log_warning "Potentially suspicious process found: \"$proc\""
+            # Extract PIDs from matches
+            local pids=$(echo "$matches" | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
+            log_warning "Potentially suspicious process found: \"$proc\" (PIDs: $pids)"
             # Only show detailed process information in debug mode
             if [[ "${DEBUG_LEVEL:-standard}" == "advanced" ]] || [[ "${DEBUG_LEVEL:-standard}" == "extreme" ]]; then
                 echo "$matches"
@@ -709,7 +711,7 @@ check_suspicious_processes() {
         fi
         
         if [ $is_legitimate -eq 0 ]; then
-            log_warning "Possible suspicious kernel process: $process_name"
+            log_warning "Possible suspicious kernel process: $process_name (PID: $pid, User: $user_value)"
             # Only show detailed process information in debug mode
             if [[ "${DEBUG_LEVEL:-standard}" == "advanced" ]] || [[ "${DEBUG_LEVEL:-standard}" == "extreme" ]]; then
                 echo "$full_command (user: $user_value, state: $state_value, vsz: $vsz_value, pid: $pid)"
@@ -850,11 +852,9 @@ check_suspicious_processes() {
         fi
         found=$((found + 1))
     fi
-    
+
     if [ $found -eq 0 ]; then
         log_info "No suspicious processes found"
-    else
-        log_warning "Found $found potential suspicious processes!"
     fi
 }
 
