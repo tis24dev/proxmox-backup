@@ -270,6 +270,14 @@ detect_all_datastores() {
                             fi
                             [ -z "$path" ] && path="/mnt/pve/$storage"
                             ;;
+                        "btrfs")
+                            # Btrfs storage - get path from config
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^btrfs: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*path" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="/mnt/btrfs/$storage"
+                            content="btrfs"
+                            ;;
                         "zfspool")
                             # ZFS pool storage - use pool name as identifier
                             if [ -f "/etc/pve/storage.cfg" ]; then
@@ -286,6 +294,14 @@ detect_all_datastores() {
                             [ -z "$path" ] && path="$storage"
                             content="$type"
                             ;;
+                        "iscsi"|"iscsidirect")
+                            # iSCSI storage - use target name
+                            if [ -f "/etc/pve/storage.cfg" ]; then
+                                path=$(grep -A 10 "^$type: $storage" /etc/pve/storage.cfg | grep -m 1 "^\s*target" | awk '{print $2}' 2>/dev/null)
+                            fi
+                            [ -z "$path" ] && path="$storage"
+                            content="iscsi-remote"
+                            ;;
                         "pbs")
                             # Proxmox Backup Server storage - remote, use datastore name
                             if [ -f "/etc/pve/storage.cfg" ]; then
@@ -301,6 +317,11 @@ detect_all_datastores() {
                             fi
                             [ -z "$path" ] && path="$storage"
                             content="ceph"
+                            ;;
+                        "custom")
+                            # Custom storage backend - use storage name as identifier
+                            path="$storage"
+                            content="custom"
                             ;;
                         *)
                             # Unknown type - skip
