@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.0] - 2025-10-31 - Installation System: Branch Selection Feature
+### Standalone Script: install.sh
+**Add**
+- Branch selection support: add `-- dev` parameter to install development branch
+- Dynamic GitHub URL generation based on selected branch
+- Remote branch existence verification before clone with helpful error messages
+- Branch verification after git clone with mismatch warning
+- Branch display in installation banner with dev warning
+**Fix**
+- Modified `git clone` to use `-b "$INSTALL_BRANCH"` flag
+- Updated all hardcoded `/main/` URLs to use `${INSTALL_BRANCH}` variable
+
+### Standalone Script: new-install.sh
+**Add**
+- Branch selection support with same syntax as install.sh
+- Remote branch existence verification before removal to prevent data loss
+- Pass branch parameter to install.sh: `bash -s -- "$INSTALL_BRANCH"`
+**Fix**
+- Updated usage messages to show dev branch examples
+
 ## [1.2.1] - 2025-10-28 - Standalone Script: install.sh
 **Fix**
 - Added lost funcion to inject email setting update

@@ -9,14 +9,24 @@
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
 
-**First Install & Upgrade**
+**First Install & Upgrade (Stable)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**Remove & Clean Install**
+**Development Version (Latest Features)**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
+```
+
+**Remove & Clean Install (Stable)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+```
+
+**Remove & Clean Install (Development)**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)" -- dev
 ```
 
 ## 🎯 What does this script do?
@@ -102,8 +112,14 @@ With these backups you can **completely restore** your Proxmox system on a new s
 #### 🔄 **Update Installation (Recommended)**
 *Preserves existing configuration, backups, and settings*
 
+**Stable version (main branch):**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+```
+
+**Development version (dev branch - latest features):**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
 ```
 
 **What is preserved:**
@@ -115,8 +131,14 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 #### 🆕 **Fresh Installation**
 *Completely removes existing installation and starts fresh*
 
+**Stable version (main branch):**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+```
+
+**Development version (dev branch - latest features):**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)" -- dev
 ```
 
 **⚠️ Warning:** This will remove ALL existing data including:
@@ -127,11 +149,24 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 
 *Requires typing `REMOVE-EVERYTHING` to confirm*
 
+#### 📌 **Branch Information**
+
+The installation system supports two branches:
+
+- **main** - Stable, tested releases (recommended for production)
+- **dev** - Development branch with latest features (may contain untested code)
+
+The dev branch is useful for testing new features before they are released to the main branch.
+
 #### 📥 **Manual Installation**
 ```bash
-# Clone the repository
+# Clone the repository (main branch - stable)
 git clone https://github.com/tis24dev/proxmox-backup.git
 cd proxmox-backup
+
+# OR clone dev branch (latest features)
+# git clone -b dev https://github.com/tis24dev/proxmox-backup.git
+# cd proxmox-backup
 
 # Configure the system
 cp env/backup.env.example env/backup.env
@@ -293,11 +328,17 @@ This project is distributed under the MIT license. See the `LICENSE` file for mo
 
 ### Installation Commands
 ```bash
-# Update (preserves data) - RECOMMENDED
+# Update (preserves data) - RECOMMENDED - Stable
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 
-# Fresh installation (removes everything)
+# Update (preserves data) - Development
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
+
+# Fresh installation (removes everything) - Stable
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+
+# Fresh installation (removes everything) - Development
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)" -- dev
 ```
 
 ### System Commands

@@ -12,11 +12,51 @@
 # Fresh installation script for Proxmox Backup System
 # WARNING: This script will completely remove existing installation
 #
-# Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+# Usage:
+#   Standard installation (main branch):
+#     bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)"
+#
+#   Development installation (dev branch):
+#     bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)" -- dev
 #
 # ============================================================================
 
 set -euo pipefail
+
+# Parse command line arguments for branch selection
+INSTALL_BRANCH=""
+
+for arg in "$@"; do
+    case $arg in
+        main|dev)
+            INSTALL_BRANCH="$arg"
+            ;;
+        *)
+            # Could be unknown option or branch name
+            if [[ -z "$INSTALL_BRANCH" ]]; then
+                INSTALL_BRANCH="$arg"
+            fi
+            ;;
+    esac
+done
+
+# Set default branch if not specified
+INSTALL_BRANCH="${INSTALL_BRANCH:-main}"
+
+# Validate branch name
+case "$INSTALL_BRANCH" in
+    main|dev)
+        # Valid branch
+        ;;
+    *)
+        echo -e "\033[0;31m[ERROR]\033[0m Invalid branch: '$INSTALL_BRANCH'. Allowed values: main, dev"
+        echo ""
+        echo "Usage:"
+        echo "  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)\""
+        echo "  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/new-install.sh)\" -- dev"
+        exit 1
+        ;;
+esac
 
 # Colors for output
 RED='\033[0;31m'
@@ -33,7 +73,10 @@ SCRIPT_NAME="Proxmox Backup System Fresh Installer"
 NEW_INSTALLER_VERSION="1.1.0"
 REPO_URL="https://github.com/tis24dev/proxmox-backup"
 INSTALL_DIR="/opt/proxmox-backup"
-INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh"
+
+# Branch-aware URL
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/tis24dev/proxmox-backup/${INSTALL_BRANCH}"
+INSTALL_SCRIPT_URL="${GITHUB_RAW_BASE}/install.sh"
 
 # Backup verification status
 BACKUP_VERIFIED=false
@@ -60,10 +103,34 @@ print_critical() {
     echo -e "${RED}${BOLD}[CRITICAL]${RESET} $1"
 }
 
+# Function to check if branch exists on remote repository
+check_remote_branch() {
+    local branch="$1"
+    print_status "Checking if branch '$branch' exists on remote repository..."
+
+    if ! git ls-remote --heads "$REPO_URL" "$branch" 2>/dev/null | grep -q "refs/heads/$branch"; then
+        print_error "Branch '$branch' does not exist on remote repository"
+        echo ""
+        print_status "Available branches:"
+        git ls-remote --heads "$REPO_URL" 2>/dev/null | sed 's/.*refs\/heads\//  - /' || echo "  Unable to fetch branch list"
+        echo ""
+        print_error "Please use an existing branch or wait until '$branch' branch is created"
+        return 1
+    fi
+
+    print_success "Branch '$branch' exists on remote repository"
+    return 0
+}
+
 print_header() {
     echo -e "${BOLD}${RED}================================${RESET}"
     echo -e "${BOLD}${RED}  $SCRIPT_NAME v$NEW_INSTALLER_VERSION${RESET}"
     echo -e "${BOLD}${RED}================================${RESET}"
+    echo
+    echo -e "${BOLD}${BLUE}Installing from branch: ${INSTALL_BRANCH}${RESET}"
+    if [[ "$INSTALL_BRANCH" == "dev" ]]; then
+        echo -e "${BOLD}${YELLOW}WARNING: You are installing the development branch${RESET}"
+    fi
     echo
 }
 
@@ -92,6 +159,7 @@ show_critical_warning() {
     echo
     echo -e "${BOLD}${GREEN}Regular update (preserves settings):${RESET}"
     echo -e "${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)\"${RESET}"
+    echo -e "${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)\" -- dev${RESET}"
     echo
 }
 
@@ -355,6 +423,7 @@ confirm_removal() {
         echo
         print_status "If you want to update preserving settings, use:"
         echo -e "${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)\"${RESET}"
+        echo -e "${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)\" -- dev${RESET}"
         exit 1
     fi
 
@@ -449,10 +518,10 @@ complete_removal() {
 run_fresh_installation() {
     print_status "Starting fresh installation..."
     
-    # Download and execute install.sh
-    print_status "Downloading and executing install.sh..."
-    
-    if curl -fsSL "$INSTALL_SCRIPT_URL" | bash; then
+    # Download and execute install.sh with branch parameter
+    print_status "Downloading and executing install.sh from branch: $INSTALL_BRANCH"
+
+    if curl -fsSL "$INSTALL_SCRIPT_URL" | bash -s -- "$INSTALL_BRANCH"; then
         print_status "Base installation completed"
     else
         print_error "Fresh installation failed"
@@ -476,6 +545,14 @@ main() {
 
     # Check if running as root
     check_root
+
+    # Check if branch exists before proceeding
+    echo
+    if ! check_remote_branch "$INSTALL_BRANCH"; then
+        print_error "Cannot proceed with installation - branch does not exist"
+        exit 1
+    fi
+    echo
 
     # Show critical warning
     show_critical_warning
