@@ -149,6 +149,17 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.6.2] - 2025-11-01
+### /lib/storage.sh
+**Add**
+- Added `supports_unix_ownership()` function to detect filesystem compatibility with Unix ownership
+- Added filesystem type detection before attempting `chown` operations on backup paths
+- Added informational messages for filesystems that do not support Unix ownership (FAT32, VFAT, EXFAT, NTFS)
+**Fix**
+- Eliminated spurious "Failed to set ownership" warnings on USB drives formatted with FAT32/EXFAT
+- Improved `set_permissions()` to skip ownership changes on incompatible filesystems instead of failing
+- Maintained warning behavior for legitimate ownership failures on supported filesystems (ext4, xfs, btrfs, etc.)
+
 ## [0.6.1] - 2025-10-31
 ###/lib/backup_collect_pbspve.sh
 **Fix**

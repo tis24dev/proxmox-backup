@@ -884,6 +884,54 @@ delete_oldest_local_backups() {
     done
 }
 
+# Check if a path supports Unix ownership (user/group permissions)
+# Returns 0 if ownership is supported, 1 if not supported
+supports_unix_ownership() {
+    local path="$1"
+
+    # If path doesn't exist, we can't check it
+    if [ ! -e "$path" ]; then
+        debug "Path $path does not exist, cannot check filesystem type"
+        return 0  # Assume it will support ownership when created
+    fi
+
+    # Get filesystem type using stat
+    local fstype
+    fstype=$(stat -f -c %T "$path" 2>/dev/null)
+
+    # If stat fails, try df as fallback
+    if [ -z "$fstype" ]; then
+        fstype=$(df -T "$path" 2>/dev/null | tail -n 1 | awk '{print $2}')
+    fi
+
+    debug "Filesystem type for $path: $fstype"
+
+    # Check if filesystem supports Unix ownership
+    case "$fstype" in
+        vfat|msdos|fat|exfat|ntfs)
+            # These filesystems do not support Unix ownership
+            debug "Filesystem $fstype does not support Unix ownership"
+            return 1
+            ;;
+        ext2|ext3|ext4|xfs|btrfs|zfs|jfs|reiserfs|f2fs)
+            # These filesystems support Unix ownership
+            debug "Filesystem $fstype supports Unix ownership"
+            return 0
+            ;;
+        nfs|nfs4|cifs|smb|smbfs)
+            # Network filesystems - may or may not support ownership depending on server
+            # We'll try to set ownership and let it fail if not supported
+            debug "Network filesystem $fstype - attempting ownership setting"
+            return 0
+            ;;
+        *)
+            # Unknown filesystem - assume it supports ownership
+            debug "Unknown filesystem $fstype - assuming ownership support"
+            return 0
+            ;;
+    esac
+}
+
 # Set permissions on backup directories
 set_permissions() {
     step "Setting permissions on backup directories"
@@ -925,29 +973,42 @@ set_permissions() {
     # Set permissions on primary backup path
     if check_directory_exists "$LOCAL_BACKUP_PATH"; then
         if id -u "${BACKUP_USER}" &>/dev/null && getent group "${BACKUP_GROUP}" &>/dev/null; then
-            debug "Setting ownership of $LOCAL_BACKUP_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
-            if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$LOCAL_BACKUP_PATH"; then
-                warning "Failed to set ownership on $LOCAL_BACKUP_PATH"
-                set_exit_code "warning"
+            # Check if filesystem supports Unix ownership before attempting chown
+            if supports_unix_ownership "$LOCAL_BACKUP_PATH"; then
+                debug "Setting ownership of $LOCAL_BACKUP_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
+                if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$LOCAL_BACKUP_PATH"; then
+                    warning "Failed to set ownership on $LOCAL_BACKUP_PATH"
+                    set_exit_code "warning"
+                fi
+
+                debug "Setting permissions on $LOCAL_BACKUP_PATH"
+                if ! chmod -R u=rwX,g=rX,o= "$LOCAL_BACKUP_PATH"; then
+                    warning "Failed to set permissions on $LOCAL_BACKUP_PATH"
+                    set_exit_code "warning"
+                fi
+            else
+                local fstype
+                fstype=$(stat -f -c %T "$LOCAL_BACKUP_PATH" 2>/dev/null || echo "unknown")
+                info "Skipping ownership on $LOCAL_BACKUP_PATH (filesystem: $fstype does not support Unix ownership)"
             fi
-            
-            debug "Setting permissions on $LOCAL_BACKUP_PATH"
-            if ! chmod -R u=rwX,g=rX,o= "$LOCAL_BACKUP_PATH"; then
-                warning "Failed to set permissions on $LOCAL_BACKUP_PATH"
-                set_exit_code "warning"
-            fi
-            
+
             # Also set permissions on the primary log path
-            debug "Setting ownership of $LOCAL_LOG_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
-            if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$LOCAL_LOG_PATH"; then
-                warning "Failed to set ownership on $LOCAL_LOG_PATH"
-                set_exit_code "warning"
-            fi
-            
-            debug "Setting permissions on $LOCAL_LOG_PATH"
-            if ! chmod -R u=rwX,g=rX,o= "$LOCAL_LOG_PATH"; then
-                warning "Failed to set permissions on $LOCAL_LOG_PATH"
-                set_exit_code "warning"
+            if supports_unix_ownership "$LOCAL_LOG_PATH"; then
+                debug "Setting ownership of $LOCAL_LOG_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
+                if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$LOCAL_LOG_PATH"; then
+                    warning "Failed to set ownership on $LOCAL_LOG_PATH"
+                    set_exit_code "warning"
+                fi
+
+                debug "Setting permissions on $LOCAL_LOG_PATH"
+                if ! chmod -R u=rwX,g=rX,o= "$LOCAL_LOG_PATH"; then
+                    warning "Failed to set permissions on $LOCAL_LOG_PATH"
+                    set_exit_code "warning"
+                fi
+            else
+                local fstype
+                fstype=$(stat -f -c %T "$LOCAL_LOG_PATH" 2>/dev/null || echo "unknown")
+                info "Skipping ownership on $LOCAL_LOG_PATH (filesystem: $fstype does not support Unix ownership)"
             fi
         else
             warning "Backup user or group does not exist, skipping permission change for primary backup"
@@ -966,29 +1027,42 @@ set_permissions() {
     # Set permissions on secondary backup path if it exists and secondary backup is enabled
     if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && check_directory_exists "$SECONDARY_BACKUP_PATH"; then
         if id -u "${BACKUP_USER}" &>/dev/null && getent group "${BACKUP_GROUP}" &>/dev/null; then
-            debug "Setting ownership of $SECONDARY_BACKUP_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
-            if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$SECONDARY_BACKUP_PATH"; then
-                warning "Failed to set ownership on $SECONDARY_BACKUP_PATH"
-                set_exit_code "warning"
+            # Check if filesystem supports Unix ownership before attempting chown
+            if supports_unix_ownership "$SECONDARY_BACKUP_PATH"; then
+                debug "Setting ownership of $SECONDARY_BACKUP_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
+                if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$SECONDARY_BACKUP_PATH"; then
+                    warning "Failed to set ownership on $SECONDARY_BACKUP_PATH"
+                    set_exit_code "warning"
+                fi
+
+                debug "Setting permissions on $SECONDARY_BACKUP_PATH"
+                if ! chmod -R u=rwX,g=rX,o= "$SECONDARY_BACKUP_PATH"; then
+                    warning "Failed to set permissions on $SECONDARY_BACKUP_PATH"
+                    set_exit_code "warning"
+                fi
+            else
+                local fstype
+                fstype=$(stat -f -c %T "$SECONDARY_BACKUP_PATH" 2>/dev/null || echo "unknown")
+                info "Skipping ownership on $SECONDARY_BACKUP_PATH (filesystem: $fstype does not support Unix ownership)"
             fi
-            
-            debug "Setting permissions on $SECONDARY_BACKUP_PATH"
-            if ! chmod -R u=rwX,g=rX,o= "$SECONDARY_BACKUP_PATH"; then
-                warning "Failed to set permissions on $SECONDARY_BACKUP_PATH"
-                set_exit_code "warning"
-            fi
-            
+
             # Also set permissions on the log path
-            debug "Setting ownership of $SECONDARY_LOG_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
-            if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$SECONDARY_LOG_PATH"; then
-                warning "Failed to set ownership on $SECONDARY_LOG_PATH"
-                set_exit_code "warning"
-            fi
-            
-            debug "Setting permissions on $SECONDARY_LOG_PATH"
-            if ! chmod -R u=rwX,g=rX,o= "$SECONDARY_LOG_PATH"; then
-                warning "Failed to set permissions on $SECONDARY_LOG_PATH"
-                set_exit_code "warning"
+            if supports_unix_ownership "$SECONDARY_LOG_PATH"; then
+                debug "Setting ownership of $SECONDARY_LOG_PATH to ${BACKUP_USER}:${BACKUP_GROUP}"
+                if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$SECONDARY_LOG_PATH"; then
+                    warning "Failed to set ownership on $SECONDARY_LOG_PATH"
+                    set_exit_code "warning"
+                fi
+
+                debug "Setting permissions on $SECONDARY_LOG_PATH"
+                if ! chmod -R u=rwX,g=rX,o= "$SECONDARY_LOG_PATH"; then
+                    warning "Failed to set permissions on $SECONDARY_LOG_PATH"
+                    set_exit_code "warning"
+                fi
+            else
+                local fstype
+                fstype=$(stat -f -c %T "$SECONDARY_LOG_PATH" 2>/dev/null || echo "unknown")
+                info "Skipping ownership on $SECONDARY_LOG_PATH (filesystem: $fstype does not support Unix ownership)"
             fi
         else
             warning "Backup user or group does not exist, skipping permission change"

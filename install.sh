@@ -1297,7 +1297,7 @@ prompt_install_action() {
         print_status "Choose installation mode:" >/dev/tty
         echo "  [1] Update existing installation (preserve data)" >/dev/tty
         echo "  [2] Reinstall from scratch (REMOVE-EVERYTHING)" >/dev/tty
-        echo "  [3] Cancel" >/dev/tty
+        echo "  [3] Exit" >/dev/tty
         read -p "Select option (1-3): " -r choice </dev/tty
         case "$choice" in
             1|2|3)
