@@ -149,6 +149,15 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.6.3] - 2025-11-01 - Bug Fix: Smart Chunking
+### /lib/backup_create.sh
+**Fix**
+- Removed problematic path sanitization in `perform_smart_chunking()` function (lines 955-956)
+- Fixed "Failed to chunk file" error caused by asymmetric sanitization between source and destination paths
+- Removed `sanitize_input()` calls for `rel_path` and `chunk_base` variables as files are already in trusted TEMP_DIR
+- Improved error logging: added stderr capture from split command with detailed error output in debug mode
+- Changed error handling from silent (`2>/dev/null`) to captured (`2>&1`) for better diagnostics
+
 ## [0.6.2] - 2025-11-01
 ### /lib/storage.sh
 **Add**

@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Creation Library
 # File: backup_create.sh
-# Version: 0.4.1
-# Last Modified: 2025-10-25
-# Changes: Added guard clause for unset TEMP_DIR in count_missing_files()
+# Version: 0.6.3
+# Last Modified: 2025-11-01
+# Changes: Removed problematic path sanitization
 ##
 # =============================================================================
 # BACKUP CREATION FUNCTIONS
@@ -952,9 +952,8 @@ perform_smart_chunking() {
             local chunk_base="$chunk_dir/$rel_path"
             local chunk_parent_dir
 
-            # Sanitize paths (now preserves brackets, parentheses, etc.)
-            rel_path=$(sanitize_input "$rel_path")
-            chunk_base=$(sanitize_input "$chunk_base")
+            # No sanitization needed - files are already in trusted TEMP_DIR
+            # created and controlled by this script
 
             # Create parent directory for chunks
             chunk_parent_dir=$(dirname "$chunk_base")
@@ -966,7 +965,8 @@ perform_smart_chunking() {
             debug "Chunking large file: $file ($(du -h "$file" 2>/dev/null | cut -f1))"
 
             # Split file into chunks with consistent boundaries
-            if split --numeric-suffixes=1 --additional-suffix=.chunk -b "$chunk_size" "$file" "$chunk_base." 2>/dev/null; then
+            local split_error
+            if split_error=$(split --numeric-suffixes=1 --additional-suffix=.chunk -b "$chunk_size" "$file" "$chunk_base." 2>&1); then
                 # Remove original file and create marker
                 if rm "$file" && touch "$file.chunked"; then
                     large_file_count=$((large_file_count + 1))
@@ -976,6 +976,9 @@ perform_smart_chunking() {
                 fi
             else
                 warning "Failed to chunk file: $file"
+                if [ -n "$split_error" ]; then
+                    debug "Split error details: $split_error"
+                fi
             fi
         done
     )
