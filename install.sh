@@ -55,7 +55,7 @@ init_constants() {
     RESET='\033[0m'
 
     SCRIPT_NAME="Proxmox Backup Installer"
-    INSTALLER_VERSION="2.0.1"
+    INSTALLER_VERSION="2.0.2"
     REPO_URL="https://github.com/tis24dev/proxmox-backup"
     INSTALL_DIR="/opt/proxmox-backup"
 
@@ -199,18 +199,30 @@ check_requirements() {
 }
 
 install_dependencies() {
-    print_status "Installing dependencies..."
-    if [[ "$VERBOSE_MODE" == "true" ]]; then
-        apt update
-    else
-        apt update >/dev/null 2>&1
-    fi
+    print_status "Checking dependencies..."
 
+    # Check which packages are missing
     local PACKAGES="curl wget git jq tar gzip xz-utils zstd pigz"
-    if [[ "$VERBOSE_MODE" == "true" ]]; then
-        apt install -y $PACKAGES
+    local MISSING_PACKAGES=""
+
+    for pkg in $PACKAGES; do
+        if ! dpkg -l | grep -q "^ii  $pkg "; then
+            MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+        fi
+    done
+
+    if [[ -n "$MISSING_PACKAGES" ]]; then
+        print_status "Installing missing packages:$MISSING_PACKAGES"
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            apt update
+            apt install -y $PACKAGES
+        else
+            apt update >/dev/null 2>&1
+            apt install -y $PACKAGES >/dev/null 2>&1
+        fi
+        print_success "Missing packages installed"
     else
-        apt install -y $PACKAGES >/dev/null 2>&1
+        print_success "All required packages already installed"
     fi
 
     if ! command -v rclone >/dev/null 2>&1; then
@@ -220,9 +232,8 @@ install_dependencies() {
         else
             curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1
         fi
+        print_success "rclone installed"
     fi
-
-    print_success "Dependencies installed"
 }
 
 # ---------------------------------------------------------------------------
