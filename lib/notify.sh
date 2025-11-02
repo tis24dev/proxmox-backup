@@ -880,7 +880,7 @@ collect_email_report_data() {
         done < <(grep "\[WARNING\]" "$LOG_FILE" 2>/dev/null || true)
 
         # Build JSON array of categories
-        if [ ${#category_counts[@]} -gt 0 ]; then
+        if [ "${#category_counts[@]:-0}" -gt 0 ]; then
             local json_items=()
             for cat in "${!category_counts[@]}"; do
                 local escaped_cat=$(echo "$cat" | sed 's/"/\\"/g')
