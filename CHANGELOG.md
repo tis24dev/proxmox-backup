@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.1] - 2025-11-02 - Unified Installer Architecture
+### Standalone Script: install.sh (Completely Refactored)
+**Fix**
+- Correct function order
+
 ## [2.0.0] - 2025-10-31 - Unified Installer Architecture
 ### Standalone Script: install.sh (Completely Refactored)
 **Add**

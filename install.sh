@@ -2,7 +2,7 @@
 ##
 # Proxmox Backup System - Unified Installer
 # File: install.sh
-# Version: 2.0.0
+# Version: 2.0.1
 # Purpose: Consolidated workflow replacing install.sh + new-install.sh
 ##
 
@@ -55,7 +55,7 @@ init_constants() {
     RESET='\033[0m'
 
     SCRIPT_NAME="Proxmox Backup Installer"
-    INSTALLER_VERSION="2.0.0"
+    INSTALLER_VERSION="2.0.1"
     REPO_URL="https://github.com/tis24dev/proxmox-backup"
     INSTALL_DIR="/opt/proxmox-backup"
 
@@ -103,6 +103,13 @@ check_root() {
 check_remote_branch() {
     local branch="$1"
     print_status "Verifying existence of branch '$branch'..."
+
+    # Check if git is installed
+    if ! command -v git >/dev/null 2>&1; then
+        print_error "git command not found. Please install git first or run install_dependencies()"
+        print_status "This is likely a bug - install_dependencies() should have been called before this function"
+        return 1
+    fi
 
     if ! git ls-remote --heads "$REPO_URL" "$branch" 2>/dev/null | grep -q "refs/heads/$branch"; then
         print_error "Branch '$branch' not found on remote repository"
@@ -1354,10 +1361,6 @@ main() {
     trap 'error_handler "${BASH_COMMAND}"' ERR
 
     check_root
-    if ! check_remote_branch "$INSTALL_BRANCH"; then
-        exit 1
-    fi
-    confirm_dev_branch
 
     if ! cd "$(dirname "$INSTALL_DIR")" 2>/dev/null; then
         cd /
@@ -1366,6 +1369,11 @@ main() {
 
     check_requirements
     install_dependencies
+
+    if ! check_remote_branch "$INSTALL_BRANCH"; then
+        exit 1
+    fi
+    confirm_dev_branch
 
     local state action
     state=$(detect_install_state)
