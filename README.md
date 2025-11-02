@@ -409,10 +409,11 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 
 ### System Commands
 ```bash
-proxmox-backup                 # Run backup
-proxmox-backup --dry-run       # Test mode
-proxmox-backup-security        # Security checks
-proxmox-backup-permissions     # Fix permissions
+proxmox-backup					# Run backup
+proxmox-backup --dry-run		# Test mode
+proxmox-backup-security			# Security checks
+proxmox-backup-permissions		# Fix permissions
+proxmox-restore					# Restore data from backup
 ```
 
 ---
