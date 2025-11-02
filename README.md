@@ -24,7 +24,6 @@
 - [📄 License](#-license)
 - [📞 Support](#-support)
 - [🔄 Quick Reference](#-quick-reference)
-- [📝 Changelog and Updates](#-changelog-and-updates)
 - [⭐ Stargazers](#-stargazers)
 
 ---
@@ -415,17 +414,6 @@ proxmox-backup --dry-run       # Test mode
 proxmox-backup-security        # Security checks
 proxmox-backup-permissions     # Fix permissions
 ```
-
----
-
-## 📝 Changelog and Updates
-
-### 2025-01-10
-- **Storage Monitoring**: Introduced the ability to configure custom thresholds for storage space warnings on primary and secondary storage
-- **Automatic Configuration**: New installations automatically include the storage monitoring section
-- **Smart Updates**: During updates, the system automatically detects if storage monitoring configuration is present and, if missing, inserts it while preserving the original file and creating an automatic backup
-- **Configuration**: Added `STORAGE_WARNING_THRESHOLD_PRIMARY` and `STORAGE_WARNING_THRESHOLD_SECONDARY` variables (default: 90%) to customize email warning thresholds
-- **Positioning**: Configuration is automatically inserted in the "3. PATHS AND STORAGE CONFIGURATION" section of the `backup.env` file
 
 ---
 
