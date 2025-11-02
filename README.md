@@ -8,6 +8,26 @@
 
 **Professional backup system for Proxmox Virtual Environment (PVE) and Proxmox Backup Server (PBS) settings and config and critical files** with advanced compression features, multi-storage support, intelligent notifications, and comprehensive monitoring.
 
+---
+
+## 📑 Table of Contents
+- [🎯 What does this script do?](#-what-does-this-script-do)
+- [✨ Key Features](#-key-features)
+- [🚀 Quick Installation](#-quick-installation)
+- [⚙️ Configuration](#️-configuration)
+- [📊 Project Structure](#-project-structure)
+- [🔧 Usage](#-usage)
+- [📈 Monitoring](#-monitoring)
+- [🛡️ Security](#️-security)
+- [📋 System Requirements](#-system-requirements)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+- [📞 Support](#-support)
+- [🔄 Quick Reference](#-quick-reference)
+- [📝 Changelog and Updates](#-changelog-and-updates)
+- [⭐ Stargazers](#-stargazers)
+
+---
 
 **Install or Update or Reinstall (Stable)**
 ```bash
@@ -18,6 +38,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
 ```
+
+---
 
 ## 🎯 What does this script do?
 
@@ -59,6 +81,8 @@ All options, files to be saved, and script functions are fully configurable and 
 #### 🚨 **Result**: 
 With these backups you can **completely restore** your Proxmox system on a new server, maintaining all configurations, VMs, containers and settings exactly as they were!
 
+---
+
 ## ✨ Key Features
 
 ### 🔄 **Backup and Storage**
@@ -80,7 +104,7 @@ With these backups you can **completely restore** your Proxmox system on a new s
 - **Cloud Email Service** - Centralized system to send email notifications
 - **Telegram notifications** - Rich Telegram notifications with emoji and formatting
 - **Simplified Telegram activation** - Unified Telegram activation with dedicated bot and unique code (10 seconds)
-- **Centralized Telegram infrastructure** - Currently running on temporary infrastructure, fully functional but will be expanded in the future. Future expansions should not cause any disruption to existing users.
+- **Centralized Telegram infrastructure** - Fully functional and expandable for future updates
 - **Prometheus metrics** - Complete metrics export for Prometheus/Grafana
 - **Advanced logging system** - Detailed multi-level logs with emoji and colors
 
@@ -89,6 +113,8 @@ With these backups you can **completely restore** your Proxmox system on a new s
 - **File integrity verification** - Integrity verification with SHA256 checksums and MD5 hashes
 - **Network security audit** - Firewall checks, open ports, network configurations
 - **Automatic permission management** - Automatic management of file and directory permissions
+
+---
 
 ## 🚀 Quick Installation
 
@@ -198,6 +224,8 @@ chmod 600 env/backup.env
 ./script/proxmox-backup.sh
 ```
 
+---
+
 ## ⚙️ Configuration
 
 The system uses a main configuration file (`env/backup.env`) with over **90 configurable options** organized in 9 sections:
@@ -240,6 +268,8 @@ proxmox-backup
 - ⚡ You know for certain you want a fresh start
 - ⚡ You want to bypass all interactive confirmations (except REMOVE-EVERYTHING)
 
+---
+
 ## 📊 Project Structure
 
 ```
@@ -257,6 +287,8 @@ proxmox-backup/
 ├── log/                    # System logs
 └── secure_account/         # Secure credentials
 ```
+
+---
 
 ## 🔧 Usage
 
@@ -291,6 +323,8 @@ cd /opt/proxmox-backup
 ./script/fix-permissions.sh
 ```
 
+---
+
 ## 📈 Monitoring
 
 ### Prometheus Metrics
@@ -306,12 +340,16 @@ The system automatically exports metrics for Prometheus:
 - **Email**: Detailed reports with complete statistics
 - **Logs**: Advanced logging system with multiple levels
 
+---
+
 ## 🛡️ Security
 
 - **Integrity verification**: SHA256 and MD5 checks on all files
 - **Security checks**: Permission verification, firewall, open ports
 - **Credential management**: Secure storage of credentials
 - **File audit**: Detection of unauthorized or modified files
+
+---
 
 ## 📋 System Requirements
 
@@ -321,19 +359,25 @@ The system automatically exports metrics for Prometheus:
 - **512MB RAM** (for compression operations)
 - **1GB free space** (for temporary backups)
 
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! To contribute:
 
-1. **Fork** the repository
-2. Create a **branch** for your feature (`git checkout -b feature/AmazingFeature`)
-3. **Commit** your changes (`git commit -m 'Add some AmazingFeature'`)
-4. **Push** to the branch (`git push origin feature/AmazingFeature`)
+1. **Fork** the repository  
+2. Create a **branch** for your feature (`git checkout -b feature/AmazingFeature`)  
+3. **Commit** your changes (`git commit -m 'Add some AmazingFeature'`)  
+4. **Push** to the branch (`git push origin feature/AmazingFeature`)  
 5. Open a **Pull Request**
+
+---
 
 ## 📄 License
 
 This project is distributed under the MIT license. See the `LICENSE` file for more details.
+
+---
 
 ## 📞 Support
 
@@ -341,6 +385,8 @@ This project is distributed under the MIT license. See the `LICENSE` file for mo
 - **Detailed configuration**: See `doc/CONFIGURATION.md`
 - **Issues**: Open an issue on GitHub for bugs or feature requests
 - **Discussions**: Use GitHub Discussions for general questions
+
+---
 
 ## 🔄 Quick Reference
 
@@ -370,6 +416,8 @@ proxmox-backup-security        # Security checks
 proxmox-backup-permissions     # Fix permissions
 ```
 
+---
+
 ## 📝 Changelog and Updates
 
 ### 2025-01-10
@@ -378,6 +426,8 @@ proxmox-backup-permissions     # Fix permissions
 - **Smart Updates**: During updates, the system automatically detects if storage monitoring configuration is present and, if missing, inserts it while preserving the original file and creating an automatic backup
 - **Configuration**: Added `STORAGE_WARNING_THRESHOLD_PRIMARY` and `STORAGE_WARNING_THRESHOLD_SECONDARY` variables (default: 90%) to customize email warning thresholds
 - **Positioning**: Configuration is automatically inserted in the "3. PATHS AND STORAGE CONFIGURATION" section of the `backup.env` file
+
+---
 
 ## ⭐ Stargazers
 
