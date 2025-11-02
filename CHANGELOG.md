@@ -154,6 +154,16 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.6.4] - 2025-11-02 - Bug Fix: Network Filesystems
+### /lib/storage.sh
+**Add**
+- Added `test_ownership_capability()` function to test chown support on network filesystems
+- Added automatic ownership capability testing for NFS/CIFS/SMB mounts before attempting chown operations
+**Fix**
+- Eliminated spurious "Failed to set ownership" warnings on NFS shares with root_squash or all_squash enabled
+- Improved `supports_unix_ownership()` to perform real-world chown testing on network filesystems
+- Network filesystems now automatically detect server configuration (root_squash vs no_root_squash) and adapt behavior accordingly
+
 ## [0.6.3] - 2025-11-01 - Bug Fix: Smart Chunking
 ### /lib/backup_create.sh
 **Fix**

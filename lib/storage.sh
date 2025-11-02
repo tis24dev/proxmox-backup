@@ -920,9 +920,15 @@ supports_unix_ownership() {
             ;;
         nfs|nfs4|cifs|smb|smbfs)
             # Network filesystems - may or may not support ownership depending on server
-            # We'll try to set ownership and let it fail if not supported
-            debug "Network filesystem $fstype - attempting ownership setting"
-            return 0
+            # Test if the server allows ownership changes (e.g., no root_squash on NFS)
+            debug "Network filesystem $fstype detected - testing ownership capability"
+            if test_ownership_capability "$path"; then
+                debug "Network filesystem supports ownership (no root_squash/all_squash detected)"
+                return 0
+            else
+                debug "Network filesystem does not support ownership (root_squash/all_squash detected)"
+                return 1
+            fi
             ;;
         *)
             # Unknown filesystem - assume it supports ownership
@@ -930,6 +936,40 @@ supports_unix_ownership() {
             return 0
             ;;
     esac
+}
+
+# Test if a path actually supports ownership changes (for network filesystems)
+# Returns 0 if chown works, 1 if it fails (e.g., due to root_squash on NFS)
+test_ownership_capability() {
+    local path="$1"
+    local test_file="${path}/.proxmox-backup-ownership-test.$$"
+
+    # Check if we can write to the directory
+    if [ ! -w "$path" ]; then
+        debug "Cannot write to $path for ownership test"
+        return 1
+    fi
+
+    # Create a test file
+    if ! touch "$test_file" 2>/dev/null; then
+        debug "Failed to create test file in $path"
+        return 1
+    fi
+
+    # Try to change ownership
+    local test_result=0
+    if ! chown "${BACKUP_USER}:${BACKUP_GROUP}" "$test_file" 2>/dev/null; then
+        debug "Ownership test failed: chown not supported on $path"
+        test_result=1
+    else
+        debug "Ownership test passed: chown supported on $path"
+        test_result=0
+    fi
+
+    # Cleanup test file
+    rm -f "$test_file" 2>/dev/null
+
+    return $test_result
 }
 
 # Set permissions on backup directories
