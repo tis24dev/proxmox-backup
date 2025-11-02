@@ -1348,6 +1348,32 @@ confirm_reinstall() {
     fi
 }
 
+prompt_telegram_notifications() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+
+    # Skip if config file doesn't exist
+    [[ -f "$config_file" ]] || return 0
+
+    echo
+    print_status "Telegram Notifications Setup"
+    read -p "Enable Telegram notifications? (takes only a few seconds) (y/N): " -r
+    echo
+
+    # Create backup before modification
+    local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$config_file" "$backup_file" 2>/dev/null || true
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Enable Telegram
+        sed -i 's/^TELEGRAM_ENABLED=.*/TELEGRAM_ENABLED="true"/' "$config_file"
+        print_success "Telegram notifications enabled"
+    else
+        # Disable Telegram
+        sed -i 's/^TELEGRAM_ENABLED=.*/TELEGRAM_ENABLED="false"/' "$config_file"
+        print_status "Telegram notifications disabled"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
@@ -1434,6 +1460,7 @@ main() {
     fi
 
     setup_configuration
+    prompt_telegram_notifications
     set_permissions
     run_fix_permissions
     run_security_check

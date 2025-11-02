@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.2] - 2025-11-02 - Interactive Telegram Notifications Setup
+### Standalone Script: install.sh
+**Add**
+- Interactive prompt during installation to enable/disable Telegram notifications
+- User-friendly message indicating setup "takes only a few seconds"
+- Automatic configuration of `TELEGRAM_ENABLED` variable in backup.env based on user choice
+- Automatic backup creation before modifying configuration file
+- New function `prompt_telegram_notifications()` integrated into installation workflow after `setup_configuration()`
+
 ## [2.0.1] - 2025-11-02 - Unified Installer Architecture
 ### Standalone Script: install.sh (Completely Refactored)
 **Fix**
