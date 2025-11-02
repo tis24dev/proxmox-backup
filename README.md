@@ -397,14 +397,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 # Automatic installation (detects existing and asks) - Development
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
 
-# Forced reinstall (removes everything without asking) - Stable
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall
-
-# Forced reinstall (removes everything without asking) - Development
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --reinstall dev
-
 # Verbose mode for debugging - Stable
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- --verbose
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -v
 ```
 
 ### System Commands
