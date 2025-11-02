@@ -1356,7 +1356,7 @@ prompt_telegram_notifications() {
 
     echo
     print_status "Telegram Notifications Setup"
-    read -p "Enable Telegram notifications? (takes only a few seconds) (y/N): " -r
+    read -p "Enable Telegram notifications? (takes only a few seconds) (y/N): " -r || true
     echo
 
     # Create backup before modification
