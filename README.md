@@ -273,18 +273,18 @@ proxmox-backup
 
 ```
 proxmox-backup/
-├── script/                 # Main executable scripts
-│   ├── proxmox-backup.sh      # Main orchestrator
-│   ├── security-check.sh      # Security checks
-│   ├── fix-permissions.sh     # Permission management
-│   └── server-id-manager.sh   # Server identity management
-├── lib/                    # Modular library system (17 files)
-├── env/                    # Main configuration
-│   └── backup.env          # Configuration file
-├── config/                 # System configurations
-├── backup/                 # Generated backup files
-├── log/                    # System logs
-└── secure_account/         # Secure credentials
+├── script/						# Main executable scripts
+│   ├── proxmox-backup.sh		# Main orchestrator
+│   ├── security-check.sh		# Security checks
+│   ├── fix-permissions.sh		# Permission management
+│   └── server-id-manager.sh	# Server identity management
+├── lib/						# Modular library system (17 files)
+├── env/						# Main configuration
+│   └── backup.env				# Configuration file
+├── config/						# System configurations
+├── backup/						# Generated backup files
+├── log/						# System logs
+└── secure_account/				# Secure credentials
 ```
 
 ---
@@ -293,15 +293,18 @@ proxmox-backup/
 
 ### System Commands (After Installation)
 ```bash
-# Main backup command
-proxmox-backup                 # Run backup
-proxmox-backup --dry-run       # Test mode
-proxmox-backup --verbose       # Detailed output
-proxmox-backup --check-only    # Check configuration only
+# Main backup commands
+proxmox-backup					# Run backup
+proxmox-backup --dry-run		# Test mode
+proxmox-backup -v				# Detailed output
+proxmox-backup --check-only		# Check configuration only
 
 # Utility commands
-proxmox-backup-security        # Security checks
-proxmox-backup-permissions     # Fix permissions
+proxmox-backup-security			# Security checks
+proxmox-backup-permissions		# Fix permissions
+
+# Recovery command
+proxmox-restore					# Restore data from backup
 ```
 
 ### Manual Usage (Development)
@@ -320,6 +323,9 @@ cd /opt/proxmox-backup
 
 # Permission management
 ./script/fix-permissions.sh
+
+# Restore Data
+./script/proxmox-restore.sh
 ```
 
 ---
