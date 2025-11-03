@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Metrics Library
 # File: metrics.sh
-# Version: 0.4.1
-# Last Modified: 2025-10-25
-# Changes: 
+# Version: 0.6.5
+# Last Modified: 2025-11-03
+# Changes: Fix metrix check
 ##
 
 # DEPENDENCY VALIDATION
@@ -1012,16 +1012,18 @@ report_metrics_error() {
     local error_message="$2"
     local error_level="${3:-warning}"
     
-    # Log the error
+    # Log the error with format compatible with notify.sh category extraction
+    # Format: "message [metrics.operation]" instead of "METRICS LEVEL [operation]: message"
+    # This ensures the actual error message is preserved in notifications
     case "$error_level" in
         "critical")
-            error "METRICS ERROR [$operation]: $error_message"
+            error "$error_message [metrics.$operation]"
             ;;
         "warning")
-            warning "METRICS WARNING [$operation]: $error_message"
+            warning "$error_message [metrics.$operation]"
             ;;
         *)
-            info "METRICS INFO [$operation]: $error_message"
+            info "$error_message [metrics.$operation]"
             ;;
     esac
     
@@ -1071,22 +1073,34 @@ validate_proxmox_environment() {
     
     # Validate storage paths exist
     local validation_errors=0
-    
+
     if [ -n "$LOCAL_BACKUP_PATH" ] && [ ! -d "$LOCAL_BACKUP_PATH" ]; then
-        report_metrics_error "validation" "Local backup path does not exist: $LOCAL_BACKUP_PATH" "warning"
+        report_metrics_error "validation" "Local backup path does not exist: $LOCAL_BACKUP_PATH (will be created automatically)" "warning"
         validation_errors=$((validation_errors + 1))
     fi
-    
-    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -n "$SECONDARY_BACKUP_PATH" ] && [ ! -d "$SECONDARY_BACKUP_PATH" ]; then
-        report_metrics_error "validation" "Secondary backup path does not exist: $SECONDARY_BACKUP_PATH" "warning"
-        validation_errors=$((validation_errors + 1))
+
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ] && [ -n "$SECONDARY_BACKUP_PATH" ]; then
+        # Check if secondary backup path exists
+        if [ ! -d "$SECONDARY_BACKUP_PATH" ]; then
+            # Check if parent directory exists to provide actionable feedback
+            local parent_dir
+            parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
+            if [ ! -d "$parent_dir" ]; then
+                report_metrics_error "validation" "Secondary backup parent directory does not exist: $parent_dir - Create it with: mkdir -p $parent_dir" "warning"
+            else
+                report_metrics_error "validation" "Secondary backup path does not exist: $SECONDARY_BACKUP_PATH (will be created if parent exists)" "warning"
+            fi
+            validation_errors=$((validation_errors + 1))
+        fi
     fi
-    
+
+    # Return status based on validation errors
+    # Detailed warnings are already logged by report_metrics_error() above
+    # No need for redundant summary message
     if [ "$validation_errors" -gt 0 ]; then
-        warning "Proxmox environment validation completed with $validation_errors warnings"
         return 2
     fi
-    
+
     debug "Proxmox environment validation successful"
     return 0
 }
@@ -1108,12 +1122,12 @@ initialize_metrics_module() {
     
     # Set up signal handlers
     setup_metrics_signal_handlers
-    
+
     # Validate environment
-    if ! validate_proxmox_environment; then
-        warning "Metrics module initialized with environment warnings"
-    fi
-    
+    # Detailed warnings are logged by validate_proxmox_environment() itself
+    # No need for redundant summary message here
+    validate_proxmox_environment
+
     # Initialize Prometheus metrics if enabled
     if [ "$PROMETHEUS_ENABLED" == "true" ]; then
         if ! initialize_prometheus_metrics; then
@@ -1178,8 +1192,6 @@ test_metrics_module() {
     fi
 }
 
-# Initialize the module when sourced
-if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
-    # Module is being sourced, initialize it
-    initialize_metrics_module
-fi
+# NOTE: Auto-initialization removed - initialize_metrics_module() must be called
+# explicitly by the main script AFTER setup_dirs() to avoid false positive warnings
+# about missing directories that haven't been created yet.

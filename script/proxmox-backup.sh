@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.6.4
+# Version: 0.6.5
 # Last Modified: 2025-11-02
-# Changes: Fix Network Filesystems
+# Changes: Fix Metrics check
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.
@@ -486,8 +486,13 @@ main() {
     
     check_dependencies
     setup_dirs
+
+    # Initialize metrics module after directories are created
+    # This prevents false positive warnings about missing directories
+    initialize_metrics_module
+
     get_server_id
-    
+
     # Test cloud connectivity using the unified counting system
     # This function automatically handles ENABLE_CLOUD_BACKUP status and sets appropriate variables
     if ! CHECK_COUNT "CLOUD_CONNECTIVITY" true; then
