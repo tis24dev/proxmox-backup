@@ -163,6 +163,26 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.6.5] - 2025-11-03 - Metrics Module: Improved Warning Messages
+### lib/metrics.sh
+**Fix**
+- Fixed metrics validation warnings appearing generic/empty in notification reports
+- Changed message format from `"METRICS WARNING [operation]: message"` to `"message [metrics.operation]"` for compatibility with notify.sh category extraction regex
+- Removed redundant summary warnings that duplicated detailed error messages:
+  - Removed `"Proxmox environment validation completed with N warnings"`
+  - Removed `"Metrics module initialized with environment warnings"`
+- Improved validation messages with actionable suggestions:
+  - Local backup path: `"Local backup path does not exist: /path (will be created automatically)"`
+  - Secondary backup (parent missing): `"Secondary backup parent directory does not exist: /path - Create it with: mkdir -p /path"`
+  - Secondary backup (parent exists): `"Secondary backup path does not exist: /path (will be created if parent exists)"`
+- Removed auto-initialization that was causing validation to run before directories were created
+
+### script/proxmox-backup.sh
+**Fix**
+- Moved metrics module initialization after directory setup to prevent false positive warnings
+- Added explicit `initialize_metrics_module()` call after `setup_dirs()` (line 492)
+- Metrics validation now runs after required directories are created, eliminating false warnings
+
 ## [0.6.4] - 2025-11-02 - Bug Fix: Network Filesystems
 ### /lib/storage.sh
 **Add**
