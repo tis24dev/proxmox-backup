@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Unified Installer
 # File: install.sh
-# Version: 2.0.1
-# Purpose: Consolidated workflow replacing install.sh + new-install.sh
+# Version: 2.0.3
+# Purpose: Add rsync in backup.env
 ##
 
 set -euo pipefail
@@ -55,7 +55,7 @@ init_constants() {
     RESET='\033[0m'
 
     SCRIPT_NAME="Proxmox Backup Installer"
-    INSTALLER_VERSION="2.0.2"
+    INSTALLER_VERSION="2.0.3"
     REPO_URL="https://github.com/tis24dev/proxmox-backup"
     INSTALL_DIR="/opt/proxmox-backup"
 
@@ -629,6 +629,27 @@ update_email_config() {
     print_success "Email configuration updated"
 }
 
+update_required_packages() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+    [[ -f "$config_file" ]] || return 0
+
+    # Check if rsync is already in REQUIRED_PACKAGES
+    local current_packages
+    current_packages=$(grep "^REQUIRED_PACKAGES=" "$config_file" 2>/dev/null | sed 's/^REQUIRED_PACKAGES="\(.*\)"/\1/' || true)
+
+    if echo "$current_packages" | grep -q "\brsync\b"; then
+        return 0
+    fi
+
+    print_status "Adding rsync to required packages..."
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+
+    # Add rsync to REQUIRED_PACKAGES if not present
+    sed -i 's/^\(REQUIRED_PACKAGES="[^"]*\)"/\1 rsync"/' "$config_file"
+
+    print_success "rsync added to required packages"
+}
+
 update_config_header() {
     local config_file="$INSTALL_DIR/env/backup.env"
     [[ -f "$config_file" ]] || return 0
@@ -763,7 +784,7 @@ MIN_BASH_VERSION="4.4.0"
 DEBUG_LEVEL="standard"
 
 # Required packages for system operation
-REQUIRED_PACKAGES="tar gzip zstd pigz jq curl rclone gpg"
+REQUIRED_PACKAGES="tar gzip zstd pigz jq curl rclone gpg rsync"
 OPTIONAL_PACKAGES=""
 
 # Automatic installation of missing dependencies
@@ -1116,6 +1137,7 @@ setup_configuration() {
         add_storage_monitoring_config
         update_blacklist_config
         update_email_config
+        update_required_packages
     fi
 
     create_default_configuration

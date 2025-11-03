@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.3] - 2025-11-02 - Interactive Telegram Notifications Setup
+### Standalone Script: install.sh
+**Add**
+- Add rsync Dependency
+
+## [2.0.2] - 2025-11-03 - Selective Restore with Automatic Version Detection
+### script/proxmox-restore.sh
+**Add**
+- Implemented selective restore functionality with interactive category selection menu
+- Added automatic backup version detection system using metadata files
+- Added 8 new functions for selective restore capabilities:
+  - `detect_backup_version()` - Detects if backup supports selective restore via metadata
+  - `analyze_backup_categories()` - Scans extracted backup to identify available configuration categories
+  - `show_category_menu()` - Interactive menu with 4 options: Full/Quick/Custom/Cancel restore
+  - `show_custom_selection_menu()` - Advanced multi-select interface for granular category selection
+  - `get_category_paths()` - Maps 15+ categories (PVE/PBS/common) to filesystem paths
+  - `restore_selective()` - Performs selective restore using rsync with automatic backup of overwritten files
+  - `recreate_storage_directories()` - Automatically creates PVE storage and PBS datastore directory structures from config files
+  - `restore_smart()` - Intelligent wrapper that auto-detects backup type and offers appropriate restore mode
+- Added automatic directory structure recreation for PVE storages and PBS datastores:
+  - Parses `/etc/pve/storage.cfg` to create storage directories with standard subdirectories (dump/images/template/private/snippets)
+  - Parses `/etc/proxmox-backup/datastore.cfg` to create datastore directories
+  - Sets correct ownership (root:root) and permissions (755) on created directories
+- Replaced manual `cp` operations with `rsync -a --backup --backup-dir` for safer restore operations
+- Added backup of overwritten files to timestamped directory: `/root/.proxmox-restore-backup/current_YYYYMMDD_HHMMSS`
+**Fix**
+- Modified main restore workflow (line 731) to use `restore_smart()` instead of direct `restore_configurations()` call
+- Maintains 100% backward compatibility: legacy backups without metadata automatically use full restore mode
+
 ## [2.0.2] - 2025-11-02 - Interactive Telegram Notifications Setup
 ### Standalone Script: install.sh
 **Add**
@@ -162,6 +191,27 @@ All notable changes to this project are documented in this file.
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
 ---------------------------------------------------------------------------------------
+
+## [0.7.0] - 2025-11-03 - Selective Restore with Automatic Version Detection
+### lib/backup_collect.sh
+**Add**
+- Added `create_backup_metadata()` function (lines 635-659) to generate backup metadata files
+- Integrated metadata creation into backup workflow (line 624) - called after file collection completes
+- Metadata file includes:
+  - Backup version, type (PVE/PBS), timestamp, hostname
+  - Feature flags: `SUPPORTS_SELECTIVE_RESTORE=true`
+  - Capability list: `selective_restore,category_mapping,version_detection,auto_directory_creation`
+  
+### lib/security.sh
+**Add**
+- Added automatic Debian repo management so dependency installs can recover from missing mirrors.
+
+### env/backup.env
+**Add**
+- Added `rsync` to REQUIRED_PACKAGES list (line 32) for automatic installation during dependency checks
+- rsync requirement ensures selective restore functionality works on all systems
+**Fix**
+- Updated dependency list from `"tar gzip zstd pigz jq curl rclone gpg"` to include `rsync`
 
 ## [0.6.5] - 2025-11-03 - Metrics Module: Improved Warning Messages
 ### lib/metrics.sh

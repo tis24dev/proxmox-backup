@@ -2,9 +2,9 @@
 ##
 # Proxmox Restore Script for PVE and PBS
 # File: proxmox-restore.sh
-# Version: 0.2.1
-# Last Modified: 2025-10-11
-# Changes: Script di restore per configurazioni Proxmox
+# Version: 1.0.1
+# Last Modified: 2025-11-03
+# Changes: New selective restore
 #
 # This script performs restoration of Proxmox configurations from backup files
 # created by the Proxmox Backup System
@@ -41,7 +41,7 @@ EXIT_ERROR=2
 if [[ -f "$ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$ENV_FILE"
-    echo "Proxmox Restore Script Version: ${SCRIPT_VERSION:-1.0.0}"
+    echo "Proxmox Restore Script Version: ${SCRIPT_VERSION:-1.0.1}"
 else
     echo "[ERRORE] File di configurazione non trovato: $ENV_FILE"
     exit $EXIT_ERROR
@@ -458,6 +458,463 @@ extract_backup() {
     echo "$extract_dir"
 }
 
+# ==========================================
+# SELECTIVE RESTORE FUNCTIONS
+# ==========================================
+
+# Detect backup version and selective restore support
+detect_backup_version() {
+    local extract_dir="$1"
+    local metadata_file="$extract_dir/var/lib/proxmox-backup-info/backup_metadata.txt"
+
+    if [ -f "$metadata_file" ]; then
+        BACKUP_VERSION=$(grep "^VERSION=" "$metadata_file" 2>/dev/null | cut -d= -f2)
+        BACKUP_SUPPORTS_SELECTIVE=$(grep "^SUPPORTS_SELECTIVE_RESTORE=" "$metadata_file" 2>/dev/null | cut -d= -f2)
+
+        if [ "$BACKUP_SUPPORTS_SELECTIVE" = "true" ]; then
+            info "Backup moderno rilevato (v$BACKUP_VERSION) - selezione interattiva disponibile"
+            return 0  # Supports selective restore
+        fi
+    fi
+
+    info "Backup legacy rilevato - utilizzo ripristino completo automatico"
+    return 1  # Does not support selective restore
+}
+
+# Analyze backup content and detect available categories
+analyze_backup_categories() {
+    local extract_dir="$1"
+
+    declare -gA AVAILABLE_CATEGORIES
+
+    # Detect PVE categories
+    [ -d "$extract_dir/etc/pve" ] && AVAILABLE_CATEGORIES["pve_cluster"]="Cluster PVE"
+    [ -f "$extract_dir/etc/pve/storage.cfg" ] && AVAILABLE_CATEGORIES["storage_pve"]="Storage PVE"
+    [ -f "$extract_dir/etc/vzdump.conf" ] && [ -d "$extract_dir/var/lib/pve-cluster/info/jobs" ] && AVAILABLE_CATEGORIES["pve_jobs"]="Job Backup PVE"
+    [ -d "$extract_dir/etc/corosync" ] && AVAILABLE_CATEGORIES["corosync"]="Corosync (Cluster)"
+    [ -d "$extract_dir/etc/ceph" ] && AVAILABLE_CATEGORIES["ceph"]="Ceph Storage"
+
+    # Detect PBS categories
+    [ -d "$extract_dir/etc/proxmox-backup" ] && AVAILABLE_CATEGORIES["pbs_config"]="Config PBS"
+    [ -f "$extract_dir/etc/proxmox-backup/datastore.cfg" ] && AVAILABLE_CATEGORIES["datastore_pbs"]="Datastore PBS"
+    [ -d "$extract_dir/var/lib/proxmox-backup/pxar_metadata" ] && AVAILABLE_CATEGORIES["pbs_jobs"]="Job PBS"
+
+    # Detect common categories
+    [ -d "$extract_dir/etc/network" ] && AVAILABLE_CATEGORIES["network"]="Configurazione Rete"
+    [ -d "$extract_dir/etc/ssl" ] && AVAILABLE_CATEGORIES["ssl"]="Certificati SSL"
+    [ -d "$extract_dir/etc/ssh" ] || [ -d "$extract_dir/root/.ssh" ] && AVAILABLE_CATEGORIES["ssh"]="Chiavi SSH"
+    [ -d "$extract_dir/usr/local" ] && AVAILABLE_CATEGORIES["scripts"]="Script Utente"
+    [ -d "$extract_dir/var/spool/cron" ] && AVAILABLE_CATEGORIES["crontabs"]="Crontabs"
+    [ -d "$extract_dir/etc/systemd/system" ] && AVAILABLE_CATEGORIES["services"]="Servizi Systemd"
+
+    local count=${#AVAILABLE_CATEGORIES[@]}
+    info "Rilevate $count categorie disponibili nel backup"
+}
+
+# Show category selection menu
+show_category_menu() {
+    local extract_dir="$1"
+
+    echo ""
+    echo -e "${CYAN}=== SELEZIONE RIPRISTINO ===${NC}"
+    echo ""
+    echo "Backup rilevato: v${BACKUP_VERSION} (${PROXMOX_TYPE:-Unknown})"
+    echo "Categorie disponibili: ${#AVAILABLE_CATEGORIES[@]}"
+    echo ""
+    echo -e "${GREEN}1)${NC} Ripristino COMPLETO (tutto)"
+    echo -e "${GREEN}2)${NC} Solo STORAGE (struttura completa + config)"
+    echo -e "${GREEN}3)${NC} Solo SISTEMA BASE (rete, SSL, SSH)"
+    echo -e "${GREEN}4)${NC} Selezione PERSONALIZZATA"
+    echo -e "${YELLOW}0)${NC} Annulla"
+    echo ""
+
+    while true; do
+        read -p "Selezione [1]: " choice
+        choice=${choice:-1}
+
+        case "$choice" in
+            1)
+                RESTORE_MODE="full"
+                SELECTED_CATEGORIES=("all")
+                break
+                ;;
+            2)
+                RESTORE_MODE="selective"
+                SELECTED_CATEGORIES=()
+                # Add storage-related categories
+                for cat in "pve_cluster" "storage_pve" "pve_jobs" "datastore_pbs" "pbs_jobs"; do
+                    [ -n "${AVAILABLE_CATEGORIES[$cat]}" ] && SELECTED_CATEGORIES+=("$cat")
+                done
+                if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
+                    warning "Nessuna categoria storage trovata nel backup"
+                    continue
+                fi
+                info "Categorie selezionate: ${SELECTED_CATEGORIES[*]}"
+                break
+                ;;
+            3)
+                RESTORE_MODE="selective"
+                SELECTED_CATEGORIES=()
+                # Add system base categories
+                for cat in "network" "ssl" "ssh" "services"; do
+                    [ -n "${AVAILABLE_CATEGORIES[$cat]}" ] && SELECTED_CATEGORIES+=("$cat")
+                done
+                if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
+                    warning "Nessuna categoria sistema base trovata nel backup"
+                    continue
+                fi
+                info "Categorie selezionate: ${SELECTED_CATEGORIES[*]}"
+                break
+                ;;
+            4)
+                show_custom_selection_menu
+                break
+                ;;
+            0)
+                info "Operazione annullata dall'utente"
+                exit $EXIT_SUCCESS
+                ;;
+            *)
+                warning "Selezione non valida. Inserisci un numero tra 0 e 4"
+                ;;
+        esac
+    done
+}
+
+# Show custom category selection menu
+show_custom_selection_menu() {
+    echo ""
+    echo -e "${CYAN}=== SELEZIONE PERSONALIZZATA ===${NC}"
+    echo ""
+    echo "Seleziona le categorie da ripristinare (spazio per toggle, INVIO per confermare):"
+    echo ""
+
+    declare -gA CATEGORY_SELECTED
+    local idx=1
+    declare -gA CATEGORY_INDEX
+
+    for cat in "${!AVAILABLE_CATEGORIES[@]}"; do
+        CATEGORY_INDEX[$idx]=$cat
+        CATEGORY_SELECTED[$cat]=false
+        echo -e "  [ ] $idx) ${AVAILABLE_CATEGORIES[$cat]}"
+        ((idx++))
+    done
+
+    echo ""
+    echo "Comandi: [numero]=toggle, [a]=tutto, [n]=niente, [c]=continua"
+    echo ""
+
+    while true; do
+        read -p "> " input
+
+        case "$input" in
+            [0-9]*)
+                if [ -n "${CATEGORY_INDEX[$input]}" ]; then
+                    local cat="${CATEGORY_INDEX[$input]}"
+                    if [ "${CATEGORY_SELECTED[$cat]}" = "true" ]; then
+                        CATEGORY_SELECTED[$cat]=false
+                    else
+                        CATEGORY_SELECTED[$cat]=true
+                    fi
+                    # Redraw menu
+                    echo ""
+                    idx=1
+                    for c in "${!AVAILABLE_CATEGORIES[@]}"; do
+                        local mark="[ ]"
+                        [ "${CATEGORY_SELECTED[$c]}" = "true" ] && mark="[X]"
+                        echo -e "  $mark $idx) ${AVAILABLE_CATEGORIES[$c]}"
+                        ((idx++))
+                    done
+                    echo ""
+                fi
+                ;;
+            [aA])
+                for cat in "${!AVAILABLE_CATEGORIES[@]}"; do
+                    CATEGORY_SELECTED[$cat]=true
+                done
+                info "Tutte le categorie selezionate"
+                ;;
+            [nN])
+                for cat in "${!AVAILABLE_CATEGORIES[@]}"; do
+                    CATEGORY_SELECTED[$cat]=false
+                done
+                info "Tutte le categorie deselezionate"
+                ;;
+            [cC])
+                # Build selected categories list
+                RESTORE_MODE="selective"
+                SELECTED_CATEGORIES=()
+                for cat in "${!CATEGORY_SELECTED[@]}"; do
+                    [ "${CATEGORY_SELECTED[$cat]}" = "true" ] && SELECTED_CATEGORIES+=("$cat")
+                done
+
+                if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
+                    warning "Nessuna categoria selezionata"
+                    continue
+                fi
+
+                info "Confermate ${#SELECTED_CATEGORIES[@]} categorie"
+                break
+                ;;
+            *)
+                warning "Comando non valido"
+                ;;
+        esac
+    done
+}
+
+# Get file paths for a specific category
+get_category_paths() {
+    local category="$1"
+    local extract_dir="$2"
+
+    case "$category" in
+        "pve_cluster")
+            echo "$extract_dir/etc/pve"
+            echo "$extract_dir/var/lib/pve-cluster"
+            ;;
+        "storage_pve")
+            echo "$extract_dir/etc/pve/storage.cfg"
+            echo "$extract_dir/etc/vzdump.conf"
+            [ -d "$extract_dir/var/lib/pve-cluster/info/datastores" ] && echo "$extract_dir/var/lib/pve-cluster/info/datastores"
+            ;;
+        "pve_jobs")
+            [ -d "$extract_dir/var/lib/pve-cluster/info/jobs" ] && echo "$extract_dir/var/lib/pve-cluster/info/jobs"
+            [ -f "$extract_dir/etc/cron.d/vzdump" ] && echo "$extract_dir/etc/cron.d/vzdump"
+            ;;
+        "corosync")
+            echo "$extract_dir/etc/corosync"
+            ;;
+        "ceph")
+            echo "$extract_dir/etc/ceph"
+            ;;
+        "pbs_config")
+            echo "$extract_dir/etc/proxmox-backup"
+            echo "$extract_dir/var/lib/proxmox-backup"
+            ;;
+        "datastore_pbs")
+            echo "$extract_dir/etc/proxmox-backup/datastore.cfg"
+            [ -d "$extract_dir/var/lib/proxmox-backup/pxar_metadata" ] && echo "$extract_dir/var/lib/proxmox-backup/pxar_metadata"
+            ;;
+        "pbs_jobs")
+            [ -f "$extract_dir/var/lib/proxmox-backup/sync_jobs.json" ] && echo "$extract_dir/var/lib/proxmox-backup/sync_jobs.json"
+            [ -f "$extract_dir/var/lib/proxmox-backup/verify_jobs.json" ] && echo "$extract_dir/var/lib/proxmox-backup/verify_jobs.json"
+            [ -f "$extract_dir/var/lib/proxmox-backup/prune_jobs.json" ] && echo "$extract_dir/var/lib/proxmox-backup/prune_jobs.json"
+            ;;
+        "network")
+            echo "$extract_dir/etc/network"
+            ;;
+        "ssl")
+            echo "$extract_dir/etc/ssl"
+            ;;
+        "ssh")
+            [ -d "$extract_dir/etc/ssh" ] && echo "$extract_dir/etc/ssh"
+            [ -d "$extract_dir/root/.ssh" ] && echo "$extract_dir/root/.ssh"
+            [ -d "$extract_dir/home" ] && find "$extract_dir/home" -type d -name ".ssh" 2>/dev/null
+            ;;
+        "scripts")
+            echo "$extract_dir/usr/local"
+            ;;
+        "crontabs")
+            [ -f "$extract_dir/etc/crontab" ] && echo "$extract_dir/etc/crontab"
+            [ -d "$extract_dir/var/spool/cron" ] && echo "$extract_dir/var/spool/cron"
+            ;;
+        "services")
+            echo "$extract_dir/etc/systemd/system"
+            echo "$extract_dir/etc/cron.d"
+            ;;
+        *)
+            warning "Categoria sconosciuta: $category"
+            ;;
+    esac
+}
+
+# Perform selective restore
+restore_selective() {
+    local extract_dir="$1"
+
+    step "Ripristino selettivo delle categorie scelte..."
+
+    local backup_current_dir="/tmp/current_config_backup_${TIMESTAMP:-$SECONDS}_$$"
+    mkdir -p "$backup_current_dir"
+
+    info "Creazione backup delle configurazioni attuali in: $backup_current_dir"
+
+    local restore_count=0
+
+    for cat in "${SELECTED_CATEGORIES[@]}"; do
+        local cat_name="${AVAILABLE_CATEGORIES[$cat]}"
+        info "Ripristino categoria: $cat_name"
+
+        # Get paths for this category
+        local paths
+        paths=$(get_category_paths "$cat" "$extract_dir")
+
+        if [ -z "$paths" ]; then
+            warning "Nessun path trovato per categoria: $cat_name"
+            continue
+        fi
+
+        # Restore each path
+        while IFS= read -r source_path; do
+            [ -z "$source_path" ] && continue
+
+            if [ ! -e "$source_path" ]; then
+                debug "Path non trovato nel backup: $source_path"
+                continue
+            fi
+
+            # Calculate destination path
+            local dest_path="${source_path#$extract_dir}"
+
+            # Backup current file/dir if exists
+            if [ -e "$dest_path" ]; then
+                local parent_dir="$backup_current_dir$(dirname "$dest_path")"
+                mkdir -p "$parent_dir"
+                cp -a "$dest_path" "$parent_dir/" 2>/dev/null || true
+            fi
+
+            # Create parent directory
+            local parent_dir=$(dirname "$dest_path")
+            mkdir -p "$parent_dir"
+
+            # Restore from backup using rsync (with automatic backup of overwritten files)
+            if rsync -a --backup --backup-dir="$backup_current_dir" "$source_path" "$(dirname "$dest_path")/" 2>/dev/null; then
+                debug "Ripristinato: $dest_path"
+                restore_count=$((restore_count + 1))
+            else
+                warning "Errore ripristino: $dest_path"
+            fi
+        done <<< "$paths"
+
+        success "Categoria '$cat_name' ripristinata"
+    done
+
+    if [ $restore_count -gt 0 ]; then
+        success "Ripristino selettivo completato: $restore_count elementi ripristinati"
+    else
+        warning "Nessun elemento ripristinato"
+    fi
+
+    # Store backup location
+    echo "$backup_current_dir" > /tmp/restore_backup_location.txt
+    info "Backup configurazioni precedenti salvato in: $backup_current_dir"
+}
+
+# Recreate storage/datastore directory structures
+recreate_storage_directories() {
+    step "Ricreazione directory storage/datastore..."
+
+    local created_count=0
+
+    # Recreate PVE storage directories
+    if [ -f "/etc/pve/storage.cfg" ]; then
+        info "Elaborazione storage PVE da /etc/pve/storage.cfg"
+
+        local current_storage=""
+        while IFS= read -r line; do
+            # Detect storage definition
+            if [[ "$line" =~ ^(dir|nfs|cifs|glusterfs|btrfs):[[:space:]]*([^[:space:]]+) ]]; then
+                current_storage="${BASH_REMATCH[2]}"
+                debug "Trovato storage: $current_storage"
+            # Find path directive
+            elif [[ "$line" =~ ^[[:space:]]*path[[:space:]]+(.+)$ ]]; then
+                local storage_path="${BASH_REMATCH[1]}"
+
+                if [ ! -d "$storage_path" ]; then
+                    info "Creazione directory storage PVE: $storage_path"
+                    mkdir -p "$storage_path"
+
+                    # Create standard PVE subdirectories
+                    mkdir -p "$storage_path"/{dump,images,template,private,snippets} 2>/dev/null || true
+
+                    # Set correct permissions
+                    chown root:root "$storage_path"
+                    chmod 755 "$storage_path"
+
+                    created_count=$((created_count + 1))
+                    success "Directory storage creata: $storage_path"
+                else
+                    debug "Directory storage già esistente: $storage_path"
+                fi
+            fi
+        done < /etc/pve/storage.cfg
+    fi
+
+    # Recreate PBS datastore directories
+    if [ -f "/etc/proxmox-backup/datastore.cfg" ]; then
+        info "Elaborazione datastore PBS da /etc/proxmox-backup/datastore.cfg"
+
+        local current_datastore=""
+        while IFS= read -r line; do
+            # Detect datastore definition
+            if [[ "$line" =~ ^datastore:[[:space:]]*([^[:space:]]+) ]]; then
+                current_datastore="${BASH_REMATCH[1]}"
+                debug "Trovato datastore: $current_datastore"
+            # Find path directive
+            elif [[ "$line" =~ ^[[:space:]]*path[[:space:]]+(.+)$ ]]; then
+                local datastore_path="${BASH_REMATCH[1]}"
+
+                if [ ! -d "$datastore_path" ]; then
+                    info "Creazione datastore PBS: $datastore_path"
+                    mkdir -p "$datastore_path"
+
+                    # Create PBS .chunks subdirectory
+                    mkdir -p "$datastore_path/.chunks" 2>/dev/null || true
+
+                    # Set correct PBS permissions
+                    if command -v id >/dev/null 2>&1 && id -u backup >/dev/null 2>&1; then
+                        chown backup:backup "$datastore_path"
+                    else
+                        chown root:root "$datastore_path"
+                    fi
+                    chmod 750 "$datastore_path"
+
+                    created_count=$((created_count + 1))
+                    success "Datastore PBS creato: $datastore_path ($current_datastore)"
+                else
+                    debug "Datastore già esistente: $datastore_path"
+                fi
+            fi
+        done < /etc/proxmox-backup/datastore.cfg
+    fi
+
+    if [ $created_count -gt 0 ]; then
+        success "Create $created_count directory storage/datastore"
+        info "Le directory sono pronte per ricevere i file di backup"
+    else
+        info "Nessuna directory da creare (già esistenti o non necessarie)"
+    fi
+}
+
+# Smart restore wrapper - detects backup type and acts accordingly
+restore_smart() {
+    local extract_dir="$1"
+
+    # Detect backup version and capabilities
+    if detect_backup_version "$extract_dir"; then
+        # Modern backup with selective restore support
+        analyze_backup_categories "$extract_dir"
+        show_category_menu "$extract_dir"
+
+        if [ "$RESTORE_MODE" = "full" ]; then
+            # User chose full restore
+            info "Esecuzione ripristino completo..."
+            restore_configurations "$extract_dir"
+        else
+            # User chose selective restore
+            restore_selective "$extract_dir"
+        fi
+
+        # Recreate storage/datastore directories if needed
+        recreate_storage_directories
+    else
+        # Legacy backup - perform full restore automatically
+        info "Esecuzione ripristino completo automatico (backup legacy)..."
+        restore_configurations "$extract_dir"
+    fi
+}
+
 # Function to restore configurations
 restore_configurations() {
     local extract_dir="$1"
@@ -726,10 +1183,10 @@ main() {
     
     # Extract backup
     local extract_dir=$(extract_backup "$backup_file")
-    
-    # Restore configurations
-    restore_configurations "$extract_dir"
-    
+
+    # Restore configurations (smart detection: selective or full based on backup version)
+    restore_smart "$extract_dir"
+
     # Restart services
     restart_services
     

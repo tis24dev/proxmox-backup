@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.4.2
-# Last Modified: 2025-10-26
-# Changes: Optimize blacklist handling in custom backup
+# Version: 0.7.0
+# Last Modified: 2025-11-03
+# Changes: Add selective restore
 ##
 # Functions for backup data collection
 
@@ -616,10 +616,13 @@ collect_system_info() {
     
     # System service configuration
     collect_system_service_configs
-    
+
     # Backup SSL certificates and SSH keys
     collect_security_configs
-    
+
+    # Create backup metadata for selective restore support
+    create_backup_metadata
+
     success "System information collected successfully"
 
     # NOTE: No longer needed - subshells preserve working directory automatically
@@ -627,6 +630,32 @@ collect_system_info() {
     debug "Working directory preserved after system info collection: $(pwd)"
 
     return $EXIT_SUCCESS
+}
+
+# Create backup metadata file for version detection and selective restore
+create_backup_metadata() {
+    local metadata_file="$TEMP_DIR/var/lib/proxmox-backup-info/backup_metadata.txt"
+
+    debug "Creating backup metadata file"
+
+    cat > "$metadata_file" <<EOF
+# Proxmox Backup Metadata
+# This file enables selective restore functionality in newer restore scripts
+VERSION=${SCRIPT_VERSION}
+BACKUP_TYPE=${PROXMOX_TYPE}
+TIMESTAMP=${TIMESTAMP}
+HOSTNAME=${HOSTNAME}
+SUPPORTS_SELECTIVE_RESTORE=true
+BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation
+EOF
+
+    if [ -f "$metadata_file" ]; then
+        debug "Backup metadata created successfully"
+        return 0
+    else
+        warning "Failed to create backup metadata file"
+        return 1
+    fi
 }
 
 # Collect custom files from configuration

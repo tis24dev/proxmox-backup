@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Security Library
 # File: security.sh
-# Version: 0.4.0
-# Last Modified: 2025-10-24
-# Changes: Logging Enhancements
+# Version: 0.7.0
+# Last Modified: 2025-11-03
+# Changes: Debian repo management
 ##
 # Basic security functions for backup
 
@@ -107,6 +107,95 @@ detect_package_manager() {
     fi
 }
 
+# Determine Debian codename for repository configuration
+get_debian_codename() {
+    local codename=""
+
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        codename="${VERSION_CODENAME:-${DEBIAN_CODENAME:-}}"
+    fi
+
+    if [[ -z "$codename" ]] && command_exists "lsb_release"; then
+        codename=$(lsb_release -cs 2>/dev/null || true)
+    fi
+
+    if [[ -z "$codename" ]]; then
+        codename="bookworm"
+    fi
+
+    printf '%s\n' "$codename"
+}
+
+# Check if Debian repositories are already configured
+debian_repositories_present() {
+    local pattern='^deb .*deb\.debian\.org/debian'
+    local security_pattern='^deb .*security\.debian\.org/debian-security'
+
+    if [[ -f /etc/apt/sources.list ]] && grep -Eq "$pattern|$security_pattern" /etc/apt/sources.list; then
+        return 0
+    fi
+
+    local file
+    for file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [[ -f "$file" ]] || continue
+        if grep -Eq "$pattern|$security_pattern" "$file"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Ensure Debian repositories exist by adding a default sources file when needed
+ensure_default_debian_repositories() {
+    if debian_repositories_present; then
+        debug "Debian repositories already configured"
+        return 1
+    fi
+
+    local codename
+    codename=$(get_debian_codename)
+    local repo_file="/etc/apt/sources.list.d/proxmox-backup-debian.list"
+
+    info "Adding default Debian repositories for codename: $codename"
+    if cat <<EOF > "$repo_file"
+deb http://deb.debian.org/debian $codename main contrib
+deb http://deb.debian.org/debian $codename-updates main contrib
+deb http://security.debian.org/debian-security $codename-security main contrib
+EOF
+    then
+        return 0
+    else
+        error "Failed to write default Debian repository file: $repo_file"
+        return 2
+    fi
+}
+
+# Verify that the requested packages have installation candidates available
+apt_packages_have_candidates() {
+    local packages=("$@")
+    local missing=()
+    local pkg policy candidate
+
+    for pkg in "${packages[@]}"; do
+        policy=$(apt-cache policy "$pkg" 2>/dev/null || true)
+        candidate=$(printf '%s\n' "$policy" | awk -F': ' '/Candidate:/ {print $2; exit}')
+
+        if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
+            missing+=("$pkg")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        warning "No install candidates found for packages: ${missing[*]}"
+        return 1
+    fi
+
+    return 0
+}
+
 # Function to install packages using detected package manager
 install_packages() {
     local packages=("$@")
@@ -123,16 +212,49 @@ install_packages() {
     case "$pkg_manager" in
         "apt-get")
             info "Updating package list..."
-            if apt-get update 2>&1 | while IFS= read -r line; do info "APT: $line"; done; then
-                info "Installing packages: ${packages[*]}"
-                if apt-get install -y "${packages[@]}" 2>&1 | while IFS= read -r line; do info "APT: $line"; done; then
-                    return $EXIT_SUCCESS
+            {
+                apt-get update 2>&1 | while IFS= read -r line; do info "APT: $line"; done
+            }
+            local update_status=${PIPESTATUS[0]}
+            if [[ $update_status -ne 0 ]]; then
+                return $EXIT_ERROR
+            fi
+
+            if ! apt_packages_have_candidates "${packages[@]}"; then
+                ensure_default_debian_repositories
+                local ensure_status=$?
+                if [[ $ensure_status -eq 0 ]]; then
+                    info "Updating package list after adding Debian repositories..."
+                    {
+                        apt-get update 2>&1 | while IFS= read -r line; do info "APT: $line"; done
+                    }
+                    update_status=${PIPESTATUS[0]}
+                    if [[ $update_status -ne 0 ]]; then
+                        return $EXIT_ERROR
+                    fi
+
+                    if ! apt_packages_have_candidates "${packages[@]}"; then
+                        error "Packages still unavailable after adding default repositories: ${packages[*]}"
+                        return $EXIT_ERROR
+                    fi
+                elif [[ $ensure_status -eq 1 ]]; then
+                    error "Packages unavailable and Debian repositories already configured. Please verify APT sources."
+                    return $EXIT_ERROR
                 else
                     return $EXIT_ERROR
                 fi
-            else
+            fi
+
+            info "Installing packages: ${packages[*]}"
+            {
+                apt-get install -y "${packages[@]}" 2>&1 | while IFS= read -r line; do info "APT: $line"; done
+            }
+            local install_status=${PIPESTATUS[0]}
+            if [[ $install_status -ne 0 ]]; then
                 return $EXIT_ERROR
             fi
+
+            return $EXIT_SUCCESS
             ;;
         "dnf")
             info "Installing packages with dnf: ${packages[*]}"
