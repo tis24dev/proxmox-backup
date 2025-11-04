@@ -2,12 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.3.0] - 2025-10-28 - Standalone file: backup.env
+## [1.3.0] - 2025-11-04 - Standalone file: backup.env
 **Fix**
 - Removed required package list
 
-## [2.0.3] - 2025-11-02 - Add rsync dependency
-### Standalone Script: install.sh
+## [2.0.3] - 2025-11-04 - Standalone Script: install.sh
 **Add**
 - Add rsync Dependency
 - Dependencies installed/updated automatically
