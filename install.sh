@@ -3,7 +3,7 @@
 # Proxmox Backup System - Unified Installer
 # File: install.sh
 # Version: 2.0.3
-# Purpose: Add rsync in backup.env
+# Purpose: Fix install required package
 ##
 
 set -euo pipefail
@@ -201,38 +201,149 @@ check_requirements() {
 install_dependencies() {
     print_status "Checking dependencies..."
 
-    # Check which packages are missing
+    # Update package lists first
+    print_status "Updating package lists..."
+    if [[ "$VERBOSE_MODE" == "true" ]]; then
+        apt update
+    else
+        apt update >/dev/null 2>&1
+    fi
+
+    # Check and upgrade all packages to latest available versions
     local PACKAGES="curl wget git jq tar gzip xz-utils zstd pigz"
     local MISSING_PACKAGES=""
+    local UPGRADABLE_PACKAGES=""
 
     for pkg in $PACKAGES; do
         if ! dpkg -l | grep -q "^ii  $pkg "; then
             MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+        else
+            # Check if package has upgradable version
+            if apt list --upgradable 2>/dev/null | grep -q "^$pkg/"; then
+                UPGRADABLE_PACKAGES="$UPGRADABLE_PACKAGES $pkg"
+            fi
         fi
     done
 
+    # Install missing packages
     if [[ -n "$MISSING_PACKAGES" ]]; then
         print_status "Installing missing packages:$MISSING_PACKAGES"
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            apt update
-            apt install -y $PACKAGES
+            apt install -y $MISSING_PACKAGES
         else
-            apt update >/dev/null 2>&1
-            apt install -y $PACKAGES >/dev/null 2>&1
+            apt install -y $MISSING_PACKAGES >/dev/null 2>&1
         fi
         print_success "Missing packages installed"
-    else
-        print_success "All required packages already installed"
     fi
 
+    # Upgrade existing packages to latest version
+    if [[ -n "$UPGRADABLE_PACKAGES" ]]; then
+        print_status "Upgrading packages to latest version:$UPGRADABLE_PACKAGES"
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            apt install --only-upgrade -y $UPGRADABLE_PACKAGES
+        else
+            apt install --only-upgrade -y $UPGRADABLE_PACKAGES >/dev/null 2>&1
+        fi
+        print_success "Packages upgraded to latest version"
+    fi
+
+    if [[ -z "$MISSING_PACKAGES" && -z "$UPGRADABLE_PACKAGES" ]]; then
+        print_success "All required packages already at latest version"
+    fi
+
+    # Install/update rclone
+    local rclone_needs_install=false
     if ! command -v rclone >/dev/null 2>&1; then
-        print_status "Installing rclone..."
+        print_status "rclone not found, will install"
+        rclone_needs_install=true
+    else
+        local current_rclone_version
+        current_rclone_version=$(rclone version 2>/dev/null | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/v//')
+        if [[ -n "$current_rclone_version" ]]; then
+            print_status "Current rclone version: $current_rclone_version"
+            # Always update rclone to get latest version
+            print_status "Updating rclone to latest version..."
+            rclone_needs_install=true
+        else
+            print_status "Cannot detect rclone version, will reinstall"
+            rclone_needs_install=true
+        fi
+    fi
+
+    if [[ "$rclone_needs_install" == "true" ]]; then
         if [[ "$VERBOSE_MODE" == "true" ]]; then
             curl https://rclone.org/install.sh | bash
         else
             curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1
         fi
-        print_success "rclone installed"
+        print_success "rclone installed/updated"
+    fi
+
+    # Install/update rsync
+    local rsync_needs_install=false
+    local rsync_target_version="3.4.1"
+    if ! command -v rsync >/dev/null 2>&1; then
+        print_status "rsync not found, will install"
+        rsync_needs_install=true
+    else
+        local current_rsync_version
+        current_rsync_version=$(rsync --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+        if [[ -n "$current_rsync_version" ]]; then
+            print_status "Current rsync version: $current_rsync_version"
+            if [[ "$current_rsync_version" != "$rsync_target_version" ]]; then
+                print_status "Updating rsync from $current_rsync_version to $rsync_target_version..."
+                rsync_needs_install=true
+            else
+                print_success "rsync is already at target version $rsync_target_version"
+            fi
+        else
+            print_status "Cannot detect rsync version, will reinstall"
+            rsync_needs_install=true
+        fi
+    fi
+
+    if [[ "$rsync_needs_install" == "true" ]]; then
+        print_status "Installing rsync from source..."
+        local temp_dir
+        temp_dir=$(mktemp -d)
+        pushd "$temp_dir" >/dev/null
+
+        # Install build dependencies
+        print_status "Installing build dependencies..."
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            apt install -y gcc g++ gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev
+        else
+            apt install -y gcc g++ gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev >/dev/null 2>&1
+        fi
+
+        # Download latest rsync
+        print_status "Downloading rsync $rsync_target_version..."
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            wget https://download.samba.org/pub/rsync/src/rsync-${rsync_target_version}.tar.gz
+            tar -xzf rsync-${rsync_target_version}.tar.gz
+        else
+            wget -q https://download.samba.org/pub/rsync/src/rsync-${rsync_target_version}.tar.gz
+            tar -xzf rsync-${rsync_target_version}.tar.gz >/dev/null 2>&1
+        fi
+
+        cd rsync-${rsync_target_version}
+
+        # Compile and install
+        print_status "Compiling rsync..."
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            ./configure
+            make
+            make install
+        else
+            ./configure >/dev/null 2>&1
+            make >/dev/null 2>&1
+            make install >/dev/null 2>&1
+        fi
+
+        popd >/dev/null
+        rm -rf "$temp_dir"
+
+        print_success "rsync installed/updated to version $rsync_target_version"
     fi
 }
 
@@ -629,25 +740,48 @@ update_email_config() {
     print_success "Email configuration updated"
 }
 
-update_required_packages() {
+remove_packages_config() {
     local config_file="$INSTALL_DIR/env/backup.env"
     [[ -f "$config_file" ]] || return 0
 
-    # Check if rsync is already in REQUIRED_PACKAGES
-    local current_packages
-    current_packages=$(grep "^REQUIRED_PACKAGES=" "$config_file" 2>/dev/null | sed 's/^REQUIRED_PACKAGES="\(.*\)"/\1/' || true)
-
-    if echo "$current_packages" | grep -q "\brsync\b"; then
+    # Check if REQUIRED_PACKAGES or OPTIONAL_PACKAGES still exist in config
+    if ! grep -q "^REQUIRED_PACKAGES=" "$config_file" && ! grep -q "^OPTIONAL_PACKAGES=" "$config_file"; then
         return 0
     fi
 
-    print_status "Adding rsync to required packages..."
+    print_status "Removing obsolete package configuration from backup.env..."
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
-    # Add rsync to REQUIRED_PACKAGES if not present
-    sed -i 's/^\(REQUIRED_PACKAGES="[^"]*\)"/\1 rsync"/' "$config_file"
+    awk '
+        /^# Required packages for system operation$/ { next }
+        /^REQUIRED_PACKAGES=/ { next }
+        /^OPTIONAL_PACKAGES=/ { next }
+        { print }
+    ' "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
 
-    print_success "rsync added to required packages"
+    print_success "Package configuration removed from backup.env"
+}
+
+get_reference_config_header() {
+    cat <<'EOF'
+#!/bin/bash
+# ============================================================================
+# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
+# File: backup.env
+# Version: 1.3.0
+# Last Modified: 2025-11-04
+# Changes: removed required package from here
+# ============================================================================
+# Main configuration file for Proxmox backup system
+# This file contains all configurations needed for automated backup
+# of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
+#
+# IMPORTANT:
+# - This file must have 600 permissions and be owned by root
+# - Always verify configuration before running backups in production
+# - Keep backup copies of this configuration file
+# ============================================================================
+EOF
 }
 
 update_config_header() {
@@ -660,28 +794,7 @@ update_config_header() {
     fi
 
     local reference_header
-    reference_header=$(cat <<'EOF'
-#!/bin/bash
-# ============================================================================
-# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
-# File: backup.env
-# Version: 1.1.3
-# Last Modified: 2025-10-25
-# Changes: Automatic migration from wildcard to specific blacklist exclusions
-# ============================================================================
-# Main configuration file for Proxmox backup system
-# This file contains all configurations needed for automated backup
-# of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
-#
-# IMPORTANT:
-# - This file must have 600 permissions and be owned by root
-# - Always verify configuration before running backups in production
-# - Keep backup copies of this configuration file
-# - La versione del SISTEMA viene caricata dal file VERSION
-# - La versione QUI indica la versione del formato di configurazione
-# ============================================================================
-EOF
-)
+    reference_header=$(get_reference_config_header)
 
     local current_header
     current_header=$(head -n 20 "$config_file")
@@ -715,27 +828,7 @@ EOF
         return 1
     fi
 
-    cat > "${config_file}.tmp" <<'EOF'
-#!/bin/bash
-# ============================================================================
-# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
-# File: backup.env
-# Version: 1.1.3
-# Last Modified: 2025-10-25
-# Changes: Automatic migration from wildcard to specific blacklist exclusions
-# ============================================================================
-# Main configuration file for Proxmox backup system
-# This file contains all configurations needed for automated backup
-# of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
-#
-# IMPORTANT:
-# - This file must have 600 permissions and be owned by root
-# - Always verify configuration before running backups in production
-# - Keep backup copies of this configuration file
-# - La versione del SISTEMA viene caricata dal file VERSION
-# - La versione QUI indica la versione del formato di configurazione
-# ============================================================================
-EOF
+    get_reference_config_header > "${config_file}.tmp"
 
     cat "${config_file}.body.tmp" >> "${config_file}.tmp"
     mv "${config_file}.tmp" "$config_file"
@@ -752,26 +845,8 @@ create_default_configuration() {
 
     print_warning "Configuration file missing; creating default template"
     mkdir -p "$INSTALL_DIR/env"
-    cat > "$config_file" <<'EOF'
-#!/bin/bash
-# ============================================================================
-# PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
-# File: backup.env
-# Version: 1.2.0
-# Last Modified: 2025-10-27
-# Changes: Cloud email setting
-# ============================================================================
-# Main configuration file for Proxmox backup system
-# This file contains all configurations needed for automated backup
-# of PVE (Proxmox Virtual Environment) and PBS (Proxmox Backup Server)
-#
-# IMPORTANT:
-# - This file must have 600 permissions and be owned by root
-# - Always verify configuration before running backups in production
-# - Keep backup copies of this configuration file
-# - La versione del SISTEMA viene caricata dal file VERSION
-# - La versione QUI indica la versione del formato di configurazione
-# ============================================================================
+    get_reference_config_header > "$config_file"
+    cat >> "$config_file" <<'EOF'
 
 # ============================================================================
 # 1. GENERAL SYSTEM CONFIGURATION
@@ -782,13 +857,6 @@ MIN_BASH_VERSION="4.4.0"
 
 # Debug level: "standard", "advanced" (-v), "extreme" (-x)
 DEBUG_LEVEL="standard"
-
-# Required packages for system operation
-REQUIRED_PACKAGES="tar gzip zstd pigz jq curl rclone gpg rsync"
-OPTIONAL_PACKAGES=""
-
-# Automatic installation of missing dependencies
-AUTO_INSTALL_DEPENDENCIES="true"
 
 # Disable colors in output (useful for logs or terminals that don't support colors)
 DISABLE_COLORS="false"
@@ -1076,8 +1144,6 @@ BACKUP_BLACKLIST="
 /root/.dotnet
 /root/.local
 /root/.gnupg
-/root/.codex
-/root/.claude
 ${BASE_DIR}/log/
 ${BASE_DIR}/backup/
 "
@@ -1137,7 +1203,7 @@ setup_configuration() {
         add_storage_monitoring_config
         update_blacklist_config
         update_email_config
-        update_required_packages
+        remove_packages_config
     fi
 
     create_default_configuration

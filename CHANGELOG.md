@@ -2,10 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.0] - 2025-10-28 - Standalone file: backup.env
+**Fix**
+- Removed required package list
+
 ## [2.0.3] - 2025-11-02 - Add rsync dependency
 ### Standalone Script: install.sh
 **Add**
 - Add rsync Dependency
+- Dependencies installed/updated automatically
+**Fix**
+- Remove code duplicated in header template
 
 ## [1.0.1] - 2025-11-03 - Selective Restore with Automatic Version Detection
 ### script/proxmox-restore.sh
@@ -212,8 +219,8 @@ All notable changes to this project are documented in this file.
   - Capability list: `selective_restore,category_mapping,version_detection,auto_directory_creation`
   
 ### lib/security.sh
-**Add**
-- Added automatic Debian repo management so dependency installs can recover from missing mirrors.
+**Fix**
+- Removed dependency installation and updates and moved in install.sh
 
 ### env/backup.env
 **Add**

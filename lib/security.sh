@@ -4,7 +4,7 @@
 # File: security.sh
 # Version: 0.7.0
 # Last Modified: 2025-11-03
-# Changes: Debian repo management
+# Changes: Removed dependency installation and updates and moved in install.sh
 ##
 # Basic security functions for backup
 
@@ -95,188 +95,6 @@ append_security_log_to_main() {
 }
 
 # Function to detect available package manager
-detect_package_manager() {
-    if command_exists "apt-get"; then
-        echo "apt-get"
-    elif command_exists "dnf"; then
-        echo "dnf"
-    elif command_exists "yum"; then
-        echo "yum"
-    else
-        echo ""
-    fi
-}
-
-# Determine Debian codename for repository configuration
-get_debian_codename() {
-    local codename=""
-
-    if [[ -r /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        codename="${VERSION_CODENAME:-${DEBIAN_CODENAME:-}}"
-    fi
-
-    if [[ -z "$codename" ]] && command_exists "lsb_release"; then
-        codename=$(lsb_release -cs 2>/dev/null || true)
-    fi
-
-    if [[ -z "$codename" ]]; then
-        codename="bookworm"
-    fi
-
-    printf '%s\n' "$codename"
-}
-
-# Check if Debian repositories are already configured
-debian_repositories_present() {
-    local pattern='^deb .*deb\.debian\.org/debian'
-    local security_pattern='^deb .*security\.debian\.org/debian-security'
-
-    if [[ -f /etc/apt/sources.list ]] && grep -Eq "$pattern|$security_pattern" /etc/apt/sources.list; then
-        return 0
-    fi
-
-    local file
-    for file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
-        [[ -f "$file" ]] || continue
-        if grep -Eq "$pattern|$security_pattern" "$file"; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-# Ensure Debian repositories exist by adding a default sources file when needed
-ensure_default_debian_repositories() {
-    if debian_repositories_present; then
-        debug "Debian repositories already configured"
-        return 1
-    fi
-
-    local codename
-    codename=$(get_debian_codename)
-    local repo_file="/etc/apt/sources.list.d/proxmox-backup-debian.list"
-
-    info "Adding default Debian repositories for codename: $codename"
-    if cat <<EOF > "$repo_file"
-deb http://deb.debian.org/debian $codename main contrib
-deb http://deb.debian.org/debian $codename-updates main contrib
-deb http://security.debian.org/debian-security $codename-security main contrib
-EOF
-    then
-        return 0
-    else
-        error "Failed to write default Debian repository file: $repo_file"
-        return 2
-    fi
-}
-
-# Verify that the requested packages have installation candidates available
-apt_packages_have_candidates() {
-    local packages=("$@")
-    local missing=()
-    local pkg policy candidate
-
-    for pkg in "${packages[@]}"; do
-        policy=$(apt-cache policy "$pkg" 2>/dev/null || true)
-        candidate=$(printf '%s\n' "$policy" | awk -F': ' '/Candidate:/ {print $2; exit}')
-
-        if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
-            missing+=("$pkg")
-        fi
-    done
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        warning "No install candidates found for packages: ${missing[*]}"
-        return 1
-    fi
-
-    return 0
-}
-
-# Function to install packages using detected package manager
-install_packages() {
-    local packages=("$@")
-    local pkg_manager
-    
-    pkg_manager=$(detect_package_manager)
-    if [[ -z "$pkg_manager" ]]; then
-        error "Unable to detect package manager. Please install missing packages manually."
-        return $EXIT_ERROR
-    fi
-    
-    debug "Using $pkg_manager package manager"
-    
-    case "$pkg_manager" in
-        "apt-get")
-            info "Updating package list..."
-            {
-                apt-get update 2>&1 | while IFS= read -r line; do info "APT: $line"; done
-            }
-            local update_status=${PIPESTATUS[0]}
-            if [[ $update_status -ne 0 ]]; then
-                return $EXIT_ERROR
-            fi
-
-            if ! apt_packages_have_candidates "${packages[@]}"; then
-                ensure_default_debian_repositories
-                local ensure_status=$?
-                if [[ $ensure_status -eq 0 ]]; then
-                    info "Updating package list after adding Debian repositories..."
-                    {
-                        apt-get update 2>&1 | while IFS= read -r line; do info "APT: $line"; done
-                    }
-                    update_status=${PIPESTATUS[0]}
-                    if [[ $update_status -ne 0 ]]; then
-                        return $EXIT_ERROR
-                    fi
-
-                    if ! apt_packages_have_candidates "${packages[@]}"; then
-                        error "Packages still unavailable after adding default repositories: ${packages[*]}"
-                        return $EXIT_ERROR
-                    fi
-                elif [[ $ensure_status -eq 1 ]]; then
-                    error "Packages unavailable and Debian repositories already configured. Please verify APT sources."
-                    return $EXIT_ERROR
-                else
-                    return $EXIT_ERROR
-                fi
-            fi
-
-            info "Installing packages: ${packages[*]}"
-            {
-                apt-get install -y "${packages[@]}" 2>&1 | while IFS= read -r line; do info "APT: $line"; done
-            }
-            local install_status=${PIPESTATUS[0]}
-            if [[ $install_status -ne 0 ]]; then
-                return $EXIT_ERROR
-            fi
-
-            return $EXIT_SUCCESS
-            ;;
-        "dnf")
-            info "Installing packages with dnf: ${packages[*]}"
-            if dnf install -y "${packages[@]}" 2>&1 | while IFS= read -r line; do info "DNF: $line"; done; then
-                return $EXIT_SUCCESS
-            else
-                return $EXIT_ERROR
-            fi
-            ;;
-        "yum")
-            info "Installing packages with yum: ${packages[*]}"
-            if yum install -y "${packages[@]}" 2>&1 | while IFS= read -r line; do info "YUM: $line"; done; then
-                return $EXIT_SUCCESS
-            else
-                return $EXIT_ERROR
-            fi
-            ;;
-    esac
-    
-    return $EXIT_SUCCESS
-}
-
 # Verify script security
 verify_script_security() {
     step "Verifying script security"
@@ -378,22 +196,23 @@ verify_script_security() {
 # System dependencies check
 check_dependencies() {
     step "Checking dependencies"
-    
+
     # Check bash version
     local bash_version
     bash_version=$(bash --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     debug "Bash version: $bash_version"
-    
+
     if ! check_version "$bash_version" "${MIN_BASH_VERSION:-4.0.0}"; then
         error "Bash version is too old. Required: ${MIN_BASH_VERSION:-4.0.0}, Current: $bash_version"
         set_exit_code "error"
         return $EXIT_ERROR
     fi
-    
-    # Check required packages
+
+    # Check required packages (hardcoded list - managed by install.sh)
+    local REQUIRED_PACKAGES="tar gzip zstd pigz jq curl rclone gpg rsync"
     local missing_packages=()
     local pkg
-    for pkg in ${REQUIRED_PACKAGES:-}; do
+    for pkg in $REQUIRED_PACKAGES; do
         if ! command_exists "$pkg"; then
             missing_packages+=("$pkg")
             warning "Required package not found: $pkg"
@@ -404,19 +223,13 @@ check_dependencies() {
     
     # Handle missing packages
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
-        warning "Missing required packages: ${missing_packages[*]}"
-
-        if [[ "${AUTO_INSTALL_DEPENDENCIES:-false}" == "true" ]]; then
-            if ! install_missing_packages "${missing_packages[@]}"; then
-                error "Failed to install missing dependencies"
-                set_exit_code "error"
-                return $EXIT_ERROR
-            fi
-        else
-            error "Missing required packages and AUTO_INSTALL_DEPENDENCIES is disabled"
-            set_exit_code "error"
-            return $EXIT_ERROR
-        fi
+        for pkg in "${missing_packages[@]}"; do
+            error "Missing required package: $pkg"
+        done
+        error "Please run install.sh to install/update all dependencies"
+        error "Command: sudo ${BASE_DIR}/install.sh"
+        set_exit_code "error"
+        return $EXIT_ERROR
     fi
     
     # Verify compression tools
@@ -430,53 +243,6 @@ check_dependencies() {
 }
 
 # Install missing packages
-install_missing_packages() {
-    local packages=("$@")
-    
-    if [[ ${#packages[@]} -eq 0 ]]; then
-        debug "No packages to install"
-        return $EXIT_SUCCESS
-    fi
-    
-    info "Attempting to install missing required packages: ${packages[*]}"
-    
-    # Use unified function to install packages
-    if ! install_packages "${packages[@]}"; then
-        error "Failed to install required packages"
-        set_exit_code "error"
-        return $EXIT_ERROR
-    fi
-    
-    # Clear command cache for installed packages to ensure fresh verification
-    info "Clearing command cache for installed packages..."
-    for pkg in "${packages[@]}"; do
-        clear_command_cache "$pkg"
-    done
-    
-    # Also clear bash's command hash to ensure fresh PATH lookup
-    hash -r 2>/dev/null || true
-    
-    # Verify installation
-    local failed_installs=()
-    local pkg
-    for pkg in "${packages[@]}"; do
-        if ! command_exists "$pkg"; then
-            failed_installs+=("$pkg")
-            error "Failed to install required package: $pkg"
-        else
-            info "Successfully installed package: $pkg"
-        fi
-    done
-    
-    if [[ ${#failed_installs[@]} -gt 0 ]]; then
-        error "Failed to install some required packages: ${failed_installs[*]}"
-        set_exit_code "error"
-        return $EXIT_ERROR
-    fi
-
-    return $EXIT_SUCCESS
-}
-
 # Improved version comparison function
 check_version() {
     local version="$1"
@@ -580,36 +346,14 @@ check_compression_tools() {
         done
     fi
 
-    # Handle missing tools - REMOVED infinite recursion
+    # Handle missing tools
     if [[ "$tools_missing" == "true" ]]; then
-        if [[ "${AUTO_INSTALL_DEPENDENCIES:-false}" == "true" ]]; then
-            info "Installing missing compression tools: ${required_tools[*]}"
-            if ! install_packages "${required_tools[@]}"; then
-                error "Install failed: ${required_tools[*]}"
-                return $EXIT_ERROR
-            fi
-            
-            # Clear command cache for installed tools to ensure fresh verification
-            info "Clearing command cache for installed compression tools..."
-            for tool in "${required_tools[@]}"; do
-                clear_command_cache "$tool"
-            done
-            
-            # Also clear bash's command hash to ensure fresh PATH lookup
-            hash -r 2>/dev/null || true
-            
-            # Verify that installation was successful
-            local tool
-            for tool in "${required_tools[@]}"; do
-                if ! command_exists "$tool"; then
-                    error "Failed to install compression tool: $tool"
-                    return $EXIT_ERROR
-                fi
-            done
-        else
-            error "Missing compression tools: ${required_tools[*]}"
-            return $EXIT_ERROR
-        fi
+        for tool in "${required_tools[@]}"; do
+            error "Missing compression tool: $tool"
+        done
+        error "Please run install.sh to install/update all dependencies"
+        error "Command: sudo ${BASE_DIR}/install.sh"
+        return $EXIT_ERROR
     fi
 
     return $EXIT_SUCCESS
