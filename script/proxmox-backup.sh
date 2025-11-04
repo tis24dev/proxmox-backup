@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.6.5
-# Last Modified: 2025-11-02
-# Changes: Fix Metrics check
+# Version: 0.7.0
+# Last Modified: 2025-11-03
+# Changes: Add selective restore
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.

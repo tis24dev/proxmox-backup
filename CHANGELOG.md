@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.0] - 2025-11-04 - Standalone file: backup.env
+**Fix**
+- Removed required package list
+
+## [2.0.3] - 2025-11-04 - Standalone Script: install.sh
+**Add**
+- Add rsync Dependency
+- Dependencies installed/updated automatically
+**Fix**
+- Remove code duplicated in header template
+
+## [1.0.1] - 2025-11-03 - Selective Restore with Automatic Version Detection
+### script/proxmox-restore.sh
+**Add**
+- Implemented selective restore functionality with interactive category selection menu
+- Added automatic backup version detection system using metadata files
+- Added 11 new functions for selective restore capabilities
+- Added automatic directory structure recreation for PVE storages and PBS datastores
+- Added backup type detection and display
+- Added comprehensive restore confirmation screen showing
+- Implemented new restore workflow architecture
+- Added metadata reading optimization
+- Replaced manual `cp` operations with `rsync -a --backup --backup-dir` for safer restore operations
+- Added backup of overwritten files to timestamped directory: `/tmp/current_config_backup_YYYYMMDD_HHMMSS_PID`
+- Added support for uppercase PROXMOX_TYPE display using parameter expansion `${PROXMOX_TYPE^^}`
+- Added validation checks using `[[ -v AVAILABLE_CATEGORIES[$cat] ]]` for compatibility with `set -o nounset`
+- Added `validate_system_compatibility()` function (lines 647-709) to prevent incompatible cross-system restores
+- Added dynamic menu text in `show_category_menu()` that adapts to PVE vs PBS backup type (lines 741-775)
+- Added system-specific category selection logic in option 2
+- Added detailed restoration plan display in `confirm_restore()` with category-specific descriptions (lines 502-567)
+- Integrated compatibility validation into `prepare_restore_strategy()` workflow (lines 1175-1179)
+**Fix**
+- Modified main restore workflow to use new prepare/execute architecture instead of inline restore
+- Fixed show_category_menu() to return exit code 1 when user cancels (option 0)
+- Fixed array key existence checks to use `[[ -v array[key] ]]` instead of `[ -n "${array[key]}" ]` for set -u compatibility
+- Fixed extract_backup() output to use stderr redirection (`>&2`) for status messages to avoid polluting function return value
+- Fixed option 2 incorrectly mixing PVE and PBS categories (now properly separated by backup type)
+- Fixed menu showing generic "STORAGE only" label for both PVE and PBS (now shows system-specific labels)
+- Maintains 100% backward compatibility: legacy backups without metadata automatically use full restore mode
+**Security**
+- Blocks incompatible restore attempts (PVE backup → PBS system or vice versa) with detailed error messages
+- Prevents system malfunction from cross-system configuration restoration
+- Validates backup type matches current system before allowing restore to proceed
+
 ## [2.0.2] - 2025-11-02 - Interactive Telegram Notifications Setup
 ### Standalone Script: install.sh
 **Add**
@@ -162,6 +206,27 @@ All notable changes to this project are documented in this file.
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
 ---------------------------------------------------------------------------------------
+
+## [0.7.0] - 2025-11-03 - Selective Restore with Automatic Version Detection
+### lib/backup_collect.sh
+**Add**
+- Added `create_backup_metadata()` function (lines 635-659) to generate backup metadata files
+- Integrated metadata creation into backup workflow (line 624) - called after file collection completes
+- Metadata file includes:
+  - Backup version, type (PVE/PBS), timestamp, hostname
+  - Feature flags: `SUPPORTS_SELECTIVE_RESTORE=true`
+  - Capability list: `selective_restore,category_mapping,version_detection,auto_directory_creation`
+  
+### lib/security.sh
+**Fix**
+- Removed dependency installation and updates and moved in install.sh
+
+### env/backup.env
+**Add**
+- Added `rsync` to REQUIRED_PACKAGES list (line 32) for automatic installation during dependency checks
+- rsync requirement ensures selective restore functionality works on all systems
+**Fix**
+- Updated dependency list from `"tar gzip zstd pigz jq curl rclone gpg"` to include `rsync`
 
 ## [0.6.5] - 2025-11-03 - Metrics Module: Improved Warning Messages
 ### lib/metrics.sh
