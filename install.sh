@@ -257,8 +257,8 @@ install_dependencies() {
         print_status "rclone not found, will install"
         rclone_needs_install=true
     else
-        local current_rclone_version
-        current_rclone_version=$(rclone version 2>/dev/null | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/v//')
+        local current_rclone_version=""
+        current_rclone_version=$(rclone version 2>/dev/null | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/v//') || true
         if [[ -n "$current_rclone_version" ]]; then
             print_status "Current rclone version: $current_rclone_version"
             # Always update rclone to get latest version
@@ -286,8 +286,8 @@ install_dependencies() {
         print_status "rsync not found, will install"
         rsync_needs_install=true
     else
-        local current_rsync_version
-        current_rsync_version=$(rsync --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+        local current_rsync_version=""
+        current_rsync_version=$(rsync --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1) || true
         if [[ -n "$current_rsync_version" ]]; then
             print_status "Current rsync version: $current_rsync_version"
             if [[ "$current_rsync_version" != "$rsync_target_version" ]]; then
