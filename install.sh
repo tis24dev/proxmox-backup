@@ -271,30 +271,26 @@ install_dependencies() {
     fi
 
     if [[ "$rclone_needs_install" == "true" ]]; then
+        local rclone_status=0
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            if ! curl https://rclone.org/install.sh | bash; then
-                local rclone_status=$?
-                if [[ $rclone_status -eq 3 ]]; then
-                    print_success "rclone already at latest version"
-                else
-                    print_error "rclone installation failed with exit code $rclone_status"
-                    return 1
-                fi
-            else
-                print_success "rclone installed/updated"
-            fi
+            set +e
+            curl https://rclone.org/install.sh | bash
+            rclone_status=$?
+            set -e
         else
-            if ! curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1; then
-                local rclone_status=$?
-                if [[ $rclone_status -eq 3 ]]; then
-                    print_success "rclone already at latest version"
-                else
-                    print_error "rclone installation failed with exit code $rclone_status"
-                    return 1
-                fi
-            else
-                print_success "rclone installed/updated"
-            fi
+            set +e
+            curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1
+            rclone_status=$?
+            set -e
+        fi
+
+        if [[ $rclone_status -eq 0 ]]; then
+            print_success "rclone installed/updated"
+        elif [[ $rclone_status -eq 3 ]]; then
+            print_success "rclone already at latest version"
+        else
+            print_error "rclone installation failed with exit code $rclone_status"
+            return 1
         fi
     fi
 
