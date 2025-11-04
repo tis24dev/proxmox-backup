@@ -11,7 +11,7 @@
 ##
 
 # ======= Base variables BEFORE set -u =======
-# Risolve il symlink per ottenere il percorso reale dello script
+# Resolve symlink to get the real script path
 SCRIPT_REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 export SCRIPT_DIR="$(dirname "$SCRIPT_REAL_PATH")"
 export BASE_DIR="$(dirname "$SCRIPT_DIR")"
@@ -43,7 +43,7 @@ if [[ -f "$ENV_FILE" ]]; then
     source "$ENV_FILE"
     echo "Proxmox Restore Script Version: ${SCRIPT_VERSION:-1.0.1}"
 else
-    echo "[ERRORE] File di configurazione non trovato: $ENV_FILE"
+    echo "[ERROR] Configuration file not found: $ENV_FILE"
     exit $EXIT_ERROR
 fi
 
@@ -64,6 +64,14 @@ SELECTED_LOCATION=""
 SELECTED_BACKUP=""
 HOSTNAME=$(hostname -f)
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+RESTORE_MODE="full"
+declare -a SELECTED_CATEGORIES=()
+BACKUP_VERSION="Unknown"
+BACKUP_SUPPORTS_SELECTIVE="false"
+SELECTED_BACKUP_LABEL=""
+SELECTED_EXTRACT_DIR=""
+SELECTED_TEMP_BACKUP_FILE=""
+BACKUP_DETECTED_SELECTIVE="false"
 
 # ==========================================
 # COLORS AND FORMATTING
@@ -92,19 +100,34 @@ info() {
 }
 
 success() {
-    echo -e "${GREEN}[SUCCESSO]${NC} $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 warning() {
-    echo -e "${YELLOW}[AVVISO]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 error() {
-    echo -e "${RED}[ERRORE]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
 step() {
     echo -e "${PURPLE}[STEP]${NC} $1"
+}
+
+debug() {
+    local level="${DEBUG_LEVEL:-standard}"
+    if [ "$level" = "advanced" ] || [ "$level" = "extreme" ]; then
+        echo -e "${CYAN}[DEBUG]${NC} $1"
+    fi
+}
+
+get_display_proxmox_type() {
+    if [ -n "${PROXMOX_TYPE:-}" ]; then
+        echo "${PROXMOX_TYPE^^}"
+    else
+        echo "Unknown"
+    fi
 }
 
 # ==========================================
@@ -114,7 +137,7 @@ step() {
 # Function to check if a storage location is enabled
 is_storage_enabled() {
     local storage_type="$1"
-    
+
     case "$storage_type" in
         "local")
             return 0  # Local is always available
@@ -134,7 +157,7 @@ is_storage_enabled() {
 # Function to get storage path
 get_storage_path() {
     local storage_type="$1"
-    
+
     case "$storage_type" in
         "local")
             echo "$LOCAL_BACKUP_PATH"
@@ -155,30 +178,30 @@ get_storage_path() {
 validate_backup_file() {
     local backup_file="$1"
     local storage_type="$2"
-    
+
     # Check if checksum file exists
     local checksum_file="${backup_file}.sha256"
     local metadata_file="${backup_file}.metadata"
-    
+
     case "$storage_type" in
         "local"|"secondary")
             # Check if checksum file exists
             if [ ! -f "$checksum_file" ]; then
                 return 1  # No checksum file
             fi
-            
+
             # Verify checksum
             if command -v sha256sum >/dev/null 2>&1; then
                 if ! sha256sum -c "$checksum_file" >/dev/null 2>&1; then
                     return 1  # Checksum verification failed
                 fi
             fi
-            
+
             # Check if metadata file exists
             if [ ! -f "$metadata_file" ]; then
                 return 1  # No metadata file
             fi
-            
+
             return 0  # File is valid
             ;;
         "cloud")
@@ -187,7 +210,7 @@ validate_backup_file() {
             if command -v rclone >/dev/null 2>&1; then
                 local checksum_exists=$(rclone ls "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/$(basename "$checksum_file")" 2>/dev/null | wc -l)
                 local metadata_exists=$(rclone ls "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/$(basename "$metadata_file")" 2>/dev/null | wc -l)
-                
+
                 if [ "$checksum_exists" -gt 0 ] && [ "$metadata_exists" -gt 0 ]; then
                     return 0  # Both files exist
                 fi
@@ -201,7 +224,7 @@ validate_backup_file() {
 list_backup_files() {
     local storage_type="$1"
     local storage_path="$2"
-    
+
     case "$storage_type" in
         "local"|"secondary")
             if [ -d "$storage_path" ]; then
@@ -212,7 +235,7 @@ list_backup_files() {
                 done < <(find "$storage_path" -name "*-backup-*.tar*" -type f 2>/dev/null | \
                         grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
                         sort -r)
-                
+
                 # Filter only valid backup files
                 local valid_files=()
                 for file in "${all_files[@]}"; do
@@ -220,7 +243,7 @@ list_backup_files() {
                         valid_files+=("$file")
                     fi
                 done
-                
+
                 # Output valid files
                 printf '%s\n' "${valid_files[@]}"
             fi
@@ -236,7 +259,7 @@ list_backup_files() {
                         awk '{print $2}' | \
                         grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
                         sort -r)
-                
+
                 # Filter only valid backup files
                 local valid_files=()
                 for file in "${all_files[@]}"; do
@@ -244,7 +267,7 @@ list_backup_files() {
                         valid_files+=("$file")
                     fi
                 done
-                
+
                 # Output valid files
                 printf '%s\n' "${valid_files[@]}"
             fi
@@ -252,60 +275,156 @@ list_backup_files() {
     esac
 }
 
+# Function to read backup metadata file content without full extraction
+read_backup_metadata() {
+    local backup_file="$1"
+    local storage_type="$2"
+    local metadata_path="./var/lib/proxmox-backup-info/backup_metadata.txt"
+    local content=""
+
+    case "$storage_type" in
+        "local"|"secondary")
+            [ -f "$backup_file" ] || return 1
+            if [[ "$backup_file" == *.tar.zst ]]; then
+                command -v zstd >/dev/null 2>&1 || return 1
+                content=$(zstd -dc "$backup_file" 2>/dev/null | tar -xOf - "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar.xz ]]; then
+                content=$(tar -xJOf "$backup_file" "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar.gz ]]; then
+                content=$(tar -xzOf "$backup_file" "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar.bz2 ]]; then
+                content=$(tar -xjOf "$backup_file" "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar ]]; then
+                content=$(tar -xOf "$backup_file" "$metadata_path" 2>/dev/null) || return 1
+            else
+                return 1
+            fi
+            ;;
+        "cloud")
+            command -v rclone >/dev/null 2>&1 || return 1
+            local remote_file="${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/$(basename "$backup_file")"
+            if [[ "$backup_file" == *.tar.zst ]]; then
+                command -v zstd >/dev/null 2>&1 || return 1
+                content=$(rclone cat "$remote_file" ${RCLONE_FLAGS:-} 2>/dev/null | zstd -dc 2>/dev/null | tar -xOf - "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar.xz ]]; then
+                content=$(rclone cat "$remote_file" ${RCLONE_FLAGS:-} 2>/dev/null | tar -xJOf - "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar.gz ]]; then
+                content=$(rclone cat "$remote_file" ${RCLONE_FLAGS:-} 2>/dev/null | tar -xzOf - "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar.bz2 ]]; then
+                content=$(rclone cat "$remote_file" ${RCLONE_FLAGS:-} 2>/dev/null | tar -xjOf - "$metadata_path" 2>/dev/null) || return 1
+            elif [[ "$backup_file" == *.tar ]]; then
+                content=$(rclone cat "$remote_file" ${RCLONE_FLAGS:-} 2>/dev/null | tar -xOf - "$metadata_path" 2>/dev/null) || return 1
+            else
+                return 1
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    [ -n "$content" ] || return 1
+    printf '%s\n' "$content"
+    return 0
+}
+
+# Function to get backup capability label (Standard/Selective)
+get_backup_type_label() {
+    local backup_file="$1"
+    local storage_type="$2"
+    local metadata_content
+
+    if metadata_content=$(read_backup_metadata "$backup_file" "$storage_type"); then
+        local supports=$(printf '%s\n' "$metadata_content" | awk -F '=' '$1=="SUPPORTS_SELECTIVE_RESTORE"{print $2}')
+        local backup_type=$(printf '%s\n' "$metadata_content" | awk -F '=' '$1=="BACKUP_TYPE"{print $2}' | tr '[:upper:]' '[:lower:]')
+        local display_type="Unknown"
+        case "$backup_type" in
+            pve)
+                display_type="PVE"
+                ;;
+            pbs)
+                display_type="PBS"
+                ;;
+            both|mixed)
+                display_type="PVE+PBS"
+                ;;
+            "")
+                display_type="Unknown"
+                ;;
+            *)
+                display_type=$(printf '%s\n' "$backup_type" | tr '[:lower:]' '[:upper:]')
+                ;;
+        esac
+
+        if [ "$supports" = "true" ]; then
+            printf "Selective / %s" "$display_type"
+        else
+            printf "Standard / %s" "$display_type"
+        fi
+        return 0
+    fi
+
+    if [ "$storage_type" = "cloud" ]; then
+        echo "Unknown / Unknown"
+    else
+        echo "Standard / Unknown"
+    fi
+}
+
 # Function to display storage selection menu
 show_storage_menu() {
     echo ""
-    echo -e "${CYAN}=== SELEZIONE UBICAZIONE BACKUP ===${NC}"
+    echo -e "${CYAN}=== SELECT BACKUP LOCATION ===${NC}"
     echo ""
-    
+
     local options=()
     local paths=()
     local count=0
-    
+
     # Check local storage
     if is_storage_enabled "local"; then
         count=$((count + 1))
         options+=("$count")
         paths+=("local")
-        echo -e "${GREEN}$count)${NC} Storage Locale: ${LOCAL_BACKUP_PATH}"
+        echo -e "${GREEN}$count)${NC} Local Storage: ${LOCAL_BACKUP_PATH}"
     fi
-    
+
     # Check secondary storage
     if is_storage_enabled "secondary"; then
         count=$((count + 1))
         options+=("$count")
         paths+=("secondary")
-        echo -e "${GREEN}$count)${NC} Storage Secondario: ${SECONDARY_BACKUP_PATH}"
+        echo -e "${GREEN}$count)${NC} Secondary Storage: ${SECONDARY_BACKUP_PATH}"
     fi
-    
+
     # Check cloud storage
     if is_storage_enabled "cloud"; then
         count=$((count + 1))
         options+=("$count")
         paths+=("cloud")
-        echo -e "${GREEN}$count)${NC} Storage Cloud: ${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}"
+        echo -e "${GREEN}$count)${NC} Cloud Storage: ${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}"
     fi
-    
+
     if [ $count -eq 0 ]; then
-        error "Nessun storage abilitato nel file di configurazione"
+        error "No storage enabled in configuration file"
         exit $EXIT_ERROR
     fi
-    
+
     echo ""
-    echo -e "${YELLOW}0)${NC} Esci"
+    echo -e "${YELLOW}0)${NC} Exit"
     echo ""
-    
+
     while true; do
-        read -p "Seleziona l'ubicazione da cui ripristinare [0-$count]: " choice
-        
+        read -p "Select backup location to restore from [0-$count]: " choice
+
         if [ "$choice" = "0" ]; then
-            info "Operazione annullata dall'utente"
+            info "Operation cancelled by user"
             exit $EXIT_SUCCESS
         elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $count ]; then
             SELECTED_LOCATION="${paths[$((choice-1))]}"
             break
         else
-            warning "Selezione non valida. Inserisci un numero tra 0 e $count"
+            warning "Invalid selection. Enter a number between 0 and $count"
         fi
     done
 }
@@ -314,31 +433,35 @@ show_storage_menu() {
 show_backup_menu() {
     local storage_type="$SELECTED_LOCATION"
     local storage_path=$(get_storage_path "$storage_type")
-    
+
     echo ""
-    echo -e "${CYAN}=== SELEZIONE FILE BACKUP ===${NC}"
+    echo -e "${CYAN}=== SELECT BACKUP FILE ===${NC}"
     echo ""
-    info "Ricerca backup in: $storage_path"
+    info "Searching for backups in: $storage_path"
     echo ""
-    
+
     # Get list of backup files
     local backup_files=()
+    local backup_labels=()
     while IFS= read -r line; do
         [ -n "$line" ] && backup_files+=("$line")
     done < <(list_backup_files "$storage_type" "$storage_path")
-    
+
     if [ ${#backup_files[@]} -eq 0 ]; then
-        error "Nessun file backup trovato in $storage_path"
+        error "No backup files found in $storage_path"
         exit $EXIT_ERROR
     fi
-    
+
     # Display backup files
     local count=0
-    for backup_file in "${backup_files[@]}"; do
+    for idx in "${!backup_files[@]}"; do
+        local backup_file="${backup_files[$idx]}"
         count=$((count + 1))
         local file_name=$(basename "$backup_file")
         local file_size=""
-        
+        local backup_label=$(get_backup_type_label "$backup_file" "$storage_type")
+        backup_labels[$idx]="$backup_label"
+
         # Get file size
         case "$storage_type" in
             "local"|"secondary")
@@ -351,53 +474,82 @@ show_backup_menu() {
                 file_size="N/A"
                 ;;
         esac
-        
-        echo -e "${GREEN}$count)${NC} $file_name ${BLUE}($file_size)${NC}"
+
+        echo -e "${GREEN}$count)${NC} $file_name ${BLUE}($file_size)${NC} ${PURPLE}[${backup_label}]${NC}"
     done
-    
+
     echo ""
-    echo -e "${YELLOW}0)${NC} Torna al menu precedente"
+    echo -e "${YELLOW}0)${NC} Back to previous menu"
     echo ""
-    
+
     while true; do
-        read -p "Seleziona il file backup da ripristinare [0-$count]: " choice
-        
+        read -p "Select backup file to restore [0-$count]: " choice
+
         if [ "$choice" = "0" ]; then
             return 1  # Go back to storage menu
         elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $count ]; then
             SELECTED_BACKUP="${backup_files[$((choice-1))]}"
+            SELECTED_BACKUP_LABEL="${backup_labels[$((choice-1))]}"
             break
         else
-            warning "Selezione non valida. Inserisci un numero tra 0 e $count"
+            warning "Invalid selection. Enter a number between 0 and $count"
         fi
     done
-    
+
     return 0
 }
 
 # Function to confirm restore operation
 confirm_restore() {
     echo ""
-    echo -e "${CYAN}=== CONFERMA RIPRISTINO ===${NC}"
+    echo -e "${CYAN}=== RESTORE CONFIRMATION ===${NC}"
     echo ""
-    echo -e "Ubicazione: ${GREEN}$SELECTED_LOCATION${NC}"
-    echo -e "File backup: ${GREEN}$(basename "$SELECTED_BACKUP")${NC}"
+    echo -e "Location: ${GREEN}$SELECTED_LOCATION${NC}"
+    echo -e "Backup file: ${GREEN}$(basename "$SELECTED_BACKUP")${NC}"
+    local display_type
+    display_type=$(get_display_proxmox_type)
+    if [ -n "$SELECTED_BACKUP_LABEL" ]; then
+        echo -e "Backup type (catalog): ${GREEN}$SELECTED_BACKUP_LABEL${NC}"
+    fi
+    echo -e "System detected: ${GREEN}$display_type${NC}"
+    if [ "$BACKUP_DETECTED_SELECTIVE" = "true" ]; then
+        echo -e "Type detected: ${GREEN}Selective${NC} (version: ${GREEN}${BACKUP_VERSION:-Unknown}${NC})"
+        if [ "$RESTORE_MODE" = "full" ]; then
+            echo -e "Selected mode: ${GREEN}Full restore${NC}"
+        else
+            echo -e "Selected mode: ${GREEN}Selective restore${NC}"
+            local category_names=()
+            for cat in "${SELECTED_CATEGORIES[@]}"; do
+                if [ "$cat" = "all" ]; then
+                    category_names=("all categories")
+                    break
+                else
+                    category_names+=("${AVAILABLE_CATEGORIES[$cat]:-$cat}")
+                fi
+            done
+            local category_list=$(IFS=', '; echo "${category_names[*]}")
+            echo -e "Categories included: ${GREEN}$category_list${NC}"
+        fi
+    else
+        echo -e "Type detected: ${GREEN}Standard${NC}"
+        echo -e "Selected mode: ${GREEN}Full restore${NC}"
+    fi
     echo ""
-    echo -e "${RED}ATTENZIONE: Questa operazione sovrascriverà le configurazioni attuali!${NC}"
+    echo -e "${RED}WARNING: This operation will overwrite current configurations!${NC}"
     echo ""
-    
+
     while true; do
-        read -p "Sei sicuro di voler procedere con il ripristino? [s/N]: " confirm
+        read -p "Are you sure you want to proceed with the restore? [y/N]: " confirm
         case "$confirm" in
-            [sS]|[sS][ìi])
+            [yY]|[yY][eE][sS])
                 return 0
                 ;;
             [nN]|[nN][oO]|"")
-                info "Operazione annullata dall'utente"
-                exit $EXIT_SUCCESS
+                info "Operation cancelled by user"
+                return 1
                 ;;
             *)
-                warning "Risposta non valida. Inserisci 's' per sì o 'n' per no"
+                warning "Invalid answer. Enter 'y' for yes or 'n' for no"
                 ;;
         esac
     done
@@ -407,19 +559,19 @@ confirm_restore() {
 download_cloud_backup() {
     local remote_file="$1"
     local local_temp_file="/tmp/$(basename "$remote_file")"
-    
-    step "Download del backup dal cloud storage..."
-    
+
+    step "Downloading backup from cloud storage..." >&2
+
     if ! command -v rclone >/dev/null 2>&1; then
-        error "rclone non trovato. È necessario per accedere al cloud storage"
+        error "rclone not found. Required to access cloud storage"
         exit $EXIT_ERROR
     fi
-    
+
     if rclone copy "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}/$(basename "$remote_file")" "/tmp/" ${RCLONE_FLAGS:-}; then
         echo "$local_temp_file"
         return 0
     else
-        error "Errore nel download del backup dal cloud"
+        error "Error downloading backup from cloud"
         exit $EXIT_ERROR
     fi
 }
@@ -428,18 +580,18 @@ download_cloud_backup() {
 extract_backup() {
     local backup_file="$1"
     local extract_dir="/tmp/proxmox_restore_$$"
-    
-    step "Estrazione del backup..."
-    
+
+    step "Extracting backup..." >&2
+
     # Create extraction directory
     mkdir -p "$extract_dir"
-    
+
     # Determine compression type and extract
     if [[ "$backup_file" == *.tar.zst ]]; then
         if command -v zstd >/dev/null 2>&1; then
             zstd -dc "$backup_file" | tar -xf - -C "$extract_dir"
         else
-            error "zstd non trovato per estrarre il backup compresso con zstd"
+            error "zstd not found to extract zstd-compressed backup"
             exit $EXIT_ERROR
         fi
     elif [[ "$backup_file" == *.tar.xz ]]; then
@@ -451,10 +603,10 @@ extract_backup() {
     elif [[ "$backup_file" == *.tar ]]; then
         tar -xf "$backup_file" -C "$extract_dir"
     else
-        error "Formato di compressione non riconosciuto: $backup_file"
+        error "Unrecognized compression format: $backup_file"
         exit $EXIT_ERROR
     fi
-    
+
     echo "$extract_dir"
 }
 
@@ -470,14 +622,25 @@ detect_backup_version() {
     if [ -f "$metadata_file" ]; then
         BACKUP_VERSION=$(grep "^VERSION=" "$metadata_file" 2>/dev/null | cut -d= -f2)
         BACKUP_SUPPORTS_SELECTIVE=$(grep "^SUPPORTS_SELECTIVE_RESTORE=" "$metadata_file" 2>/dev/null | cut -d= -f2)
+        local detected_type
+        detected_type=$(grep "^BACKUP_TYPE=" "$metadata_file" 2>/dev/null | cut -d= -f2)
+        if [ -n "$detected_type" ]; then
+            # Normalize to lowercase for internal use
+            detected_type=${detected_type,,}
+            case "$detected_type" in
+                pve|pbs)
+                    PROXMOX_TYPE="$detected_type"
+                    ;;
+            esac
+        fi
 
         if [ "$BACKUP_SUPPORTS_SELECTIVE" = "true" ]; then
-            info "Backup moderno rilevato (v$BACKUP_VERSION) - selezione interattiva disponibile"
+            info "Modern backup detected (v$BACKUP_VERSION) - interactive selection available"
             return 0  # Supports selective restore
         fi
     fi
 
-    info "Backup legacy rilevato - utilizzo ripristino completo automatico"
+    info "Legacy backup detected - using automatic full restore"
     return 1  # Does not support selective restore
 }
 
@@ -488,27 +651,27 @@ analyze_backup_categories() {
     declare -gA AVAILABLE_CATEGORIES
 
     # Detect PVE categories
-    [ -d "$extract_dir/etc/pve" ] && AVAILABLE_CATEGORIES["pve_cluster"]="Cluster PVE"
-    [ -f "$extract_dir/etc/pve/storage.cfg" ] && AVAILABLE_CATEGORIES["storage_pve"]="Storage PVE"
-    [ -f "$extract_dir/etc/vzdump.conf" ] && [ -d "$extract_dir/var/lib/pve-cluster/info/jobs" ] && AVAILABLE_CATEGORIES["pve_jobs"]="Job Backup PVE"
+    [ -d "$extract_dir/etc/pve" ] && AVAILABLE_CATEGORIES["pve_cluster"]="PVE Cluster"
+    [ -f "$extract_dir/etc/pve/storage.cfg" ] && AVAILABLE_CATEGORIES["storage_pve"]="PVE Storage"
+    [ -f "$extract_dir/etc/vzdump.conf" ] && [ -d "$extract_dir/var/lib/pve-cluster/info/jobs" ] && AVAILABLE_CATEGORIES["pve_jobs"]="PVE Backup Jobs"
     [ -d "$extract_dir/etc/corosync" ] && AVAILABLE_CATEGORIES["corosync"]="Corosync (Cluster)"
     [ -d "$extract_dir/etc/ceph" ] && AVAILABLE_CATEGORIES["ceph"]="Ceph Storage"
 
     # Detect PBS categories
-    [ -d "$extract_dir/etc/proxmox-backup" ] && AVAILABLE_CATEGORIES["pbs_config"]="Config PBS"
-    [ -f "$extract_dir/etc/proxmox-backup/datastore.cfg" ] && AVAILABLE_CATEGORIES["datastore_pbs"]="Datastore PBS"
-    [ -d "$extract_dir/var/lib/proxmox-backup/pxar_metadata" ] && AVAILABLE_CATEGORIES["pbs_jobs"]="Job PBS"
+    [ -d "$extract_dir/etc/proxmox-backup" ] && AVAILABLE_CATEGORIES["pbs_config"]="PBS Config"
+    [ -f "$extract_dir/etc/proxmox-backup/datastore.cfg" ] && AVAILABLE_CATEGORIES["datastore_pbs"]="PBS Datastores"
+    [ -d "$extract_dir/var/lib/proxmox-backup/pxar_metadata" ] && AVAILABLE_CATEGORIES["pbs_jobs"]="PBS Jobs"
 
     # Detect common categories
-    [ -d "$extract_dir/etc/network" ] && AVAILABLE_CATEGORIES["network"]="Configurazione Rete"
-    [ -d "$extract_dir/etc/ssl" ] && AVAILABLE_CATEGORIES["ssl"]="Certificati SSL"
-    [ -d "$extract_dir/etc/ssh" ] || [ -d "$extract_dir/root/.ssh" ] && AVAILABLE_CATEGORIES["ssh"]="Chiavi SSH"
-    [ -d "$extract_dir/usr/local" ] && AVAILABLE_CATEGORIES["scripts"]="Script Utente"
+    [ -d "$extract_dir/etc/network" ] && AVAILABLE_CATEGORIES["network"]="Network Configuration"
+    [ -d "$extract_dir/etc/ssl" ] && AVAILABLE_CATEGORIES["ssl"]="SSL Certificates"
+    [ -d "$extract_dir/etc/ssh" ] || [ -d "$extract_dir/root/.ssh" ] && AVAILABLE_CATEGORIES["ssh"]="SSH Keys"
+    [ -d "$extract_dir/usr/local" ] && AVAILABLE_CATEGORIES["scripts"]="User Scripts"
     [ -d "$extract_dir/var/spool/cron" ] && AVAILABLE_CATEGORIES["crontabs"]="Crontabs"
-    [ -d "$extract_dir/etc/systemd/system" ] && AVAILABLE_CATEGORIES["services"]="Servizi Systemd"
+    [ -d "$extract_dir/etc/systemd/system" ] && AVAILABLE_CATEGORIES["services"]="Systemd Services"
 
     local count=${#AVAILABLE_CATEGORIES[@]}
-    info "Rilevate $count categorie disponibili nel backup"
+    info "Detected $count available categories in backup"
 }
 
 # Show category selection menu
@@ -516,20 +679,20 @@ show_category_menu() {
     local extract_dir="$1"
 
     echo ""
-    echo -e "${CYAN}=== SELEZIONE RIPRISTINO ===${NC}"
+    echo -e "${CYAN}=== RESTORE SELECTION ===${NC}"
     echo ""
-    echo "Backup rilevato: v${BACKUP_VERSION} (${PROXMOX_TYPE:-Unknown})"
-    echo "Categorie disponibili: ${#AVAILABLE_CATEGORIES[@]}"
+    echo "Backup detected: v${BACKUP_VERSION} ($(get_display_proxmox_type))"
+    echo "Available categories: ${#AVAILABLE_CATEGORIES[@]}"
     echo ""
-    echo -e "${GREEN}1)${NC} Ripristino COMPLETO (tutto)"
-    echo -e "${GREEN}2)${NC} Solo STORAGE (struttura completa + config)"
-    echo -e "${GREEN}3)${NC} Solo SISTEMA BASE (rete, SSL, SSH)"
-    echo -e "${GREEN}4)${NC} Selezione PERSONALIZZATA"
-    echo -e "${YELLOW}0)${NC} Annulla"
+    echo -e "${GREEN}1)${NC} FULL restore (everything)"
+    echo -e "${GREEN}2)${NC} STORAGE only (full structure + config)"
+    echo -e "${GREEN}3)${NC} SYSTEM BASE only (network, SSL, SSH)"
+    echo -e "${GREEN}4)${NC} CUSTOM selection"
+    echo -e "${YELLOW}0)${NC} Cancel"
     echo ""
 
     while true; do
-        read -p "Selezione [1]: " choice
+        read -p "Selection [1]: " choice
         choice=${choice:-1}
 
         case "$choice" in
@@ -543,13 +706,15 @@ show_category_menu() {
                 SELECTED_CATEGORIES=()
                 # Add storage-related categories
                 for cat in "pve_cluster" "storage_pve" "pve_jobs" "datastore_pbs" "pbs_jobs"; do
-                    [ -n "${AVAILABLE_CATEGORIES[$cat]}" ] && SELECTED_CATEGORIES+=("$cat")
+                    if [[ -v AVAILABLE_CATEGORIES[$cat] ]]; then
+                        SELECTED_CATEGORIES+=("$cat")
+                    fi
                 done
                 if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
-                    warning "Nessuna categoria storage trovata nel backup"
+                    warning "No storage categories found in backup"
                     continue
                 fi
-                info "Categorie selezionate: ${SELECTED_CATEGORIES[*]}"
+                info "Selected categories: ${SELECTED_CATEGORIES[*]}"
                 break
                 ;;
             3)
@@ -557,13 +722,15 @@ show_category_menu() {
                 SELECTED_CATEGORIES=()
                 # Add system base categories
                 for cat in "network" "ssl" "ssh" "services"; do
-                    [ -n "${AVAILABLE_CATEGORIES[$cat]}" ] && SELECTED_CATEGORIES+=("$cat")
+                    if [[ -v AVAILABLE_CATEGORIES[$cat] ]]; then
+                        SELECTED_CATEGORIES+=("$cat")
+                    fi
                 done
                 if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
-                    warning "Nessuna categoria sistema base trovata nel backup"
+                    warning "No system base categories found in backup"
                     continue
                 fi
-                info "Categorie selezionate: ${SELECTED_CATEGORIES[*]}"
+                info "Selected categories: ${SELECTED_CATEGORIES[*]}"
                 break
                 ;;
             4)
@@ -571,11 +738,11 @@ show_category_menu() {
                 break
                 ;;
             0)
-                info "Operazione annullata dall'utente"
-                exit $EXIT_SUCCESS
+                info "Operation cancelled by user"
+                return 1
                 ;;
             *)
-                warning "Selezione non valida. Inserisci un numero tra 0 e 4"
+                warning "Invalid selection. Enter a number between 0 and 4"
                 ;;
         esac
     done
@@ -584,9 +751,9 @@ show_category_menu() {
 # Show custom category selection menu
 show_custom_selection_menu() {
     echo ""
-    echo -e "${CYAN}=== SELEZIONE PERSONALIZZATA ===${NC}"
+    echo -e "${CYAN}=== CUSTOM SELECTION ===${NC}"
     echo ""
-    echo "Seleziona le categorie da ripristinare (spazio per toggle, INVIO per confermare):"
+    echo "Select categories to restore (number to toggle, ENTER to confirm):"
     echo ""
 
     declare -gA CATEGORY_SELECTED
@@ -601,7 +768,7 @@ show_custom_selection_menu() {
     done
 
     echo ""
-    echo "Comandi: [numero]=toggle, [a]=tutto, [n]=niente, [c]=continua"
+    echo "Commands: [number]=toggle, [a]=all, [n]=none, [c]=continue"
     echo ""
 
     while true; do
@@ -632,13 +799,13 @@ show_custom_selection_menu() {
                 for cat in "${!AVAILABLE_CATEGORIES[@]}"; do
                     CATEGORY_SELECTED[$cat]=true
                 done
-                info "Tutte le categorie selezionate"
+                info "All categories selected"
                 ;;
             [nN])
                 for cat in "${!AVAILABLE_CATEGORIES[@]}"; do
                     CATEGORY_SELECTED[$cat]=false
                 done
-                info "Tutte le categorie deselezionate"
+                info "All categories deselected"
                 ;;
             [cC])
                 # Build selected categories list
@@ -649,15 +816,15 @@ show_custom_selection_menu() {
                 done
 
                 if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
-                    warning "Nessuna categoria selezionata"
+                    warning "No categories selected"
                     continue
                 fi
 
-                info "Confermate ${#SELECTED_CATEGORIES[@]} categorie"
+                info "Confirmed ${#SELECTED_CATEGORIES[@]} categories"
                 break
                 ;;
             *)
-                warning "Comando non valido"
+                warning "Invalid command"
                 ;;
         esac
     done
@@ -724,7 +891,7 @@ get_category_paths() {
             echo "$extract_dir/etc/cron.d"
             ;;
         *)
-            warning "Categoria sconosciuta: $category"
+            warning "Unknown category: $category"
             ;;
     esac
 }
@@ -733,25 +900,25 @@ get_category_paths() {
 restore_selective() {
     local extract_dir="$1"
 
-    step "Ripristino selettivo delle categorie scelte..."
+    step "Selective restore of selected categories..."
 
     local backup_current_dir="/tmp/current_config_backup_${TIMESTAMP:-$SECONDS}_$$"
     mkdir -p "$backup_current_dir"
 
-    info "Creazione backup delle configurazioni attuali in: $backup_current_dir"
+    info "Creating backup of current configurations in: $backup_current_dir"
 
     local restore_count=0
 
     for cat in "${SELECTED_CATEGORIES[@]}"; do
-        local cat_name="${AVAILABLE_CATEGORIES[$cat]}"
-        info "Ripristino categoria: $cat_name"
+        local cat_name="${AVAILABLE_CATEGORIES[$cat]:-$cat}"
+        info "Restoring category: $cat_name"
 
         # Get paths for this category
         local paths
         paths=$(get_category_paths "$cat" "$extract_dir")
 
         if [ -z "$paths" ]; then
-            warning "Nessun path trovato per categoria: $cat_name"
+            warning "No paths found for category: $cat_name"
             continue
         fi
 
@@ -760,7 +927,7 @@ restore_selective() {
             [ -z "$source_path" ] && continue
 
             if [ ! -e "$source_path" ]; then
-                debug "Path non trovato nel backup: $source_path"
+                debug "Path not found in backup: $source_path"
                 continue
             fi
 
@@ -780,49 +947,49 @@ restore_selective() {
 
             # Restore from backup using rsync (with automatic backup of overwritten files)
             if rsync -a --backup --backup-dir="$backup_current_dir" "$source_path" "$(dirname "$dest_path")/" 2>/dev/null; then
-                debug "Ripristinato: $dest_path"
+                debug "Restored: $dest_path"
                 restore_count=$((restore_count + 1))
             else
-                warning "Errore ripristino: $dest_path"
+                warning "Restore error: $dest_path"
             fi
         done <<< "$paths"
 
-        success "Categoria '$cat_name' ripristinata"
+        success "Category '$cat_name' restored"
     done
 
     if [ $restore_count -gt 0 ]; then
-        success "Ripristino selettivo completato: $restore_count elementi ripristinati"
+        success "Selective restore completed: $restore_count items restored"
     else
-        warning "Nessun elemento ripristinato"
+        warning "No items restored"
     fi
 
     # Store backup location
     echo "$backup_current_dir" > /tmp/restore_backup_location.txt
-    info "Backup configurazioni precedenti salvato in: $backup_current_dir"
+    info "Backup of previous configurations saved in: $backup_current_dir"
 }
 
 # Recreate storage/datastore directory structures
 recreate_storage_directories() {
-    step "Ricreazione directory storage/datastore..."
+    step "Recreating storage/datastore directories..."
 
     local created_count=0
 
     # Recreate PVE storage directories
     if [ -f "/etc/pve/storage.cfg" ]; then
-        info "Elaborazione storage PVE da /etc/pve/storage.cfg"
+        info "Processing PVE storage from /etc/pve/storage.cfg"
 
         local current_storage=""
         while IFS= read -r line; do
             # Detect storage definition
             if [[ "$line" =~ ^(dir|nfs|cifs|glusterfs|btrfs):[[:space:]]*([^[:space:]]+) ]]; then
                 current_storage="${BASH_REMATCH[2]}"
-                debug "Trovato storage: $current_storage"
+                debug "Found storage: $current_storage"
             # Find path directive
             elif [[ "$line" =~ ^[[:space:]]*path[[:space:]]+(.+)$ ]]; then
                 local storage_path="${BASH_REMATCH[1]}"
 
                 if [ ! -d "$storage_path" ]; then
-                    info "Creazione directory storage PVE: $storage_path"
+                    info "Creating PVE storage directory: $storage_path"
                     mkdir -p "$storage_path"
 
                     # Create standard PVE subdirectories
@@ -833,9 +1000,9 @@ recreate_storage_directories() {
                     chmod 755 "$storage_path"
 
                     created_count=$((created_count + 1))
-                    success "Directory storage creata: $storage_path"
+                    success "Storage directory created: $storage_path"
                 else
-                    debug "Directory storage già esistente: $storage_path"
+                    debug "Storage directory already exists: $storage_path"
                 fi
             fi
         done < /etc/pve/storage.cfg
@@ -843,20 +1010,20 @@ recreate_storage_directories() {
 
     # Recreate PBS datastore directories
     if [ -f "/etc/proxmox-backup/datastore.cfg" ]; then
-        info "Elaborazione datastore PBS da /etc/proxmox-backup/datastore.cfg"
+        info "Processing PBS datastores from /etc/proxmox-backup/datastore.cfg"
 
         local current_datastore=""
         while IFS= read -r line; do
             # Detect datastore definition
             if [[ "$line" =~ ^datastore:[[:space:]]*([^[:space:]]+) ]]; then
                 current_datastore="${BASH_REMATCH[1]}"
-                debug "Trovato datastore: $current_datastore"
+                debug "Found datastore: $current_datastore"
             # Find path directive
             elif [[ "$line" =~ ^[[:space:]]*path[[:space:]]+(.+)$ ]]; then
                 local datastore_path="${BASH_REMATCH[1]}"
 
                 if [ ! -d "$datastore_path" ]; then
-                    info "Creazione datastore PBS: $datastore_path"
+                    info "Creating PBS datastore: $datastore_path"
                     mkdir -p "$datastore_path"
 
                     # Create PBS .chunks subdirectory
@@ -871,56 +1038,135 @@ recreate_storage_directories() {
                     chmod 750 "$datastore_path"
 
                     created_count=$((created_count + 1))
-                    success "Datastore PBS creato: $datastore_path ($current_datastore)"
+                    success "PBS datastore created: $datastore_path ($current_datastore)"
                 else
-                    debug "Datastore già esistente: $datastore_path"
+                    debug "Datastore already exists: $datastore_path"
                 fi
             fi
         done < /etc/proxmox-backup/datastore.cfg
     fi
 
     if [ $created_count -gt 0 ]; then
-        success "Create $created_count directory storage/datastore"
-        info "Le directory sono pronte per ricevere i file di backup"
+        success "Created $created_count storage/datastore directories"
+        info "Directories are ready to receive backup files"
     else
-        info "Nessuna directory da creare (già esistenti o non necessarie)"
+        info "No directories to create (already exist or not needed)"
     fi
 }
 
-# Smart restore wrapper - detects backup type and acts accordingly
-restore_smart() {
+# Prepare restore strategy (detect backup capabilities and gather user choices)
+prepare_restore_strategy() {
     local extract_dir="$1"
 
-    # Detect backup version and capabilities
-    if detect_backup_version "$extract_dir"; then
-        # Modern backup with selective restore support
-        analyze_backup_categories "$extract_dir"
-        show_category_menu "$extract_dir"
+    BACKUP_DETECTED_SELECTIVE="false"
+    BACKUP_SUPPORTS_SELECTIVE="false"
+    BACKUP_VERSION="Unknown"
+    RESTORE_MODE="full"
+    SELECTED_CATEGORIES=("all")
 
+    if detect_backup_version "$extract_dir"; then
+        BACKUP_DETECTED_SELECTIVE="true"
+        BACKUP_SUPPORTS_SELECTIVE="true"
+        [ -n "$BACKUP_VERSION" ] || BACKUP_VERSION="Unknown"
+
+        analyze_backup_categories "$extract_dir"
+        if ! show_category_menu "$extract_dir"; then
+            return 1
+        fi
+
+        if [ "$RESTORE_MODE" != "full" ] && [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
+            warning "No categories selected, full restore set as default"
+            RESTORE_MODE="full"
+            SELECTED_CATEGORIES=("all")
+        fi
+    else
+        RESTORE_MODE="full"
+        SELECTED_CATEGORIES=("all")
+    fi
+
+    return 0
+}
+
+# Execute restore according to previously prepared strategy
+execute_restore_strategy() {
+    local extract_dir="$1"
+
+    if [ "$BACKUP_DETECTED_SELECTIVE" = "true" ]; then
         if [ "$RESTORE_MODE" = "full" ]; then
-            # User chose full restore
-            info "Esecuzione ripristino completo..."
+            info "Executing full restore..."
             restore_configurations "$extract_dir"
         else
-            # User chose selective restore
             restore_selective "$extract_dir"
         fi
 
-        # Recreate storage/datastore directories if needed
         recreate_storage_directories
     else
-        # Legacy backup - perform full restore automatically
-        info "Esecuzione ripristino completo automatico (backup legacy)..."
+        info "Executing automatic full restore (legacy backup)..."
         restore_configurations "$extract_dir"
     fi
+}
+
+# Prepare restore context (download if needed, extract and gather strategy)
+prepare_restore_context() {
+    local backup_file="$SELECTED_BACKUP"
+
+    SELECTED_TEMP_BACKUP_FILE=""
+    SELECTED_EXTRACT_DIR=""
+    RESTORE_MODE="full"
+    SELECTED_CATEGORIES=("all")
+    BACKUP_DETECTED_SELECTIVE="false"
+    BACKUP_SUPPORTS_SELECTIVE="false"
+    BACKUP_VERSION="Unknown"
+
+    # Download from cloud if necessary
+    if [ "$SELECTED_LOCATION" = "cloud" ]; then
+        SELECTED_TEMP_BACKUP_FILE=$(download_cloud_backup "$backup_file")
+        backup_file="$SELECTED_TEMP_BACKUP_FILE"
+    fi
+
+    # If type is not yet known, try to deduce it from filename
+    if [ -z "${PROXMOX_TYPE:-}" ]; then
+        local backup_name
+        backup_name=$(basename "$backup_file")
+        case "$backup_name" in
+            pve-backup-*)
+                PROXMOX_TYPE="pve"
+                ;;
+            pbs-backup-*)
+                PROXMOX_TYPE="pbs"
+                ;;
+        esac
+    fi
+
+    # Extract backup for further analysis
+    SELECTED_EXTRACT_DIR=$(extract_backup "$backup_file")
+
+    # Prepare strategy (collect categories or set full restore)
+    if ! prepare_restore_strategy "$SELECTED_EXTRACT_DIR"; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Cleanup temporary resources created during preparation without full log output
+cleanup_temp_resources() {
+    if [ -n "${SELECTED_EXTRACT_DIR:-}" ] && [ -d "$SELECTED_EXTRACT_DIR" ]; then
+        rm -rf "$SELECTED_EXTRACT_DIR" 2>/dev/null || true
+    fi
+    if [ -n "${SELECTED_TEMP_BACKUP_FILE:-}" ] && [ -f "$SELECTED_TEMP_BACKUP_FILE" ]; then
+        rm -f "$SELECTED_TEMP_BACKUP_FILE" 2>/dev/null || true
+    fi
+    SELECTED_EXTRACT_DIR=""
+    SELECTED_TEMP_BACKUP_FILE=""
 }
 
 # Function to restore configurations
 restore_configurations() {
     local extract_dir="$1"
-    
-    step "Ripristino delle configurazioni..."
-    
+
+    step "Restoring configurations..."
+
     # Define critical paths to restore
     local restore_paths=(
         "/etc/pve"
@@ -933,12 +1179,12 @@ restore_configurations() {
         "/etc/hostname"
         "/etc/proxmox-backup"
     )
-    
+
     # Create backup of current configurations
     local backup_current_dir="/tmp/current_config_backup_$$"
     mkdir -p "$backup_current_dir"
-    
-    info "Creazione backup delle configurazioni attuali..."
+
+    info "Creating backup of current configurations..."
     for path in "${restore_paths[@]}"; do
         if [ -e "$path" ]; then
             local parent_dir="$backup_current_dir$(dirname "$path")"
@@ -946,72 +1192,72 @@ restore_configurations() {
             cp -a "$path" "$parent_dir/" 2>/dev/null || true
         fi
     done
-    
+
     # Restore configurations from backup
-    info "Ripristino delle configurazioni dal backup..."
+    info "Restoring configurations from backup..."
     local restore_count=0
-    
+
     for path in "${restore_paths[@]}"; do
         local backup_path="$extract_dir$path"
         if [ -e "$backup_path" ]; then
-            info "Ripristino: $path"
-            
+            info "Restoring: $path"
+
             # Create parent directory if it doesn't exist
             local parent_dir=$(dirname "$path")
             mkdir -p "$parent_dir"
-            
+
             # Remove existing and restore from backup
             rm -rf "$path" 2>/dev/null || true
             cp -a "$backup_path" "$path" 2>/dev/null || {
-                warning "Impossibile ripristinare $path"
+                warning "Unable to restore $path"
                 continue
             }
-            
+
             restore_count=$((restore_count + 1))
         else
-            info "Non presente nel backup: $path"
+            info "Not present in backup: $path"
         fi
     done
-    
+
     if [ $restore_count -gt 0 ]; then
-        success "Ripristinati $restore_count elementi di configurazione"
+        success "Restored $restore_count configuration items"
     else
-        warning "Nessun elemento di configurazione ripristinato"
+        warning "No configuration items restored"
     fi
-    
+
     # Set proper permissions
-    step "Impostazione permessi..."
-    
+    step "Setting permissions..."
+
     # Set PVE permissions
     if [ -d "/etc/pve" ]; then
         chown -R root:www-data /etc/pve 2>/dev/null || true
         chmod -R 640 /etc/pve 2>/dev/null || true
         chmod 755 /etc/pve 2>/dev/null || true
     fi
-    
+
     # Set corosync permissions
     if [ -d "/etc/corosync" ]; then
         chown -R root:root /etc/corosync 2>/dev/null || true
         chmod -R 640 /etc/corosync 2>/dev/null || true
     fi
-    
+
     # Set network permissions
     if [ -f "/etc/network/interfaces" ]; then
         chown root:root /etc/network/interfaces 2>/dev/null || true
         chmod 644 /etc/network/interfaces 2>/dev/null || true
     fi
-    
-    success "Permessi impostati correttamente"
-    
+
+    success "Permissions set correctly"
+
     # Store backup location for recovery if needed
-    echo "Backup configurazioni correnti salvato in: $backup_current_dir" > /tmp/restore_backup_location.txt
-    info "Backup delle configurazioni precedenti salvato in: $backup_current_dir"
+    echo "Backup of current configurations saved in: $backup_current_dir" > /tmp/restore_backup_location.txt
+    info "Backup of previous configurations saved in: $backup_current_dir"
 }
 
 # Function to restart services
 restart_services() {
-    step "Riavvio dei servizi Proxmox..."
-    
+    step "Restarting Proxmox services..."
+
     local services=(
         "pve-cluster"
         "pvedaemon"
@@ -1021,7 +1267,7 @@ restart_services() {
         "corosync"
         "networking"
     )
-    
+
     local optional_services=(
         "proxmox-backup"
         "proxmox-backup-proxy"
@@ -1029,105 +1275,105 @@ restart_services() {
         "ceph-mgr"
         "ceph-osd"
     )
-    
+
     # Stop services in reverse order
-    info "Arresto servizi..."
+    info "Stopping services..."
     for ((i=${#services[@]}-1; i>=0; i--)); do
         local service="${services[i]}"
         if systemctl is-active "$service" >/dev/null 2>&1; then
-            info "Arresto $service..."
-            systemctl stop "$service" 2>/dev/null || warning "Impossibile arrestare $service"
+            info "Stopping $service..."
+            systemctl stop "$service" 2>/dev/null || warning "Unable to stop $service"
         fi
     done
-    
+
     # Stop optional services
     for service in "${optional_services[@]}"; do
         if systemctl is-active "$service" >/dev/null 2>&1; then
-            info "Arresto $service..."
+            info "Stopping $service..."
             systemctl stop "$service" 2>/dev/null || true
         fi
     done
-    
+
     # Wait a moment
     sleep 3
-    
+
     # Start services
-    info "Avvio servizi..."
+    info "Starting services..."
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" >/dev/null 2>&1; then
-            info "Avvio $service..."
-            systemctl start "$service" 2>/dev/null || warning "Impossibile avviare $service"
+            info "Starting $service..."
+            systemctl start "$service" 2>/dev/null || warning "Unable to start $service"
             sleep 2
         fi
     done
-    
+
     # Start optional services
     for service in "${optional_services[@]}"; do
         if systemctl is-enabled "$service" >/dev/null 2>&1; then
-            info "Avvio $service..."
+            info "Starting $service..."
             systemctl start "$service" 2>/dev/null || true
             sleep 1
         fi
     done
-    
+
     # Final service status check
-    step "Verifica stato servizi..."
+    step "Checking service status..."
     local failed_services=()
-    
+
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" >/dev/null 2>&1; then
             if systemctl is-active "$service" >/dev/null 2>&1; then
-                success "$service: ATTIVO"
+                success "$service: ACTIVE"
             else
-                error "$service: NON ATTIVO"
+                error "$service: NOT ACTIVE"
                 failed_services+=("$service")
             fi
         fi
     done
-    
+
     if [ ${#failed_services[@]} -eq 0 ]; then
-        success "Tutti i servizi riavviati correttamente"
+        success "All services restarted successfully"
     else
-        warning "Alcuni servizi non sono riusciti a riavviarsi: ${failed_services[*]}"
-        info "Potrebbe essere necessario un riavvio del sistema"
+        warning "Some services failed to restart: ${failed_services[*]}"
+        info "A system reboot may be required"
     fi
 }
 
 # Function to cleanup temporary files
 cleanup() {
-    step "Pulizia file temporanei..."
-    
+    step "Cleaning up temporary files..."
+
     # Remove temporary extraction directories
     for temp_dir in /tmp/proxmox_restore_* /tmp/*-backup-*.tar*; do
         if [ -e "$temp_dir" ]; then
             rm -rf "$temp_dir" 2>/dev/null || true
         fi
     done
-    
-    success "Pulizia completata"
+
+    success "Cleanup completed"
 }
 
 # Function to show summary
 show_summary() {
     echo ""
-    echo -e "${CYAN}=== RIEPILOGO RIPRISTINO ===${NC}"
+    echo -e "${CYAN}=== RESTORE SUMMARY ===${NC}"
     echo ""
-    echo -e "Ubicazione sorgente: ${GREEN}$SELECTED_LOCATION${NC}"
-    echo -e "File ripristinato: ${GREEN}$(basename "$SELECTED_BACKUP")${NC}"
-    echo -e "Data ripristino: ${GREEN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
+    echo -e "Source location: ${GREEN}$SELECTED_LOCATION${NC}"
+    echo -e "Restored file: ${GREEN}$(basename "$SELECTED_BACKUP")${NC}"
+    echo -e "Restore date: ${GREEN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
     echo ""
-    
+
     if [ -f "/tmp/restore_backup_location.txt" ]; then
         local backup_location=$(cat /tmp/restore_backup_location.txt)
-        echo -e "${YELLOW}IMPORTANTE:${NC} Backup delle configurazioni precedenti disponibile in:"
+        echo -e "${YELLOW}IMPORTANT:${NC} Backup of previous configurations available at:"
         echo -e "${BLUE}$backup_location${NC}"
         echo ""
     fi
-    
-    success "Ripristino completato con successo!"
+
+    success "Restore completed successfully!"
     echo ""
-    info "È consigliabile verificare che tutti i servizi funzionino correttamente"
-    info "In caso di problemi, è possibile ripristinare le configurazioni precedenti"
+    info "It is recommended to verify that all services are working correctly"
+    info "In case of problems, it is possible to restore previous configurations"
 }
 
 # ==========================================
@@ -1137,67 +1383,60 @@ show_summary() {
 main() {
     # Check if running as root
     if [ "$EUID" -ne 0 ]; then
-        error "Questo script deve essere eseguito come root"
+        error "This script must be run as root"
         exit $EXIT_ERROR
     fi
-    
+
     # Welcome message
     echo ""
     echo -e "${CYAN}================================${NC}"
     echo -e "${CYAN}  PROXMOX CONFIGURATION RESTORE${NC}"
     echo -e "${CYAN}================================${NC}"
     echo ""
-    
+
     # Check if backup.env exists and is readable
     if [ ! -f "$ENV_FILE" ] || [ ! -r "$ENV_FILE" ]; then
-        error "File di configurazione non trovato o non leggibile: $ENV_FILE"
+        error "Configuration file not found or not readable: $ENV_FILE"
         exit $EXIT_ERROR
     fi
-    
+
     # Main restoration loop
     while true; do
         # Show storage selection menu
         show_storage_menu
-        
+
         # Show backup files menu
         if show_backup_menu; then
-            # Confirm restore operation
-            confirm_restore
+            if ! prepare_restore_context; then
+                cleanup_temp_resources
+                continue
+            fi
+
+            if ! confirm_restore; then
+                cleanup_temp_resources
+                exit $EXIT_SUCCESS
+            fi
+
+            # Set trap for cleanup only after confirmation
+            trap cleanup EXIT
+
+            # Perform restoration
+            execute_restore_strategy "$SELECTED_EXTRACT_DIR"
+
+            # Restart services
+            restart_services
+
+            # Show summary
+            show_summary
             break
         fi
         # If show_backup_menu returns 1, go back to storage menu
     done
-    
-    # Set trap for cleanup
-    trap cleanup EXIT
-    
-    # Perform restoration
-    local backup_file="$SELECTED_BACKUP"
-    local temp_backup_file=""
-    
-    # Download from cloud if necessary
-    if [ "$SELECTED_LOCATION" = "cloud" ]; then
-        temp_backup_file=$(download_cloud_backup "$backup_file")
-        backup_file="$temp_backup_file"
-    fi
-    
-    # Extract backup
-    local extract_dir=$(extract_backup "$backup_file")
-
-    # Restore configurations (smart detection: selective or full based on backup version)
-    restore_smart "$extract_dir"
-
-    # Restart services
-    restart_services
-    
-    # Show summary
-    show_summary
-    
-    # Cleanup will be called by trap
+    # Cleanup will be handled by trap when appropriate
 }
 
 # ==========================================
 # SCRIPT STARTUP
 # ==========================================
 
-main "$@" 
+main "$@"

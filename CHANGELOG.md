@@ -2,33 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
-## [2.0.3] - 2025-11-02 - Interactive Telegram Notifications Setup
+## [2.0.3] - 2025-11-02 - Add rsync dependency
 ### Standalone Script: install.sh
 **Add**
 - Add rsync Dependency
 
-## [2.0.2] - 2025-11-03 - Selective Restore with Automatic Version Detection
+## [1.0.1] - 2025-11-03 - Selective Restore with Automatic Version Detection
 ### script/proxmox-restore.sh
 **Add**
 - Implemented selective restore functionality with interactive category selection menu
 - Added automatic backup version detection system using metadata files
-- Added 8 new functions for selective restore capabilities:
-  - `detect_backup_version()` - Detects if backup supports selective restore via metadata
-  - `analyze_backup_categories()` - Scans extracted backup to identify available configuration categories
-  - `show_category_menu()` - Interactive menu with 4 options: Full/Quick/Custom/Cancel restore
-  - `show_custom_selection_menu()` - Advanced multi-select interface for granular category selection
-  - `get_category_paths()` - Maps 15+ categories (PVE/PBS/common) to filesystem paths
-  - `restore_selective()` - Performs selective restore using rsync with automatic backup of overwritten files
-  - `recreate_storage_directories()` - Automatically creates PVE storage and PBS datastore directory structures from config files
-  - `restore_smart()` - Intelligent wrapper that auto-detects backup type and offers appropriate restore mode
-- Added automatic directory structure recreation for PVE storages and PBS datastores:
-  - Parses `/etc/pve/storage.cfg` to create storage directories with standard subdirectories (dump/images/template/private/snippets)
-  - Parses `/etc/proxmox-backup/datastore.cfg` to create datastore directories
-  - Sets correct ownership (root:root) and permissions (755) on created directories
+- Added 11 new functions for selective restore capabilities
+- Added automatic directory structure recreation for PVE storages and PBS datastores
+- Added backup type detection and display
+- Added comprehensive restore confirmation screen showing
+- Implemented new restore workflow architecture
+- Added metadata reading optimization
 - Replaced manual `cp` operations with `rsync -a --backup --backup-dir` for safer restore operations
-- Added backup of overwritten files to timestamped directory: `/root/.proxmox-restore-backup/current_YYYYMMDD_HHMMSS`
+- Added backup of overwritten files to timestamped directory: `/tmp/current_config_backup_YYYYMMDD_HHMMSS_PID`
+- Added support for uppercase PROXMOX_TYPE display using parameter expansion `${PROXMOX_TYPE^^}`
+- Added validation checks using `[[ -v AVAILABLE_CATEGORIES[$cat] ]]` for compatibility with `set -o nounset`
 **Fix**
-- Modified main restore workflow (line 731) to use `restore_smart()` instead of direct `restore_configurations()` call
+- Modified main restore workflow to use new prepare/execute architecture instead of inline restore
+- Fixed show_category_menu() to return exit code 1 when user cancels (option 0)
+- Fixed array key existence checks to use `[[ -v array[key] ]]` instead of `[ -n "${array[key]}" ]` for set -u compatibility
+- Fixed extract_backup() output to use stderr redirection (`>&2`) for status messages to avoid polluting function return value
 - Maintains 100% backward compatibility: legacy backups without metadata automatically use full restore mode
 
 ## [2.0.2] - 2025-11-02 - Interactive Telegram Notifications Setup
