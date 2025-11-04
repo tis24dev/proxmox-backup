@@ -318,26 +318,90 @@ install_dependencies() {
 
         # Download latest rsync
         print_status "Downloading rsync $rsync_target_version..."
+        local rsync_tar="rsync-${rsync_target_version}.tar.gz"
+        local rsync_url="https://download.samba.org/pub/rsync/src/${rsync_tar}"
+
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            wget https://download.samba.org/pub/rsync/src/rsync-${rsync_target_version}.tar.gz
-            tar -xzf rsync-${rsync_target_version}.tar.gz
+            if ! wget "$rsync_url"; then
+                print_error "Failed to download rsync source from $rsync_url"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
         else
-            wget -q https://download.samba.org/pub/rsync/src/rsync-${rsync_target_version}.tar.gz
-            tar -xzf rsync-${rsync_target_version}.tar.gz >/dev/null 2>&1
+            if ! wget -q "$rsync_url"; then
+                print_error "Failed to download rsync source from $rsync_url"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
         fi
 
-        cd rsync-${rsync_target_version}
+        if [[ ! -s "$rsync_tar" ]]; then
+            print_error "Downloaded rsync archive is empty or missing"
+            popd >/dev/null
+            rm -rf "$temp_dir"
+            return 1
+        fi
+
+        if [[ "$VERBOSE_MODE" == "true" ]]; then
+            if ! tar -xzf "$rsync_tar"; then
+                print_error "Failed to extract rsync archive"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
+        else
+            if ! tar -xzf "$rsync_tar" >/dev/null 2>&1; then
+                print_error "Failed to extract rsync archive"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
+        fi
+
+        cd "rsync-${rsync_target_version}"
 
         # Compile and install
         print_status "Compiling rsync..."
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            ./configure
-            make
-            make install
+            if ! ./configure; then
+                print_error "rsync ./configure failed"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
+            if ! make; then
+                print_error "rsync make failed"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
+            if ! make install; then
+                print_error "rsync make install failed"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
         else
-            ./configure >/dev/null 2>&1
-            make >/dev/null 2>&1
-            make install >/dev/null 2>&1
+            if ! ./configure >/dev/null 2>&1; then
+                print_error "rsync ./configure failed"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
+            if ! make >/dev/null 2>&1; then
+                print_error "rsync make failed"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
+            if ! make install >/dev/null 2>&1; then
+                print_error "rsync make install failed"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
         fi
 
         popd >/dev/null
