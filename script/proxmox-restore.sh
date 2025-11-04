@@ -518,17 +518,45 @@ confirm_restore() {
             echo -e "Selected mode: ${GREEN}Full restore${NC}"
         else
             echo -e "Selected mode: ${GREEN}Selective restore${NC}"
+
+            # Show detailed restoration plan
+            echo ""
+            echo -e "${CYAN}Will restore:${NC}"
             local category_names=()
             for cat in "${SELECTED_CATEGORIES[@]}"; do
                 if [ "$cat" = "all" ]; then
                     category_names=("all categories")
                     break
                 else
-                    category_names+=("${AVAILABLE_CATEGORIES[$cat]:-$cat}")
+                    local cat_name="${AVAILABLE_CATEGORIES[$cat]:-$cat}"
+                    category_names+=("$cat_name")
+
+                    # Show specific details for storage/datastore categories
+                    case "$cat" in
+                        "pve_cluster")
+                            echo -e "  ${GREEN}✓${NC} ${cat_name} ${BLUE}(/etc/pve, cluster database)${NC}"
+                            ;;
+                        "storage_pve")
+                            echo -e "  ${GREEN}✓${NC} ${cat_name} ${BLUE}(storage.cfg, VM/CT storage locations)${NC}"
+                            ;;
+                        "pve_jobs")
+                            echo -e "  ${GREEN}✓${NC} ${cat_name} ${BLUE}(vzdump jobs, schedules)${NC}"
+                            ;;
+                        "pbs_config")
+                            echo -e "  ${GREEN}✓${NC} ${cat_name} ${BLUE}(/etc/proxmox-backup)${NC}"
+                            ;;
+                        "datastore_pbs")
+                            echo -e "  ${GREEN}✓${NC} ${cat_name} ${BLUE}(datastore.cfg, backup repositories)${NC}"
+                            ;;
+                        "pbs_jobs")
+                            echo -e "  ${GREEN}✓${NC} ${cat_name} ${BLUE}(sync/verify/prune jobs)${NC}"
+                            ;;
+                        *)
+                            echo -e "  ${GREEN}✓${NC} ${cat_name}"
+                            ;;
+                    esac
                 fi
             done
-            local category_list=$(IFS=', '; echo "${category_names[*]}")
-            echo -e "Categories included: ${GREEN}$category_list${NC}"
         fi
     else
         echo -e "Type detected: ${GREEN}Standard${NC}"
@@ -644,6 +672,70 @@ detect_backup_version() {
     return 1  # Does not support selective restore
 }
 
+# Validate system compatibility (PVE vs PBS)
+validate_system_compatibility() {
+    local extract_dir="$1"
+    local backup_type="${PROXMOX_TYPE:-unknown}"
+    local current_system_type="unknown"
+
+    # Detect current running system type
+    if [ -d "/etc/pve" ] && command -v pvesh >/dev/null 2>&1; then
+        current_system_type="pve"
+    elif [ -d "/etc/proxmox-backup" ] && command -v proxmox-backup-manager >/dev/null 2>&1; then
+        current_system_type="pbs"
+    fi
+
+    # If we can't detect either system, allow restore but warn
+    if [ "$current_system_type" = "unknown" ]; then
+        warning "Cannot detect current system type (PVE or PBS)"
+        warning "Restore will proceed but may fail if incompatible"
+        return 0
+    fi
+
+    # If backup type is unknown, allow but warn
+    if [ "$backup_type" = "unknown" ]; then
+        warning "Cannot detect backup type from metadata"
+        warning "Restore will proceed but may fail if incompatible"
+        return 0
+    fi
+
+    # Check for mismatch
+    if [ "$backup_type" != "$current_system_type" ]; then
+        echo ""
+        error "INCOMPATIBLE BACKUP DETECTED!"
+        error "Backup type: ${backup_type^^}"
+        error "Current system: ${current_system_type^^}"
+        echo ""
+        error "You are trying to restore a ${backup_type^^} backup on a ${current_system_type^^} system."
+        error "This is NOT supported and will cause system malfunction!"
+        echo ""
+
+        if [ "$backup_type" = "pve" ] && [ "$current_system_type" = "pbs" ]; then
+            error "PVE backups contain:"
+            error "  - Cluster configuration (/etc/pve)"
+            error "  - VM/Container storage settings"
+            error "  - Corosync and cluster services"
+            error ""
+            error "PBS systems use completely different configurations."
+        elif [ "$backup_type" = "pbs" ] && [ "$current_system_type" = "pve" ]; then
+            error "PBS backups contain:"
+            error "  - PBS datastore configurations"
+            error "  - Backup server settings"
+            error "  - Sync/Verify/Prune jobs"
+            error ""
+            error "PVE systems use completely different configurations."
+        fi
+
+        echo ""
+        error "RESTORE ABORTED FOR SAFETY"
+        return 1
+    fi
+
+    # Matching types - all good
+    success "System compatibility verified: ${current_system_type^^} backup → ${current_system_type^^} system"
+    return 0
+}
+
 # Analyze backup content and detect available categories
 analyze_backup_categories() {
     local extract_dir="$1"
@@ -677,6 +769,25 @@ analyze_backup_categories() {
 # Show category selection menu
 show_category_menu() {
     local extract_dir="$1"
+    local system_type="${PROXMOX_TYPE:-unknown}"
+    local option2_label=""
+    local option2_description=""
+
+    # Determine option 2 label based on system type
+    case "$system_type" in
+        pve)
+            option2_label="PVE STORAGE & CLUSTER"
+            option2_description="(cluster + storage + VM configs + jobs)"
+            ;;
+        pbs)
+            option2_label="PBS DATASTORES & JOBS"
+            option2_description="(datastores + sync/verify/prune)"
+            ;;
+        *)
+            option2_label="STORAGE only"
+            option2_description="(full structure + config)"
+            ;;
+    esac
 
     echo ""
     echo -e "${CYAN}=== RESTORE SELECTION ===${NC}"
@@ -685,7 +796,7 @@ show_category_menu() {
     echo "Available categories: ${#AVAILABLE_CATEGORIES[@]}"
     echo ""
     echo -e "${GREEN}1)${NC} FULL restore (everything)"
-    echo -e "${GREEN}2)${NC} STORAGE only (full structure + config)"
+    echo -e "${GREEN}2)${NC} ${option2_label} ${BLUE}${option2_description}${NC}"
     echo -e "${GREEN}3)${NC} SYSTEM BASE only (network, SSL, SSH)"
     echo -e "${GREEN}4)${NC} CUSTOM selection"
     echo -e "${YELLOW}0)${NC} Cancel"
@@ -704,14 +815,34 @@ show_category_menu() {
             2)
                 RESTORE_MODE="selective"
                 SELECTED_CATEGORIES=()
-                # Add storage-related categories
-                for cat in "pve_cluster" "storage_pve" "pve_jobs" "datastore_pbs" "pbs_jobs"; do
-                    if [[ -v AVAILABLE_CATEGORIES[$cat] ]]; then
-                        SELECTED_CATEGORIES+=("$cat")
-                    fi
-                done
+
+                # Add storage-related categories based on system type
+                if [ "${PROXMOX_TYPE:-}" = "pve" ]; then
+                    # PVE: Restore cluster, storage, and jobs
+                    for cat in "pve_cluster" "storage_pve" "pve_jobs"; do
+                        if [[ -v AVAILABLE_CATEGORIES[$cat] ]]; then
+                            SELECTED_CATEGORIES+=("$cat")
+                        fi
+                    done
+                elif [ "${PROXMOX_TYPE:-}" = "pbs" ]; then
+                    # PBS: Restore config, datastores, and jobs
+                    for cat in "pbs_config" "datastore_pbs" "pbs_jobs"; do
+                        if [[ -v AVAILABLE_CATEGORIES[$cat] ]]; then
+                            SELECTED_CATEGORIES+=("$cat")
+                        fi
+                    done
+                else
+                    # Unknown type: Include both for backward compatibility
+                    warning "System type unknown, including all storage-related categories"
+                    for cat in "pve_cluster" "storage_pve" "pve_jobs" "pbs_config" "datastore_pbs" "pbs_jobs"; do
+                        if [[ -v AVAILABLE_CATEGORIES[$cat] ]]; then
+                            SELECTED_CATEGORIES+=("$cat")
+                        fi
+                    done
+                fi
+
                 if [ ${#SELECTED_CATEGORIES[@]} -eq 0 ]; then
-                    warning "No storage categories found in backup"
+                    warning "No storage/datastore categories found in backup"
                     continue
                 fi
                 info "Selected categories: ${SELECTED_CATEGORIES[*]}"
@@ -1068,6 +1199,12 @@ prepare_restore_strategy() {
         BACKUP_DETECTED_SELECTIVE="true"
         BACKUP_SUPPORTS_SELECTIVE="true"
         [ -n "$BACKUP_VERSION" ] || BACKUP_VERSION="Unknown"
+
+        # Validate system compatibility (PVE vs PBS)
+        if ! validate_system_compatibility "$extract_dir"; then
+            error "Cannot proceed with incompatible backup type"
+            return 1
+        fi
 
         analyze_backup_categories "$extract_dir"
         if ! show_category_menu "$extract_dir"; then

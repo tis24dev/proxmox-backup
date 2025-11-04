@@ -22,12 +22,23 @@ All notable changes to this project are documented in this file.
 - Added backup of overwritten files to timestamped directory: `/tmp/current_config_backup_YYYYMMDD_HHMMSS_PID`
 - Added support for uppercase PROXMOX_TYPE display using parameter expansion `${PROXMOX_TYPE^^}`
 - Added validation checks using `[[ -v AVAILABLE_CATEGORIES[$cat] ]]` for compatibility with `set -o nounset`
+- Added `validate_system_compatibility()` function (lines 647-709) to prevent incompatible cross-system restores
+- Added dynamic menu text in `show_category_menu()` that adapts to PVE vs PBS backup type (lines 741-775)
+- Added system-specific category selection logic in option 2
+- Added detailed restoration plan display in `confirm_restore()` with category-specific descriptions (lines 502-567)
+- Integrated compatibility validation into `prepare_restore_strategy()` workflow (lines 1175-1179)
 **Fix**
 - Modified main restore workflow to use new prepare/execute architecture instead of inline restore
 - Fixed show_category_menu() to return exit code 1 when user cancels (option 0)
 - Fixed array key existence checks to use `[[ -v array[key] ]]` instead of `[ -n "${array[key]}" ]` for set -u compatibility
 - Fixed extract_backup() output to use stderr redirection (`>&2`) for status messages to avoid polluting function return value
+- Fixed option 2 incorrectly mixing PVE and PBS categories (now properly separated by backup type)
+- Fixed menu showing generic "STORAGE only" label for both PVE and PBS (now shows system-specific labels)
 - Maintains 100% backward compatibility: legacy backups without metadata automatically use full restore mode
+**Security**
+- Blocks incompatible restore attempts (PVE backup → PBS system or vice versa) with detailed error messages
+- Prevents system malfunction from cross-system configuration restoration
+- Validates backup type matches current system before allowing restore to proceed
 
 ## [2.0.2] - 2025-11-02 - Interactive Telegram Notifications Setup
 ### Standalone Script: install.sh
