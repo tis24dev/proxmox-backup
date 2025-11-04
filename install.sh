@@ -322,7 +322,7 @@ install_dependencies() {
 
         # Install build dependencies
         print_status "Installing build dependencies..."
-        local build_deps="gcc g++ gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev libssl-dev libzstd-dev liblz4-dev"
+        local build_deps="build-essential gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev libssl-dev libzstd-dev liblz4-dev"
         if [[ "$VERBOSE_MODE" == "true" ]]; then
             apt install -y $build_deps
         else
