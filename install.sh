@@ -272,11 +272,30 @@ install_dependencies() {
 
     if [[ "$rclone_needs_install" == "true" ]]; then
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            curl https://rclone.org/install.sh | bash
+            if ! curl https://rclone.org/install.sh | bash; then
+                local rclone_status=$?
+                if [[ $rclone_status -eq 3 ]]; then
+                    print_success "rclone already at latest version"
+                else
+                    print_error "rclone installation failed with exit code $rclone_status"
+                    return 1
+                fi
+            else
+                print_success "rclone installed/updated"
+            fi
         else
-            curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1
+            if ! curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1; then
+                local rclone_status=$?
+                if [[ $rclone_status -eq 3 ]]; then
+                    print_success "rclone already at latest version"
+                else
+                    print_error "rclone installation failed with exit code $rclone_status"
+                    return 1
+                fi
+            else
+                print_success "rclone installed/updated"
+            fi
         fi
-        print_success "rclone installed/updated"
     fi
 
     # Install/update rsync
@@ -310,10 +329,11 @@ install_dependencies() {
 
         # Install build dependencies
         print_status "Installing build dependencies..."
+        local build_deps="gcc g++ gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev libssl-dev libzstd-dev liblz4-dev"
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            apt install -y gcc g++ gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev
+            apt install -y $build_deps
         else
-            apt install -y gcc g++ gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev >/dev/null 2>&1
+            apt install -y $build_deps >/dev/null 2>&1
         fi
 
         # Download latest rsync
