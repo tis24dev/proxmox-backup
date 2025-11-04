@@ -252,47 +252,44 @@ install_dependencies() {
     fi
 
     # Install/update rclone
-    local rclone_needs_install=false
-    if ! command -v rclone >/dev/null 2>&1; then
-        print_status "rclone not found, will install"
-        rclone_needs_install=true
-    else
-        local current_rclone_version=""
-        current_rclone_version=$(rclone version 2>/dev/null | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/v//') || true
-        if [[ -n "$current_rclone_version" ]]; then
-            print_status "Current rclone version: $current_rclone_version"
-            # Always update rclone to get latest version
-            print_status "Updating rclone to latest version..."
-            rclone_needs_install=true
-        else
-            print_status "Cannot detect rclone version, will reinstall"
-            rclone_needs_install=true
-        fi
+    print_status "Checking rclone installation..."
+
+    # Download and execute rclone install script which handles version checks
+    local temp_rclone_script
+    temp_rclone_script=$(mktemp)
+
+    if ! curl -fsSL https://rclone.org/install.sh -o "$temp_rclone_script"; then
+        print_error "Failed to download rclone installer script"
+        rm -f "$temp_rclone_script"
+        return 1
     fi
 
-    if [[ "$rclone_needs_install" == "true" ]]; then
-        local rclone_status=0
-        if [[ "$VERBOSE_MODE" == "true" ]]; then
-            set +e
-            curl https://rclone.org/install.sh | bash
-            rclone_status=$?
-            set -e
-        else
-            set +e
-            curl -s https://rclone.org/install.sh | bash >/dev/null 2>&1
-            rclone_status=$?
-            set -e
-        fi
+    # Execute the installer (it will check if update is needed)
+    local rclone_status=0
+    if [[ "$VERBOSE_MODE" == "true" ]]; then
+        bash "$temp_rclone_script" || rclone_status=$?
+    else
+        bash "$temp_rclone_script" >/dev/null 2>&1 || rclone_status=$?
+    fi
 
-        if [[ $rclone_status -eq 0 ]]; then
-            print_success "rclone installed/updated"
-        elif [[ $rclone_status -eq 3 ]]; then
-            print_success "rclone already at latest version"
-        else
+    rm -f "$temp_rclone_script"
+
+    # Handle exit codes from rclone installer
+    # 0 = success (installed/updated)
+    # 3 = already at latest version
+    # other = error
+    case $rclone_status in
+        0)
+            print_success "rclone installed/updated successfully"
+            ;;
+        3)
+            print_success "rclone is already at the latest version"
+            ;;
+        *)
             print_error "rclone installation failed with exit code $rclone_status"
             return 1
-        fi
-    fi
+            ;;
+    esac
 
     # Install/update rsync
     local rsync_needs_install=false
