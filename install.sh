@@ -916,7 +916,17 @@ update_config_header() {
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
     awk '
+        /^# ============================================================================$/ {
+            separator_line = $0
+            separator_lineno = NR
+        }
         /^# 1\. GENERAL SYSTEM CONFIGURATION$/ {
+            # Print blank line before the separator section
+            print ""
+            # Print the separator that came before this line
+            if (separator_lineno == NR - 1) {
+                print separator_line
+            }
             found=1
         }
         found { print }
