@@ -219,6 +219,11 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.7.1] - 2025-11-05 - Verbose
+### lib/backup_collect.sh
+***Fix***
+- Corrected verbose level for rsync
+
 ## [0.7.1] - 2025-11-05 - Cloud Connectivity Timeout Improvements
 ### lib/utils_counting.sh
 **Fix**

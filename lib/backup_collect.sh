@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Backup Collection Library
 # File: backup_collect.sh
-# Version: 0.7.0
-# Last Modified: 2025-11-03
-# Changes: Add selective restore
+# Version: 0.7.2
+# Last Modified: 2025-11-05
+# Changes: Fix verbose level rsync
 ##
 # Functions for backup data collection
 
@@ -539,11 +539,11 @@ collect_system_info() {
         if [ -d "/usr/local/bin" ]; then
             if [ "$(ls -A /usr/local/bin/ 2>/dev/null)" ]; then
                 mkdir -p "$TEMP_DIR/usr/local/bin"
-                info "Copying files from /usr/local/bin to $TEMP_DIR/usr/local/bin"
+                debug "Copying files from /usr/local/bin to $TEMP_DIR/usr/local/bin"
                 
                 # Use cp instead of rsync
                 # NOTE: Using subshell to prevent 'find' from changing our working directory
-                (find /usr/local/bin -type f -exec cp -v {} "$TEMP_DIR/usr/local/bin/" \; 2>/dev/null)
+                (find /usr/local/bin -type f -exec cp {} "$TEMP_DIR/usr/local/bin/" \; 2>/dev/null)
                 if [ $? -ne 0 ]; then
                     warning "Failed to backup /usr/local/bin, directory might be inaccessible"
                     set_exit_code "warning"
@@ -561,7 +561,7 @@ collect_system_info() {
         if [ -d "/usr/local/sbin" ]; then
             if [ "$(ls -A /usr/local/sbin/ 2>/dev/null)" ]; then
                 mkdir -p "$TEMP_DIR/usr/local/sbin"
-                info "Copying files from /usr/local/sbin to $TEMP_DIR/usr/local/sbin"
+                debug "Copying files from /usr/local/sbin to $TEMP_DIR/usr/local/sbin"
                 
                 # Use cp instead of rsync
                 # NOTE: Using subshell to prevent 'find' from changing our working directory
