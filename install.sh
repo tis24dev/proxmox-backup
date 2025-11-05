@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Unified Installer
 # File: install.sh
-# Version: 2.0.3
-# Purpose: Fix install required package
+# Version: 2.0.4
+# Purpose: Cloud Connectivity Timeout Improvements
 ##
 
 set -euo pipefail
@@ -55,7 +55,7 @@ init_constants() {
     RESET='\033[0m'
 
     SCRIPT_NAME="Proxmox Backup Installer"
-    INSTALLER_VERSION="2.0.3"
+    INSTALLER_VERSION="2.0.4"
     REPO_URL="https://github.com/tis24dev/proxmox-backup"
     INSTALL_DIR="/opt/proxmox-backup"
 
@@ -817,6 +817,39 @@ update_email_config() {
     print_success "Email configuration updated"
 }
 
+ensure_cloud_timeout_config() {
+    local config_file="$INSTALL_DIR/env/backup.env"
+    [[ -f "$config_file" ]] || return 0
+
+    if grep -q "^CLOUD_CONNECTIVITY_TIMEOUT=" "$config_file"; then
+        return 0
+    fi
+
+    print_status "Adding cloud connectivity timeout placeholder..."
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+
+    awk '
+        /^[[:space:]]*RCLONE_FLAGS=/ {
+            print
+            print ""
+            print "# Timeout (in seconds) for cloud connectivity tests"
+            print "CLOUD_CONNECTIVITY_TIMEOUT=30"
+            inserted=1
+            next
+        }
+        { print }
+        END {
+            if (!inserted) {
+                print ""
+                print "# Timeout (in seconds) for cloud connectivity tests"
+                print "CLOUD_CONNECTIVITY_TIMEOUT=30"
+            }
+        }
+    ' "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
+
+    print_success "Default cloud connectivity timeout added"
+}
+
 remove_packages_config() {
     local config_file="$INSTALL_DIR/env/backup.env"
     [[ -f "$config_file" ]] || return 0
@@ -845,9 +878,9 @@ get_reference_config_header() {
 # ============================================================================
 # PROXMOX BACKUP SYSTEM - MAIN CONFIGURATION
 # File: backup.env
-# Version: 1.3.0
-# Last Modified: 2025-11-04
-# Changes: removed required package from here
+# Version: 1.3.1
+# Last Modified: 2025-11-05
+# Changes: Cloud Connectivity Timeout Improvements
 # ============================================================================
 # Main configuration file for Proxmox backup system
 # This file contains all configurations needed for automated backup
@@ -1114,6 +1147,9 @@ RCLONE_BANDWIDTH_LIMIT="10M"
 # Additional rclone flags
 RCLONE_FLAGS="--transfers=16 --checkers=4 --stats=0 --drive-use-trash=false --drive-pacer-min-sleep=10ms --drive-pacer-burst=100"
 
+# Timeout (in seconds) for test
+CLOUD_CONNECTIVITY_TIMEOUT=30
+
 # ---------- Cloud Upload Mode ----------
 # Upload mode: "parallel" (recommended) or "sequential" (traditional)
 # - Parallel: Uploads backup, checksum and log simultaneously
@@ -1280,6 +1316,7 @@ setup_configuration() {
         add_storage_monitoring_config
         update_blacklist_config
         update_email_config
+        ensure_cloud_timeout_config
         remove_packages_config
     fi
 

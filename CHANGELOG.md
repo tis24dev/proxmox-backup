@@ -2,11 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.3.0] - 2025-11-04 - Standalone file: backup.env
+## [2.0.4] - 2025-11-05 - Cloud Connectivity Timeout Improvements
+### install.sh
+**Add**
+- Introduced `ensure_cloud_timeout_config()` to inject the cloud timeout configuration during upgrades without overwriting user-defined values
+- Updated env template
+
+## [1.3.1] - 2025-11-05 - Cloud Connectivity Timeout Improvements
+### env/backup.env
+**Add**
+- Added `CLOUD_CONNECTIVITY_TIMEOUT` (default 30 seconds) inside the rclone configuration block.
+
+## [1.3.0] - 2025-10-28 - Standalone file: backup.env
 **Fix**
 - Removed required package list
 
-## [2.0.3] - 2025-11-04 - Standalone Script: install.sh
+## [2.0.3] - 2025-11-04 - Add rsync dependency
+### Standalone Script: install.sh
 **Add**
 - Add rsync Dependency
 - Dependencies installed/updated automatically
@@ -206,6 +218,16 @@ All notable changes to this project are documented in this file.
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
 ---------------------------------------------------------------------------------------
+
+## [0.7.1] - 2025-11-05 - Verbose
+### lib/backup_collect.sh
+***Fix***
+- Corrected verbose level for rsync
+
+## [0.7.1] - 2025-11-05 - Cloud Connectivity Timeout Improvements
+### lib/utils_counting.sh
+**Fix**
+- Ensured cloud connectivity probes honor `CLOUD_CONNECTIVITY_TIMEOUT` by using a local `cloud_timeout` variable with a 30-second fallback.
 
 ## [0.7.0] - 2025-11-03 - Selective Restore with Automatic Version Detection
 ### lib/backup_collect.sh
