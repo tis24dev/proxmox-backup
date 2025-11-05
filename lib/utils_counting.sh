@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Counting Utils Library
 # File: utils_counting.sh
-# Version: 0.4.1
-# Last Modified: 2025-10-25
-# Changes: Hardened metrics functions with error recovery and safe fallback values
+# Version: 0.7.2
+# Last Modified: 2025-11-05
+# Changes: Add editable rclone timeout 
 ##
 
 # ======= AUTONOMOUS COUNTING SYSTEM - DOCUMENTATION =======
@@ -381,6 +381,7 @@ _TEST_CLOUD_CONNECTIVITY() {
     # Reset connectivity status
     COUNT_CLOUD_CONNECTION_ERROR="false"
     COUNT_CLOUD_CONNECTIVITY_STATUS="unknown"
+    local cloud_timeout="${CLOUD_CONNECTIVITY_TIMEOUT:-30}"
     
     # Check if cloud backup is enabled
     if [ "${ENABLE_CLOUD_BACKUP:-true}" != "true" ]; then
@@ -388,7 +389,7 @@ _TEST_CLOUD_CONNECTIVITY() {
         return 0
     fi
     
-    debug "Testing cloud connectivity with ${CLOUD_CONNECTIVITY_TIMEOUT}s timeout"
+    debug "Testing cloud connectivity with ${cloud_timeout}s timeout"
     
     # Check if rclone is available
     if ! command -v rclone &> /dev/null; then
@@ -420,7 +421,7 @@ _TEST_CLOUD_CONNECTIVITY() {
     fi
     
     # Test basic connectivity with configurable timeout
-    if ! timeout "${CLOUD_CONNECTIVITY_TIMEOUT}" rclone about "${RCLONE_REMOTE}:" ${RCLONE_FLAGS:-} &>/dev/null; then
+    if ! timeout "${cloud_timeout}" rclone about "${RCLONE_REMOTE}:" ${RCLONE_FLAGS:-} &>/dev/null; then
         warning "Cloud backup is enabled but connectivity test failed for remote '${RCLONE_REMOTE}'"
         warning "Check rclone configuration and network connectivity"
         warning "Test manually with: rclone about ${RCLONE_REMOTE}:"
@@ -430,7 +431,7 @@ _TEST_CLOUD_CONNECTIVITY() {
     fi
     
     # Test backup path accessibility (integrated from storage.sh)
-    if ! timeout "${CLOUD_CONNECTIVITY_TIMEOUT}" rclone mkdir "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null; then
+    if ! timeout "${cloud_timeout}" rclone mkdir "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null; then
         warning "Cloud backup path not accessible: ${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}"
         warning "Check path permissions and rclone configuration"
         COUNT_CLOUD_CONNECTION_ERROR="true"
@@ -439,7 +440,7 @@ _TEST_CLOUD_CONNECTIVITY() {
     fi
     
     # Test log path accessibility (integrated from log.sh)
-    if ! timeout "${CLOUD_CONNECTIVITY_TIMEOUT}" rclone mkdir "${RCLONE_REMOTE}:${CLOUD_LOG_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null; then
+    if ! timeout "${cloud_timeout}" rclone mkdir "${RCLONE_REMOTE}:${CLOUD_LOG_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null; then
         debug "Cloud log path not accessible: ${RCLONE_REMOTE}:${CLOUD_LOG_PATH}"
         # Log path failure is not critical - continue with warning
         debug "Warning: Cloud log path accessibility failed, but continuing"
