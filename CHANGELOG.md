@@ -13,7 +13,7 @@ All notable changes to this project are documented in this file.
 **Add**
 - Added `CLOUD_CONNECTIVITY_TIMEOUT` (default 30 seconds) inside the rclone configuration block.
 
-## [1.3.0] - 2025-10-28 - Standalone file: backup.env
+## [1.3.0] - 2025-11-04 - Standalone file: backup.env
 **Fix**
 - Removed required package list
 
@@ -219,11 +219,16 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
-## [0.7.2] - 2025-11-05 - Detailed Warning Output
+## [0.7.2] - 2025-11-05 - Detailed Warning Output & Rclone timeout increased and editable
 ### lib/backup_collect.sh
 **Change**
 - Replace the generic warning counter with numbered `[Warning] #N …` messages that avoid `:` so the full context survives when relayed via email notifications.
 - Reset the new warning/error detail counters during `reset_backup_counters()` to scope numbering to each run.
+- Changed Rclone timeout mode with configurable value in backup.env
+
+### lib/utils_counting.sh
+**Fix**
+- Changed Rclone timeout mode with configurable value in backup.env
 
 ### lib/notify.sh
 **Fix**
