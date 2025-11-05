@@ -891,6 +891,7 @@ get_reference_config_header() {
 # - Always verify configuration before running backups in production
 # - Keep backup copies of this configuration file
 # ============================================================================
+#
 EOF
 }
 
@@ -957,7 +958,6 @@ create_default_configuration() {
     mkdir -p "$INSTALL_DIR/env"
     get_reference_config_header > "$config_file"
     cat >> "$config_file" <<'EOF'
-
 # ============================================================================
 # 1. GENERAL SYSTEM CONFIGURATION
 # ============================================================================
