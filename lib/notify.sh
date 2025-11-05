@@ -2,15 +2,45 @@
 ##
 # Proxmox Backup System - Notification Library
 # File: notify.sh
-# Version: 0.5.2
-# Last Modified: 2025-10-30
-# Changes: Fix name process
+# Version: 0.7.2
+# Last Modified: 2025-11-05
+# Changes: Detailed Warning Output
 ##
 
 # Proxmox backup notification system
 
 # Source email relay functions
 source "${BASE_DIR}/lib/email_relay.sh"
+
+# Normalize log lines for email summaries (remove prefixed tags/counters)
+sanitize_log_classification() {
+    local msg="$1"
+
+    # Trim leading/trailing whitespace
+    msg="${msg#"${msg%%[![:space:]]*}"}"
+    msg="${msg%"${msg##*[![:space:]]}"}"
+
+    case "$msg" in
+        "[Warning]"*|"[warning]"*)
+            msg="${msg#\[Warning] }"
+            msg="${msg#\[warning] }"
+            ;;
+        "[Error]"*|"[error]"*)
+            msg="${msg#\[Error] }"
+            msg="${msg#\[error] }"
+            ;;
+    esac
+
+    if [[ "$msg" =~ ^#[0-9]+[[:space:]]+ ]]; then
+        msg="${msg#\#}"
+        while [[ "$msg" =~ ^[0-9] ]]; do
+            msg="${msg#?}"
+        done
+        msg="${msg#"${msg%%[![:space:]]*}"}"
+    fi
+
+    echo "$msg"
+}
 
 # Central management of all notifications
 send_notifications() {
@@ -841,41 +871,53 @@ collect_email_report_data() {
 
         # Process errors
         while IFS= read -r line; do
-            local category=$(echo "$line" | sed -n 's/.*\[ERROR\] \([^:]*\).*/\1/p')
-            if [ -n "$category" ]; then
-                category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
-                category_types["$category"]="ERROR"
-                if [ -z "${category_examples["$category"]:-}" ]; then
-                    if echo "$line" | grep -q "\[ERROR\] [^:]*:"; then
-                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[ERROR\] [^:]*: \(.*\)/\1/' | cut -c 1-100)
-                    else
-                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[ERROR\] \(.*\)/\1/' | cut -c 1-100)
-                    fi
+            local message=$(echo "$line" | sed -n 's/.*\[ERROR\] \(.*\)/\1/p')
+            [ -z "$message" ] && continue
+            message=$(sanitize_log_classification "$message")
+            [ -z "$message" ] && continue
+
+            local category="$message"
+            local example=""
+            if [[ "$message" == *" - "* ]]; then
+                category="${message%% - *}"
+                example="${message#* - }"
+            fi
+
+            category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
+            category_types["$category"]="ERROR"
+            if [ -z "${category_examples["$category"]:-}" ]; then
+                if [ -n "$example" ]; then
+                    category_examples["$category"]=$(echo "$example" | cut -c 1-100)
+                else
+                    category_examples["$category"]=$(echo "$message" | cut -c 1-100)
                 fi
             fi
         done < <(grep "\[ERROR\]" "$LOG_FILE" 2>/dev/null || true)
 
         # Process warnings
         while IFS= read -r line; do
-            local category=""
-            if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
-                category=$(echo "$line" | sed -n 's/.*\[WARNING\] \([^:]*\):.*/\1/p')
-            else
-                category=$(echo "$line" | sed -n 's/.*\[WARNING\] \(.*\)/\1/p')
+            local message=$(echo "$line" | sed -n 's/.*\[WARNING\] \(.*\)/\1/p')
+            [ -z "$message" ] && continue
+            message=$(sanitize_log_classification "$message")
+            [ -z "$message" ] && continue
+
+            local category="$message"
+            local example=""
+            if [[ "$message" == *" - "* ]]; then
+                category="${message%% - *}"
+                example="${message#* - }"
             fi
 
-            if [ -n "$category" ]; then
-                if [ -z "${category_types["$category"]:-}" ]; then
-                    category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
-                    category_types["$category"]="WARNING"
-                    if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
-                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[WARNING\] [^:]*: \(.*\)/\1/' | cut -c 1-100)
-                    else
-                        category_examples["$category"]=$(echo "$line" | sed 's/.*\[WARNING\] \(.*\)/\1/' | cut -c 1-100)
-                    fi
-                elif [ "${category_types["$category"]}" = "WARNING" ]; then
-                    category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
+            if [ -z "${category_types["$category"]:-}" ]; then
+                category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
+                category_types["$category"]="WARNING"
+                if [ -n "$example" ]; then
+                    category_examples["$category"]=$(echo "$example" | cut -c 1-100)
+                else
+                    category_examples["$category"]=$(echo "$message" | cut -c 1-100)
                 fi
+            elif [ "${category_types["$category"]}" = "WARNING" ]; then
+                category_counts["$category"]=$((${category_counts["$category"]:-0} + 1))
             fi
         done < <(grep "\[WARNING\]" "$LOG_FILE" 2>/dev/null || true)
 
@@ -1084,90 +1126,88 @@ add_error_summary_to_email() {
             
             # Process errors
             while read -r line; do
-                # Extract category (first words after [ERROR])
-                local category=$(echo "$line" | sed -n 's/.*\[ERROR\] \([^:]*\).*/\1/p')
-                if [ -n "$category" ]; then
-                    # Check if this category is already in our array
-                    local found=0
-                    for i in "${!categories[@]}"; do
-                        if [ "${categories[$i]}" = "$category" ]; then
-                            # Increment count
-                            category_counts_error[$i]=$((category_counts_error[$i] + 1))
-                            found=1
-                            break
+                local message=$(echo "$line" | sed -n 's/.*\[ERROR\] \(.*\)/\1/p')
+                [ -z "$message" ] && continue
+                message=$(sanitize_log_classification "$message")
+                [ -z "$message" ] && continue
+
+                local category="$message"
+                local example=""
+                if [[ "$message" == *" - "* ]]; then
+                    category="${message%% - *}"
+                    example="${message#* - }"
+                fi
+
+                local found=0
+                for i in "${!categories[@]}"; do
+                    if [ "${categories[$i]}" = "$category" ]; then
+                        category_counts_error[$i]=$((category_counts_error[$i] + 1))
+                        found=1
+                        if [ -z "${category_examples_error[$i]}" ]; then
+                            if [ -n "$example" ]; then
+                                category_examples_error[$i]=$(echo "$example" | cut -c 1-50)
+                            else
+                                category_examples_error[$i]=$(echo "$message" | cut -c 1-50)
+                            fi
                         fi
-                    done
-                    
-                    # If not found, add new category
-                    if [ $found -eq 0 ]; then
-                        categories+=("$category")
-                        category_counts_error+=("1")
-                        category_counts_warning+=("0")
-                        # Extract example based on presence of colon
-                        local example=""
-                        if echo "$line" | grep -q "\[ERROR\] [^:]*:"; then
-                            example=$(echo "$line" | sed 's/.*\[ERROR\] [^:]*: \(.*\)/\1/' | cut -c 1-50)
-                        else
-                            example=$(echo "$line" | sed 's/.*\[ERROR\] \(.*\)/\1/' | cut -c 1-50)
-                        fi
-                        category_examples_error+=("$example")
-                        category_examples_warning+=("")
+                        break
                     fi
+                done
+                
+                if [ $found -eq 0 ]; then
+                    categories+=("$category")
+                    category_counts_error+=("1")
+                    category_counts_warning+=("0")
+                    if [ -n "$example" ]; then
+                        category_examples_error+=("$(echo "$example" | cut -c 1-50)")
+                    else
+                        category_examples_error+=("$(echo "$message" | cut -c 1-50)")
+                    fi
+                    category_examples_warning+=("")
                 fi
             done < <(grep "\[ERROR\]" "$LOG_FILE")
             
             # Process warnings
             while read -r line; do
-                # Extract category (first words after [WARNING])
-                # Handle both cases with and without colon
-                local category=""
-                if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
-                    # Case with colon
-                    category=$(echo "$line" | sed -n 's/.*\[WARNING\] \([^:]*\):.*/\1/p')
-                else
-                    # Case without colon - take entire message
-                    category=$(echo "$line" | sed -n 's/.*\[WARNING\] \(.*\)/\1/p')
+                local message=$(echo "$line" | sed -n 's/.*\[WARNING\] \(.*\)/\1/p')
+                [ -z "$message" ] && continue
+                message=$(sanitize_log_classification "$message")
+                [ -z "$message" ] && continue
+
+                local category="$message"
+                local example=""
+                if [[ "$message" == *" - "* ]]; then
+                    category="${message%% - *}"
+                    example="${message#* - }"
                 fi
                 
-                if [ -n "$category" ]; then
-                    # Check if this category is already in our array
-                    local found=0
-                    for i in "${!categories[@]}"; do
-                        if [ "${categories[$i]}" = "$category" ]; then
-                            # Increment count
-                            category_counts_warning[$i]=$((category_counts_warning[$i] + 1))
-                            
-                            # If this is the first warning in this category, save an example
-                            if [ "${category_counts_warning[$i]}" -eq 1 ]; then
-                                # Extract example based on presence of colon
-                                local example=""
-                                if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
-                                    example=$(echo "$line" | sed 's/.*\[WARNING\] [^:]*: \(.*\)/\1/' | cut -c 1-50)
-                                else
-                                    example=$(echo "$line" | sed 's/.*\[WARNING\] \(.*\)/\1/' | cut -c 1-50)
-                                fi
-                                category_examples_warning[$i]="$example"
+                local found=0
+                for i in "${!categories[@]}"; do
+                    if [ "${categories[$i]}" = "$category" ]; then
+                        category_counts_warning[$i]=$((category_counts_warning[$i] + 1))
+
+                        if [ "${category_counts_warning[$i]}" -eq 1 ]; then
+                            if [ -n "$example" ]; then
+                                category_examples_warning[$i]=$(echo "$example" | cut -c 1-50)
+                            else
+                                category_examples_warning[$i]=$(echo "$message" | cut -c 1-50)
                             fi
-                            
-                            found=1
-                            break
                         fi
-                    done
-                    
-                    # If not found, add new category
-                    if [ $found -eq 0 ]; then
-                        categories+=("$category")
-                        category_counts_error+=("0")
-                        category_counts_warning+=("1")
-                        category_examples_error+=("")
-                        # Extract example based on presence of colon
-                        local example=""
-                        if echo "$line" | grep -q "\[WARNING\] [^:]*:"; then
-                            example=$(echo "$line" | sed 's/.*\[WARNING\] [^:]*: \(.*\)/\1/' | cut -c 1-50)
-                        else
-                            example=$(echo "$line" | sed 's/.*\[WARNING\] \(.*\)/\1/' | cut -c 1-50)
-                        fi
-                        category_examples_warning+=("$example")
+
+                        found=1
+                        break
+                    fi
+                done
+                
+                if [ $found -eq 0 ]; then
+                    categories+=("$category")
+                    category_counts_error+=("0")
+                    category_counts_warning+=("1")
+                    category_examples_error+=("")
+                    if [ -n "$example" ]; then
+                        category_examples_warning+=("$(echo "$example" | cut -c 1-50)")
+                    else
+                        category_examples_warning+=("$(echo "$message" | cut -c 1-50)")
                     fi
                 fi
             done < <(grep "\[WARNING\]" "$LOG_FILE")

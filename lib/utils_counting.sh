@@ -4,7 +4,7 @@
 # File: utils_counting.sh
 # Version: 0.7.2
 # Last Modified: 2025-11-05
-# Changes: Add editable rclone timeout 
+# Changes: add rclone timeout
 ##
 
 # ======= AUTONOMOUS COUNTING SYSTEM - DOCUMENTATION =======

@@ -219,6 +219,17 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
+## [0.7.2] - 2025-11-05 - Detailed Warning Output
+### lib/backup_collect.sh
+**Change**
+- Replace the generic warning counter with numbered `[Warning] #N …` messages that avoid `:` so the full context survives when relayed via email notifications.
+- Reset the new warning/error detail counters during `reset_backup_counters()` to scope numbering to each run.
+
+### lib/notify.sh
+**Fix**
+- Sanitize the updated warning format when building email summaries so categories and examples keep the entire message text even without colons.
+- Preserve full detail in Worker/HTML reports by splitting the hyphen-delimited message into category vs. example fields.
+
 ## [0.7.1] - 2025-11-05 - Verbose
 ### lib/backup_collect.sh
 ***Fix***

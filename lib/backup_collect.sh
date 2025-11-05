@@ -4,7 +4,7 @@
 # File: backup_collect.sh
 # Version: 0.7.2
 # Last Modified: 2025-11-05
-# Changes: Fix verbose level rsync
+# Changes: fix rclone timeout
 ##
 # Functions for backup data collection
 
@@ -14,6 +14,10 @@ BACKUP_FILES_FAILED=0
 BACKUP_DIRS_CREATED=0
 BACKUP_OPERATION_START_TIME=0
 
+# Detailed warning/error counters used for numbered log messages
+BACKUP_WARNING_DETAILS_COUNT=0
+BACKUP_ERROR_DETAILS_COUNT=0
+
 # Unified error handling function (Suggerimento 4)
 handle_collection_error() {
     local operation="$1"
@@ -21,33 +25,41 @@ handle_collection_error() {
     local error_level="${3:-warning}"
     local additional_info="${4:-}"
     
-    local error_msg="Failed to collect $operation"
-    if [ -n "$file_path" ]; then
-        error_msg="$error_msg: $file_path"
+    # Replace characters that break plain-text email parsing (":" mainly)
+    local sanitized_operation="${operation//:/ - }"
+    local sanitized_path="${file_path//:/ - }"
+    local sanitized_info="${additional_info//:/ - }"
+
+    local message_core="Failed to collect ${sanitized_operation}"
+    if [ -n "$sanitized_path" ]; then
+        message_core="${message_core} - ${sanitized_path}"
     fi
-    if [ -n "$additional_info" ]; then
-        error_msg="$error_msg ($additional_info)"
+    if [ -n "$sanitized_info" ]; then
+        message_core="${message_core} - ${sanitized_info}"
     fi
     
     case "$error_level" in
         "critical"|"error")
-            error "$error_msg"
+            BACKUP_ERROR_DETAILS_COUNT=$((BACKUP_ERROR_DETAILS_COUNT + 1))
+            error "[Error] #${BACKUP_ERROR_DETAILS_COUNT} ${message_core}"
             set_exit_code "error"
             increment_file_counter "failed"
             return 1
             ;;
         "warning")
-            warning "$error_msg"
+            BACKUP_WARNING_DETAILS_COUNT=$((BACKUP_WARNING_DETAILS_COUNT + 1))
+            warning "[Warning] #${BACKUP_WARNING_DETAILS_COUNT} ${message_core}"
             set_exit_code "warning"
             increment_file_counter "failed"
             return 0
             ;;
         "debug")
-            debug "$error_msg"
+            debug "${message_core}"
             return 0
             ;;
         *)
-            warning "$error_msg"
+            BACKUP_WARNING_DETAILS_COUNT=$((BACKUP_WARNING_DETAILS_COUNT + 1))
+            warning "[Warning] #${BACKUP_WARNING_DETAILS_COUNT} ${message_core}"
             set_exit_code "warning"
             increment_file_counter "failed"
             return 0
@@ -165,6 +177,8 @@ reset_backup_counters() {
     BACKUP_FILES_PROCESSED=0
     BACKUP_FILES_FAILED=0
     BACKUP_DIRS_CREATED=0
+    BACKUP_WARNING_DETAILS_COUNT=0
+    BACKUP_ERROR_DETAILS_COUNT=0
 }
 
 # Collect Proxmox configuration based on type
