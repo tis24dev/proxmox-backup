@@ -305,7 +305,7 @@ check_dependencies() {
     done
     
     if [ $missing -gt 0 ]; then
-        log_warning "$missing dependencies missing. Install with:"
+        log_warning "$missing dependencies missing. Install with"
         echo "apt-get update && apt-get install -y iptables net-tools iproute2"
         
         # Check if automatic installation is enabled
