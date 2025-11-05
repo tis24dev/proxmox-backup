@@ -916,18 +916,8 @@ update_config_header() {
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
     awk '
-        /^# ============================================================================$/ {
-            if (getline next_line > 0) {
-                if (next_line ~ /^# 1\. GENERAL SYSTEM CONFIGURATION$/) {
-                    found=1
-                    print
-                    print next_line
-                } else {
-                    if (found) print
-                    if (found) print next_line
-                }
-            }
-            next
+        /^# 1\. GENERAL SYSTEM CONFIGURATION$/ {
+            found=1
         }
         found { print }
     ' "$config_file" > "${config_file}.body.tmp"
