@@ -79,12 +79,26 @@ copy_to_secondary() {
         return $EXIT_SUCCESS
     fi
     
-    mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>/dev/null || {
+    # Attempt to create secondary backup directories with detailed error logging
+    local mkdir_error
+    if ! mkdir_error=$(mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>&1); then
         warning "Failed to create secondary backup paths: $SECONDARY_BACKUP_PATH"
+        error "mkdir error: $mkdir_error"
+
+        # Detailed diagnostics
+        local parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
+        debug "Parent directory: $parent_dir"
+        debug "Parent exists: $([ -d "$parent_dir" ] && echo 'yes' || echo 'no')"
+        debug "Parent writable: $([ -w "$parent_dir" ] && echo 'yes' || echo 'no')"
+        debug "Parent permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
+        debug "Current user: $(whoami)"
+        debug "Available space: $(df -h "$parent_dir" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
+        debug "Mount options: $(mount | grep "$(df "$parent_dir" 2>/dev/null | tail -1 | awk '{print $1}')" || echo 'unknown')"
+
         set_exit_code "warning"
         set_backup_status "secondary_copy" $EXIT_WARNING
         return $EXIT_WARNING
-    }
+    fi
     
     # Copy backup file
     debug "Original file: $BACKUP_FILE ->"
@@ -1058,8 +1072,20 @@ set_permissions() {
     
     # Create the secondary backup path if secondary backup is enabled
     if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
-        if ! mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>/dev/null; then
+        local mkdir_error
+        if ! mkdir_error=$(mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>&1); then
             warning "Failed to create secondary backup paths: $SECONDARY_BACKUP_PATH"
+            error "mkdir error: $mkdir_error"
+
+            # Detailed diagnostics
+            local parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
+            debug "Parent directory: $parent_dir"
+            debug "Parent exists: $([ -d "$parent_dir" ] && echo 'yes' || echo 'no')"
+            debug "Parent writable: $([ -w "$parent_dir" ] && echo 'yes' || echo 'no')"
+            debug "Parent permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
+            debug "Current user: $(whoami)"
+            debug "Available space: $(df -h "$parent_dir" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
+
             set_exit_code "warning"
         fi
     fi

@@ -406,9 +406,29 @@ setup_dirs() {
         if [ "${DRY_RUN_MODE:-false}" = "true" ]; then
             debug "Dry run mode: Would create secondary backup directories"
         elif [ -n "$SECONDARY_BACKUP_PATH" ] && [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
-            mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" || {
-                warning "Failed to create secondary directories. Secondary backup may fail."
-            }
+            # Validate write permissions before attempting creation
+            local parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
+            if [ ! -w "$parent_dir" ]; then
+                error "No write permission to secondary backup parent directory: $parent_dir"
+                error "Current permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
+                error "Current user: $(whoami)"
+                warning "Secondary backup will be disabled for this session"
+            else
+                local mkdir_error
+                if ! mkdir_error=$(mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>&1); then
+                    warning "Failed to create secondary directories. Secondary backup may fail."
+                    error "mkdir error: $mkdir_error"
+
+                    # Detailed diagnostics
+                    debug "Parent directory: $parent_dir"
+                    debug "Parent exists: $([ -d "$parent_dir" ] && echo 'yes' || echo 'no')"
+                    debug "Parent writable: $([ -w "$parent_dir" ] && echo 'yes' || echo 'no')"
+                    debug "Parent permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
+                    debug "Current user: $(whoami)"
+                    debug "Available space: $(df -h "$parent_dir" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
+                    debug "Mount options: $(mount | grep "$(df "$parent_dir" 2>/dev/null | tail -1 | awk '{print $1}')" || echo 'unknown')"
+                fi
+            fi
         elif [ -n "$SECONDARY_BACKUP_PATH" ]; then
             warning "Secondary backup parent directory doesn't exist. Secondary backup may fail."
         else
