@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup Script for PVE and PBS
 # File: proxmox-backup.sh
-# Version: 0.7.2
-# Last Modified: 2025-11-05
-# Changes: Fix verbose level rsync
+# Version: 0.7.3
+# Last Modified: 2025-11-06
+# Changes: Enhanced Secondary Backup Error Diagnostics
 #
 # This script performs comprehensive backups for Proxmox VE and Proxmox Backup Server
 # and uploads them to local, secondary, and cloud storage.

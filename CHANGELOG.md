@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.5] - 2025-11-06 - Error Handling & Interactive Prompt Improvements
+### Standalone Script: install.sh
+**Fix**
+- Fixed silent script termination when commands fail in non-verbose mode
+- Fixed script hanging on security-check.sh interactive prompts during installation
+- Modified error handling in `install_dependencies()` to capture and display command output on failure for: apt update, apt install, apt upgrade, rclone installer, wget, tar, configure/make/make install
+- Modified `create_backup()` to capture and display tar command output on failure
+- Modified `clone_repository()` to capture and display git clone output on failure
+- Changed stderr redirection in `run_fix_permissions()`, `run_security_check()`, and `run_first_backup()` from `>/dev/null 2>&1` to `>/dev/null` to allow interactive prompts to appear while suppressing normal output
+**Add**
+- Added security-check.sh dependencies to default package list: iptables, net-tools, iproute2
+- Added error output capture and display for all critical commands in silent mode
+- Added local variables for capturing command output: apt_output, rclone_output, build_output, wget_output, tar_output, compile_output, git_output
+**Behavior**
+- Silent mode now shows full error messages when commands fail instead of terminating without explanation
+- Interactive prompts (dependency installation, hash updates) are now visible in silent mode, preventing installation hangs
+- All required dependencies installed automatically during setup, eliminating interactive prompts during security checks
+
 ## [2.0.4] - 2025-11-05 - Cloud Connectivity Timeout Improvements
 ### install.sh
 **Add**
@@ -218,6 +236,32 @@ All notable changes to this project are documented in this file.
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
 ---------------------------------------------------------------------------------------
+
+## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics
+### lib/storage.sh
+**Fix**
+- Removed `2>/dev/null` stderr suppression from secondary directory creation at lines 82-101 and 1073-1091
+- Added detailed error capture using `mkdir_error=$(mkdir -p ... 2>&1)` to preserve actual system error messages
+- Enhanced error logging with comprehensive diagnostics:
+  - Real mkdir error message (e.g., "Permission denied", "No space left on device")
+  - Parent directory existence and write permission checks
+  - Directory ownership and permissions (format: `755 user:group`)
+  - Current executing user identification
+  - Available disk space on target filesystem
+  - Mount options for secondary backup location
+- Improved troubleshooting of secondary backup failures by exposing previously hidden system errors
+
+### lib/environment.sh
+**Add**
+- Added preemptive write permission validation in `setup_dirs()` before attempting secondary directory creation (lines 404-439)
+- Added early error detection with detailed permission diagnostics:
+  - Parent directory permissions and ownership display
+  - Current user identification
+  - Clear warning when secondary backup will be disabled due to insufficient permissions
+- Added same comprehensive error diagnostics as storage.sh for mkdir failures
+**Fix**
+- Removed `2>/dev/null` stderr suppression to expose actual mkdir errors during initial setup
+- Enhanced error messages transform generic warnings into actionable diagnostics
 
 ## [0.7.2] - 2025-11-05 - Detailed Warning Output & Rclone timeout increased and editable
 ### lib/backup_collect.sh

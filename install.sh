@@ -2,8 +2,8 @@
 ##
 # Proxmox Backup System - Unified Installer
 # File: install.sh
-# Version: 2.0.4
-# Purpose: Cloud Connectivity Timeout Improvements
+# Version: 2.0.5
+# Purpose: Error Handling & Interactive Prompt Improvements
 ##
 
 set -euo pipefail
@@ -55,7 +55,7 @@ init_constants() {
     RESET='\033[0m'
 
     SCRIPT_NAME="Proxmox Backup Installer"
-    INSTALLER_VERSION="2.0.4"
+    INSTALLER_VERSION="2.0.5"
     REPO_URL="https://github.com/tis24dev/proxmox-backup"
     INSTALL_DIR="/opt/proxmox-backup"
 
