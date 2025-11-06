@@ -407,41 +407,51 @@ setup_dirs() {
         if [ "${DRY_RUN_MODE:-false}" = "true" ]; then
             debug "Dry run mode: Would create secondary backup directories"
         else
-            # At this point paths are guaranteed to be non-empty by validate_backup_paths()
-            local parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
-
-            # Check if parent directory exists
-            if [ ! -d "$parent_dir" ]; then
-                warning "Secondary backup parent directory doesn't exist: $parent_dir"
+            # Safety check: validate paths are non-empty (should already be validated by validate_backup_paths)
+            if [ -z "${SECONDARY_BACKUP_PATH:-}" ]; then
+                error "SECONDARY_BACKUP_PATH is not configured or empty"
                 export ENABLE_SECONDARY_BACKUP="false"
                 info "Secondary backup is disabled"
-            # Check write permissions
-            elif [ ! -w "$parent_dir" ]; then
-                error "No write permission to secondary backup parent directory: $parent_dir"
-                error "Current permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
-                error "Current user: $(whoami)"
+            elif [ -z "${SECONDARY_LOG_PATH:-}" ]; then
+                error "SECONDARY_LOG_PATH is not configured or empty"
                 export ENABLE_SECONDARY_BACKUP="false"
                 info "Secondary backup is disabled"
             else
-                # Attempt directory creation with detailed error logging
-                local mkdir_error
-                if ! mkdir_error=$(mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>&1); then
-                    warning "Failed to create secondary directories"
-                    error "mkdir error: $mkdir_error"
+                local parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
 
-                    # Detailed diagnostics
-                    debug "Parent directory: $parent_dir"
-                    debug "Parent exists: $([ -d "$parent_dir" ] && echo 'yes' || echo 'no')"
-                    debug "Parent writable: $([ -w "$parent_dir" ] && echo 'yes' || echo 'no')"
-                    debug "Parent permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
-                    debug "Current user: $(whoami)"
-                    debug "Available space: $(df -h "$parent_dir" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
-                    debug "Mount options: $(mount | grep "$(df "$parent_dir" 2>/dev/null | tail -1 | awk '{print $1}')" || echo 'unknown')"
-
+                # Check if parent directory exists
+                if [ ! -d "$parent_dir" ]; then
+                    warning "Secondary backup parent directory doesn't exist: $parent_dir"
+                    export ENABLE_SECONDARY_BACKUP="false"
+                    info "Secondary backup is disabled"
+                # Check write permissions
+                elif [ ! -w "$parent_dir" ]; then
+                    error "No write permission to secondary backup parent directory: $parent_dir"
+                    error "Current permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
+                    error "Current user: $(whoami)"
                     export ENABLE_SECONDARY_BACKUP="false"
                     info "Secondary backup is disabled"
                 else
-                    debug "Secondary backup directories created successfully"
+                    # Attempt directory creation with detailed error logging
+                    local mkdir_error
+                    if ! mkdir_error=$(mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>&1); then
+                        warning "Failed to create secondary directories"
+                        error "mkdir error: $mkdir_error"
+
+                        # Detailed diagnostics
+                        debug "Parent directory: $parent_dir"
+                        debug "Parent exists: $([ -d "$parent_dir" ] && echo 'yes' || echo 'no')"
+                        debug "Parent writable: $([ -w "$parent_dir" ] && echo 'yes' || echo 'no')"
+                        debug "Parent permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
+                        debug "Current user: $(whoami)"
+                        debug "Available space: $(df -h "$parent_dir" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
+                        debug "Mount options: $(mount | grep "$(df "$parent_dir" 2>/dev/null | tail -1 | awk '{print $1}')" || echo 'unknown')"
+
+                        export ENABLE_SECONDARY_BACKUP="false"
+                        info "Secondary backup is disabled"
+                    else
+                        debug "Secondary backup directories created successfully"
+                    fi
                 fi
             fi
         fi
