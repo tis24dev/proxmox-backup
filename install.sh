@@ -203,10 +203,18 @@ install_dependencies() {
 
     # Update package lists first
     print_status "Updating package lists..."
+    local apt_output
     if [[ "$VERBOSE_MODE" == "true" ]]; then
-        apt update
+        if ! apt update; then
+            print_error "Failed to update package lists"
+            return 1
+        fi
     else
-        apt update >/dev/null 2>&1
+        if ! apt_output=$(apt update 2>&1); then
+            print_error "Failed to update package lists"
+            echo "$apt_output"
+            return 1
+        fi
     fi
 
     # Check and upgrade all packages to latest available versions
@@ -229,9 +237,16 @@ install_dependencies() {
     if [[ -n "$MISSING_PACKAGES" ]]; then
         print_status "Installing missing packages:$MISSING_PACKAGES"
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            apt install -y $MISSING_PACKAGES
+            if ! apt install -y $MISSING_PACKAGES; then
+                print_error "Failed to install missing packages:$MISSING_PACKAGES"
+                return 1
+            fi
         else
-            apt install -y $MISSING_PACKAGES >/dev/null 2>&1
+            if ! apt_output=$(apt install -y $MISSING_PACKAGES 2>&1); then
+                print_error "Failed to install missing packages:$MISSING_PACKAGES"
+                echo "$apt_output"
+                return 1
+            fi
         fi
         print_success "Missing packages installed"
     fi
@@ -240,9 +255,16 @@ install_dependencies() {
     if [[ -n "$UPGRADABLE_PACKAGES" ]]; then
         print_status "Upgrading packages to latest version:$UPGRADABLE_PACKAGES"
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            apt install --only-upgrade -y $UPGRADABLE_PACKAGES
+            if ! apt install --only-upgrade -y $UPGRADABLE_PACKAGES; then
+                print_error "Failed to upgrade packages:$UPGRADABLE_PACKAGES"
+                return 1
+            fi
         else
-            apt install --only-upgrade -y $UPGRADABLE_PACKAGES >/dev/null 2>&1
+            if ! apt_output=$(apt install --only-upgrade -y $UPGRADABLE_PACKAGES 2>&1); then
+                print_error "Failed to upgrade packages:$UPGRADABLE_PACKAGES"
+                echo "$apt_output"
+                return 1
+            fi
         fi
         print_success "Packages upgraded to latest version"
     fi
@@ -266,10 +288,11 @@ install_dependencies() {
 
     # Execute the installer (it will check if update is needed)
     local rclone_status=0
+    local rclone_output
     if [[ "$VERBOSE_MODE" == "true" ]]; then
         bash "$temp_rclone_script" || rclone_status=$?
     else
-        bash "$temp_rclone_script" >/dev/null 2>&1 || rclone_status=$?
+        rclone_output=$(bash "$temp_rclone_script" 2>&1) || rclone_status=$?
     fi
 
     rm -f "$temp_rclone_script"
@@ -287,6 +310,9 @@ install_dependencies() {
             ;;
         *)
             print_error "rclone installation failed with exit code $rclone_status"
+            if [[ -n "$rclone_output" ]]; then
+                echo "$rclone_output"
+            fi
             return 1
             ;;
     esac
@@ -323,10 +349,22 @@ install_dependencies() {
         # Install build dependencies
         print_status "Installing build dependencies..."
         local build_deps="build-essential gawk autoconf automake python3-cmarkgfm acl libacl1-dev attr libattr1-dev libxxhash-dev libssl-dev libzstd-dev liblz4-dev"
+        local build_output
         if [[ "$VERBOSE_MODE" == "true" ]]; then
-            apt install -y $build_deps
+            if ! apt install -y $build_deps; then
+                print_error "Failed to install build dependencies"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
         else
-            apt install -y $build_deps >/dev/null 2>&1
+            if ! build_output=$(apt install -y $build_deps 2>&1); then
+                print_error "Failed to install build dependencies"
+                echo "$build_output"
+                popd >/dev/null
+                rm -rf "$temp_dir"
+                return 1
+            fi
         fi
 
         # Download latest rsync
@@ -334,6 +372,7 @@ install_dependencies() {
         local rsync_tar="rsync-${rsync_target_version}.tar.gz"
         local rsync_url="https://download.samba.org/pub/rsync/src/${rsync_tar}"
 
+        local wget_output
         if [[ "$VERBOSE_MODE" == "true" ]]; then
             if ! wget "$rsync_url"; then
                 print_error "Failed to download rsync source from $rsync_url"
@@ -342,8 +381,9 @@ install_dependencies() {
                 return 1
             fi
         else
-            if ! wget -q "$rsync_url"; then
+            if ! wget_output=$(wget -q "$rsync_url" 2>&1); then
                 print_error "Failed to download rsync source from $rsync_url"
+                echo "$wget_output"
                 popd >/dev/null
                 rm -rf "$temp_dir"
                 return 1
@@ -357,6 +397,7 @@ install_dependencies() {
             return 1
         fi
 
+        local tar_output
         if [[ "$VERBOSE_MODE" == "true" ]]; then
             if ! tar -xzf "$rsync_tar"; then
                 print_error "Failed to extract rsync archive"
@@ -365,8 +406,9 @@ install_dependencies() {
                 return 1
             fi
         else
-            if ! tar -xzf "$rsync_tar" >/dev/null 2>&1; then
+            if ! tar_output=$(tar -xzf "$rsync_tar" 2>&1); then
                 print_error "Failed to extract rsync archive"
+                echo "$tar_output"
                 popd >/dev/null
                 rm -rf "$temp_dir"
                 return 1
@@ -377,6 +419,7 @@ install_dependencies() {
 
         # Compile and install
         print_status "Compiling rsync..."
+        local compile_output
         if [[ "$VERBOSE_MODE" == "true" ]]; then
             if ! ./configure; then
                 print_error "rsync ./configure failed"
@@ -397,20 +440,23 @@ install_dependencies() {
                 return 1
             fi
         else
-            if ! ./configure >/dev/null 2>&1; then
+            if ! compile_output=$(./configure 2>&1); then
                 print_error "rsync ./configure failed"
+                echo "$compile_output"
                 popd >/dev/null
                 rm -rf "$temp_dir"
                 return 1
             fi
-            if ! make >/dev/null 2>&1; then
+            if ! compile_output=$(make 2>&1); then
                 print_error "rsync make failed"
+                echo "$compile_output"
                 popd >/dev/null
                 rm -rf "$temp_dir"
                 return 1
             fi
-            if ! make install >/dev/null 2>&1; then
+            if ! compile_output=$(make install 2>&1); then
                 print_error "rsync make install failed"
+                echo "$compile_output"
                 popd >/dev/null
                 rm -rf "$temp_dir"
                 return 1
@@ -448,19 +494,23 @@ create_backup() {
     BACKUP_README_PATH="/tmp/proxmox-backup-restore-${timestamp}.txt"
 
     print_status "Creating compressed backup archive..."
+    local tar_output
+    local tar_status=0
     if [[ "$VERBOSE_MODE" == "true" ]]; then
-        tar czf "$BACKUP_ARCHIVE_PATH" -C "$(dirname "$INSTALL_DIR")" "$(basename "$INSTALL_DIR")"
+        tar czf "$BACKUP_ARCHIVE_PATH" -C "$(dirname "$INSTALL_DIR")" "$(basename "$INSTALL_DIR")" || tar_status=$?
     else
-        tar czf "$BACKUP_ARCHIVE_PATH" -C "$(dirname "$INSTALL_DIR")" "$(basename "$INSTALL_DIR")" >/dev/null 2>&1
+        tar_output=$(tar czf "$BACKUP_ARCHIVE_PATH" -C "$(dirname "$INSTALL_DIR")" "$(basename "$INSTALL_DIR")" 2>&1) || tar_status=$?
     fi
 
-    local tar_status=$?
     if [[ $tar_status -eq 0 ]]; then
         local size
         size=$(du -h "$BACKUP_ARCHIVE_PATH" | cut -f1)
         print_success "Backup archive created: $BACKUP_ARCHIVE_PATH ($size)"
     else
         print_error "Failed to create backup archive"
+        if [[ -n "$tar_output" ]]; then
+            echo "$tar_output"
+        fi
         BACKUP_ARCHIVE_PATH=""
         return 1
     fi
@@ -673,15 +723,23 @@ remove_existing_installation() {
 
 clone_repository() {
     print_status "Cloning repository (branch: $INSTALL_BRANCH)..."
+    local git_output
     if [[ "$VERBOSE_MODE" == "true" ]]; then
-        git clone -b "$INSTALL_BRANCH" "$REPO_URL" "$INSTALL_DIR"
+        if ! git clone -b "$INSTALL_BRANCH" "$REPO_URL" "$INSTALL_DIR"; then
+            print_error "Repository clone failed"
+            exit 1
+        fi
     else
-        git clone -q -b "$INSTALL_BRANCH" "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1
+        if ! git_output=$(git clone -q -b "$INSTALL_BRANCH" "$REPO_URL" "$INSTALL_DIR" 2>&1); then
+            print_error "Repository clone failed"
+            echo "$git_output"
+            exit 1
+        fi
     fi
     chmod 744 "$INSTALL_DIR/install.sh" 2>/dev/null || true
 
     if [[ ! -d "$INSTALL_DIR" ]]; then
-        print_error "Repository clone failed"
+        print_error "Repository clone failed - directory not created"
         exit 1
     fi
     if [[ ! -d "$INSTALL_DIR/.git" ]]; then
