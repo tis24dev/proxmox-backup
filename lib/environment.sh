@@ -408,12 +408,17 @@ setup_dirs() {
             debug "Dry run mode: Would create secondary backup directories"
         else
             # Safety check: validate paths are non-empty (should already be validated by validate_backup_paths)
+            local secondary_paths_valid=true
             if [ -z "${SECONDARY_BACKUP_PATH:-}" ]; then
-                error "SECONDARY_BACKUP_PATH is not configured or empty"
-                export ENABLE_SECONDARY_BACKUP="false"
-                info "Secondary backup is disabled"
-            elif [ -z "${SECONDARY_LOG_PATH:-}" ]; then
-                error "SECONDARY_LOG_PATH is not configured or empty"
+                warning "SECONDARY_BACKUP_PATH is not configured or empty"
+                secondary_paths_valid=false
+            fi
+            if [ -z "${SECONDARY_LOG_PATH:-}" ]; then
+                warning "SECONDARY_LOG_PATH is not configured or empty"
+                secondary_paths_valid=false
+            fi
+
+            if [ "$secondary_paths_valid" = "false" ]; then
                 export ENABLE_SECONDARY_BACKUP="false"
                 info "Secondary backup is disabled"
             else
@@ -502,12 +507,17 @@ validate_backup_paths() {
 
     # SECONDARY PATHS - Auto-disable if enabled but not configured
     if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
+        local secondary_config_valid=true
         if [ -z "${SECONDARY_BACKUP_PATH:-}" ]; then
             warning "No secondary backup path specified"
-            export ENABLE_SECONDARY_BACKUP="false"
-            info "Secondary backup is disabled"
-        elif [ -z "${SECONDARY_LOG_PATH:-}" ]; then
+            secondary_config_valid=false
+        fi
+        if [ -z "${SECONDARY_LOG_PATH:-}" ]; then
             warning "No secondary log path specified"
+            secondary_config_valid=false
+        fi
+
+        if [ "$secondary_config_valid" = "false" ]; then
             export ENABLE_SECONDARY_BACKUP="false"
             info "Secondary backup is disabled"
         else
@@ -517,16 +527,21 @@ validate_backup_paths() {
 
     # CLOUD PATHS - Auto-disable if enabled but not configured
     if [ "${ENABLE_CLOUD_BACKUP:-false}" = "true" ]; then
+        local cloud_config_valid=true
         if [ -z "${CLOUD_BACKUP_PATH:-}" ]; then
             warning "No cloud backup path specified"
-            export ENABLE_CLOUD_BACKUP="false"
-            info "Cloud backup is disabled"
-        elif [ -z "${CLOUD_LOG_PATH:-}" ]; then
+            cloud_config_valid=false
+        fi
+        if [ -z "${CLOUD_LOG_PATH:-}" ]; then
             warning "No cloud log path specified"
-            export ENABLE_CLOUD_BACKUP="false"
-            info "Cloud backup is disabled"
-        elif [ -z "${RCLONE_REMOTE:-}" ]; then
+            cloud_config_valid=false
+        fi
+        if [ -z "${RCLONE_REMOTE:-}" ]; then
             warning "No rclone remote specified"
+            cloud_config_valid=false
+        fi
+
+        if [ "$cloud_config_valid" = "false" ]; then
             export ENABLE_CLOUD_BACKUP="false"
             info "Cloud backup is disabled"
         else
