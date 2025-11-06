@@ -1407,7 +1407,7 @@ run_fix_permissions() {
         if [[ "$VERBOSE_MODE" == "true" ]]; then
             ./script/fix-permissions.sh
         else
-            ./script/fix-permissions.sh >/dev/null 2>&1
+            ./script/fix-permissions.sh >/dev/null
         fi
         print_success "Permissions fixed"
     else
@@ -1427,7 +1427,7 @@ run_security_check() {
                 print_warning "Security issues detected; continuing installation"
             fi
         else
-            if ./script/security-check.sh >/dev/null 2>&1; then
+            if ./script/security-check.sh >/dev/null; then
                 print_success "Security check passed"
             else
                 print_warning "Security issues detected; continuing installation"
@@ -1476,7 +1476,7 @@ run_first_backup() {
                 print_warning "Dry-run encountered issues (expected for fresh setup)"
             fi
         else
-            if ./script/proxmox-backup.sh --dry-run >/dev/null 2>&1; then
+            if ./script/proxmox-backup.sh --dry-run >/dev/null; then
                 print_success "Dry-run backup completed"
             else
                 print_warning "Dry-run encountered issues (expected for fresh setup)"
