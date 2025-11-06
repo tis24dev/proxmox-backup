@@ -218,7 +218,7 @@ install_dependencies() {
     fi
 
     # Check and upgrade all packages to latest available versions
-    local PACKAGES="curl wget git jq tar gzip xz-utils zstd pigz"
+    local PACKAGES="curl wget git jq tar gzip xz-utils zstd pigz iptables net-tools iproute2"
     local MISSING_PACKAGES=""
     local UPGRADABLE_PACKAGES=""
 
