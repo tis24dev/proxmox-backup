@@ -487,6 +487,13 @@ main() {
     check_dependencies
     setup_dirs
 
+    # Validate backup paths configuration - auto-disable misconfigured backups
+    if ! validate_backup_paths; then
+        error "Backup path validation failed - cannot continue"
+        set_exit_code "error"
+        exit $EXIT_ERROR
+    fi
+
     # Initialize metrics module after directories are created
     # This prevents false positive warnings about missing directories
     initialize_metrics_module

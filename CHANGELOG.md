@@ -239,29 +239,33 @@ All notable changes to this project are documented in this file.
 
 ## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics
 ### lib/storage.sh
-**Fix**
-- Removed `2>/dev/null` stderr suppression from secondary directory creation at lines 82-101 and 1073-1091
-- Added detailed error capture using `mkdir_error=$(mkdir -p ... 2>&1)` to preserve actual system error messages
-- Enhanced error logging with comprehensive diagnostics:
-  - Real mkdir error message (e.g., "Permission denied", "No space left on device")
-  - Parent directory existence and write permission checks
-  - Directory ownership and permissions (format: `755 user:group`)
-  - Current executing user identification
-  - Available disk space on target filesystem
-  - Mount options for secondary backup location
-- Improved troubleshooting of secondary backup failures by exposing previously hidden system errors
-
 ### lib/environment.sh
 **Add**
-- Added preemptive write permission validation in `setup_dirs()` before attempting secondary directory creation (lines 404-439)
-- Added early error detection with detailed permission diagnostics:
-  - Parent directory permissions and ownership display
-  - Current user identification
-  - Clear warning when secondary backup will be disabled due to insufficient permissions
-- Added same comprehensive error diagnostics as storage.sh for mkdir failures
+- Added `validate_backup_paths()` function (lines 465-518) to centralize path validation for all backup types
+- Automatic path validation on startup: checks PRIMARY, SECONDARY, and CLOUD backup paths
+- Auto-disable logic: if secondary/cloud backup is enabled but paths are not configured (empty), automatically sets `ENABLE_SECONDARY_BACKUP=false` or `ENABLE_CLOUD_BACKUP=false`
+- Clear warning messages: `WARNING No secondary backup path specified` / `WARNING No secondary log path specified` / `WARNING No cloud backup path specified` / `WARNING No rclone remote specified`
+- Followed by `INFO Secondary/Cloud backup is disabled` to match disabled state behavior
 **Fix**
-- Removed `2>/dev/null` stderr suppression to expose actual mkdir errors during initial setup
-- Enhanced error messages transform generic warnings into actionable diagnostics
+- Removed `2>/dev/null` stderr suppression from secondary directory creation (lines 404-450)
+- Enhanced `setup_dirs()` to auto-disable secondary backup when parent directory missing or unwritable
+- Added comprehensive mkdir error diagnostics: parent permissions, ownership, available space, mount options
+- Fixed issue where empty `SECONDARY_LOG_PATH` or `CLOUD_LOG_PATH` caused cryptic `mkdir: cannot create directory '': No such file or directory` errors
+
+### script/proxmox-backup.sh
+**Add**
+- Added `validate_backup_paths()` call after `setup_dirs()` (lines 490-495) to validate configuration before backup operations
+- Early detection of misconfigured paths prevents failures during backup execution
+
+### lib/storage.sh
+**Fix**
+- Removed `2>/dev/null` stderr suppression at lines 82-101 and 1073-1091
+- Added detailed mkdir error capture and logging with real system error messages
+- Enhanced diagnostics show: parent directory status, write permissions, ownership, available space, mount options
+**Context**
+- Resolves issue where enabled backup destinations with missing path configuration showed only generic warnings
+- Transforms cryptic `mkdir: cannot create directory ''` errors into actionable `No secondary log path specified` messages
+- Ensures consistent behavior: misconfigured backups are auto-disabled with clear explanation, just like when explicitly set to false
 
 ## [0.7.2] - 2025-11-05 - Detailed Warning Output & Rclone timeout increased and editable
 ### lib/backup_collect.sh

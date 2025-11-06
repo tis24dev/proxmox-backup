@@ -401,22 +401,32 @@ setup_dirs() {
         exit 1
     }
     
-    # Create secondary backup directories if secondary backup is enabled and parent directory exists
+    # Create secondary backup directories if secondary backup is enabled
+    # Note: Path validation is already done by validate_backup_paths()
     if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
         if [ "${DRY_RUN_MODE:-false}" = "true" ]; then
             debug "Dry run mode: Would create secondary backup directories"
-        elif [ -n "$SECONDARY_BACKUP_PATH" ] && [ -d "$(dirname "$SECONDARY_BACKUP_PATH")" ]; then
-            # Validate write permissions before attempting creation
+        else
+            # At this point paths are guaranteed to be non-empty by validate_backup_paths()
             local parent_dir="$(dirname "$SECONDARY_BACKUP_PATH")"
-            if [ ! -w "$parent_dir" ]; then
+
+            # Check if parent directory exists
+            if [ ! -d "$parent_dir" ]; then
+                warning "Secondary backup parent directory doesn't exist: $parent_dir"
+                export ENABLE_SECONDARY_BACKUP="false"
+                info "Secondary backup is disabled"
+            # Check write permissions
+            elif [ ! -w "$parent_dir" ]; then
                 error "No write permission to secondary backup parent directory: $parent_dir"
                 error "Current permissions: $(stat -c '%a %U:%G' "$parent_dir" 2>/dev/null || echo 'unknown')"
                 error "Current user: $(whoami)"
-                warning "Secondary backup will be disabled for this session"
+                export ENABLE_SECONDARY_BACKUP="false"
+                info "Secondary backup is disabled"
             else
+                # Attempt directory creation with detailed error logging
                 local mkdir_error
                 if ! mkdir_error=$(mkdir -p "$SECONDARY_BACKUP_PATH" "$SECONDARY_LOG_PATH" 2>&1); then
-                    warning "Failed to create secondary directories. Secondary backup may fail."
+                    warning "Failed to create secondary directories"
                     error "mkdir error: $mkdir_error"
 
                     # Detailed diagnostics
@@ -427,12 +437,13 @@ setup_dirs() {
                     debug "Current user: $(whoami)"
                     debug "Available space: $(df -h "$parent_dir" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
                     debug "Mount options: $(mount | grep "$(df "$parent_dir" 2>/dev/null | tail -1 | awk '{print $1}')" || echo 'unknown')"
+
+                    export ENABLE_SECONDARY_BACKUP="false"
+                    info "Secondary backup is disabled"
+                else
+                    debug "Secondary backup directories created successfully"
                 fi
             fi
-        elif [ -n "$SECONDARY_BACKUP_PATH" ]; then
-            warning "Secondary backup parent directory doesn't exist. Secondary backup may fail."
-        else
-            debug "Secondary backup path not configured, skipping secondary directory creation"
         fi
     else
         debug "Secondary backup is disabled, skipping secondary directory creation"
@@ -458,8 +469,63 @@ setup_dirs() {
     chmod 600 "$marker_file" 2>/dev/null || true
 
     debug "Created temporary directory with security marker: $TEMP_DIR"
-    
+
     success "Directory structure setup completed"
+}
+
+# Validate backup paths configuration and auto-disable if misconfigured
+validate_backup_paths() {
+    step "Validating backup paths configuration"
+
+    # PRIMARY PATHS - Always required, hard fail if missing
+    if [ -z "${LOCAL_BACKUP_PATH:-}" ]; then
+        error "PRIMARY backup path not configured (LOCAL_BACKUP_PATH is empty)"
+        error "Please configure LOCAL_BACKUP_PATH in backup.env"
+        return $EXIT_ERROR
+    fi
+
+    if [ -z "${LOCAL_LOG_PATH:-}" ]; then
+        error "PRIMARY log path not configured (LOCAL_LOG_PATH is empty)"
+        error "Please configure LOCAL_LOG_PATH in backup.env"
+        return $EXIT_ERROR
+    fi
+
+    # SECONDARY PATHS - Auto-disable if enabled but not configured
+    if [ "${ENABLE_SECONDARY_BACKUP:-false}" = "true" ]; then
+        if [ -z "${SECONDARY_BACKUP_PATH:-}" ]; then
+            warning "No secondary backup path specified"
+            export ENABLE_SECONDARY_BACKUP="false"
+            info "Secondary backup is disabled"
+        elif [ -z "${SECONDARY_LOG_PATH:-}" ]; then
+            warning "No secondary log path specified"
+            export ENABLE_SECONDARY_BACKUP="false"
+            info "Secondary backup is disabled"
+        else
+            debug "Secondary backup paths validated: $SECONDARY_BACKUP_PATH"
+        fi
+    fi
+
+    # CLOUD PATHS - Auto-disable if enabled but not configured
+    if [ "${ENABLE_CLOUD_BACKUP:-false}" = "true" ]; then
+        if [ -z "${CLOUD_BACKUP_PATH:-}" ]; then
+            warning "No cloud backup path specified"
+            export ENABLE_CLOUD_BACKUP="false"
+            info "Cloud backup is disabled"
+        elif [ -z "${CLOUD_LOG_PATH:-}" ]; then
+            warning "No cloud log path specified"
+            export ENABLE_CLOUD_BACKUP="false"
+            info "Cloud backup is disabled"
+        elif [ -z "${RCLONE_REMOTE:-}" ]; then
+            warning "No rclone remote specified"
+            export ENABLE_CLOUD_BACKUP="false"
+            info "Cloud backup is disabled"
+        else
+            debug "Cloud backup paths validated: ${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}"
+        fi
+    fi
+
+    success "Backup paths validation completed"
+    return $EXIT_SUCCESS
 }
 
 # Set default values for various configuration options
