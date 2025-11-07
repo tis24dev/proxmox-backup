@@ -237,7 +237,7 @@ All notable changes to this project are documented in this file.
 
 ---------------------------------------------------------------------------------------
 
-## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics
+## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics & Datastore Directory Scan Diagnostics
 ### lib/storage.sh
 ### lib/environment.sh
 **Add**
@@ -266,6 +266,13 @@ All notable changes to this project are documented in this file.
 - Resolves issue where enabled backup destinations with missing path configuration showed only generic warnings
 - Transforms cryptic `mkdir: cannot create directory ''` errors into actionable `No secondary log path specified` messages
 - Ensures consistent behavior: misconfigured backups are auto-disabled with clear explanation, just like when explicitly set to false
+
+### lib/backup_collect_pbspve.sh
+**Fix**
+- Directory structure collection now saves `find` stderr/exit status in temp files and passa il motivo a `handle_collection_error`, così i warning mostrano subito se il problema è SIGPIPE (>20 directory), permessi o mount assente.
+- Il calcolo della `disk usage` cattura l’errore di `du`, stampa `# CAUSE: …` nei metadata e, se possibile, allega l’output `df -h` per dare visibilità a mount offline o permessi mancanti.
+**Behavior**
+- I metadata continuano a elencare le prime 20 directory, ma quando la scansione fallisce i log sono autospeigativi e il blocco `Disk Usage` indica l’alternativa `df`.
 
 ## [0.7.2] - 2025-11-05 - Detailed Warning Output & Rclone timeout increased and editable
 ### lib/backup_collect.sh

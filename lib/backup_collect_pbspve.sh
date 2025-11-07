@@ -773,27 +773,85 @@ collect_pve_configs() {
 
                         # Directory structure with error handling
                         echo "## Directory Structure (max 2 levels):"
-                        local dir_list
-                        if dir_list=$(find "$ds_path" -maxdepth 2 -type d 2>/dev/null | head -20); then
-                            echo "$dir_list"
+                        local dir_scan_tmp=""
+                        local dir_scan_status=0
+                        local dir_scan_reason=""
+                        local dir_entries=()
+                        local sanitized_ds_name="${ds_name//[^A-Za-z0-9._-]/_}"
+                        if dir_scan_tmp=$(mktemp "/tmp/proxmox-backup-dirscan-${sanitized_ds_name}-${TIMESTAMP}-XXXX" 2>/dev/null); then
+                            if mapfile -t dir_entries < <(find "$ds_path" -maxdepth 2 -type d 2>"$dir_scan_tmp"); then
+                                if [ ${#dir_entries[@]} -gt 0 ]; then
+                                    printf '%s\n' "${dir_entries[@]:0:20}"
+                                fi
+                            else
+                                dir_scan_status=$?
+                                if [ -s "$dir_scan_tmp" ]; then
+                                    dir_scan_reason=$(head -1 "$dir_scan_tmp" | sed 's/^[[:space:]]*//')
+                                    dir_scan_reason="${dir_scan_reason#find: }"
+                                fi
+                                if [ -z "$dir_scan_reason" ]; then
+                                    dir_scan_reason="find exited with status $dir_scan_status"
+                                fi
+                                handle_collection_error "directory structure scan" "$ds_path" "warning" "$dir_scan_reason"
+                                echo "# Error: Unable to scan directory structure"
+                                echo "# WARNING: Directory structure data is incomplete"
+                                metadata_errors=$((metadata_errors + 1))
+                            fi
+                            rm -f "$dir_scan_tmp"
                         else
-                            handle_collection_error "directory structure scan" "$ds_path" "warning"
-                            echo "# Error: Unable to scan directory structure"
-                            echo "# WARNING: Directory structure data is incomplete"
-                            metadata_errors=$((metadata_errors + 1))
+                            warning "Unable to create tmp file for directory structure scan errors (datastore: $ds_name)"
+                            local dir_list
+                            if dir_list=$(find "$ds_path" -maxdepth 2 -type d 2>/dev/null | head -20); then
+                                echo "$dir_list"
+                            else
+                                handle_collection_error "directory structure scan" "$ds_path" "warning" "tmp file setup failed"
+                                echo "# Error: Unable to scan directory structure"
+                                echo "# WARNING: Directory structure data is incomplete"
+                                metadata_errors=$((metadata_errors + 1))
+                            fi
                         fi
                         echo ""
 
                         # Disk usage with error handling
                         echo "## Disk Usage:"
                         local disk_usage
-                        if disk_usage=$(du -sh "$ds_path" 2>/dev/null); then
-                            echo "$disk_usage"
+                        local disk_usage_tmp=""
+                        local disk_usage_status=0
+                        local disk_usage_reason=""
+                        if disk_usage_tmp=$(mktemp "/tmp/proxmox-backup-diskusage-${sanitized_ds_name}-${TIMESTAMP}-XXXX" 2>/dev/null); then
+                            if disk_usage=$(du -sh "$ds_path" 2>"$disk_usage_tmp"); then
+                                echo "$disk_usage"
+                            else
+                                disk_usage_status=$?
+                                if [ -s "$disk_usage_tmp" ]; then
+                                    disk_usage_reason=$(head -1 "$disk_usage_tmp" | sed 's/^[[:space:]]*//')
+                                    disk_usage_reason="${disk_usage_reason#du: }"
+                                fi
+                                if [ -z "$disk_usage_reason" ]; then
+                                    disk_usage_reason="du exited with status $disk_usage_status"
+                                fi
+                                handle_collection_error "disk usage calculation" "$ds_path" "warning" "$disk_usage_reason"
+                                echo "# Error: Unable to calculate disk usage"
+                                echo "# WARNING: Disk usage data unavailable"
+                                echo "# CAUSE: $disk_usage_reason"
+                                local fallback_df_output=""
+                                if fallback_df_output=$(df -h "$ds_path" 2>/dev/null); then
+                                    echo "# NOTE: du failed (${disk_usage_reason}); df output shown for reference"
+                                    echo "$fallback_df_output"
+                                fi
+                                metadata_errors=$((metadata_errors + 1))
+                            fi
+                            rm -f "$disk_usage_tmp"
                         else
-                            handle_collection_error "disk usage calculation" "$ds_path" "warning"
-                            echo "# Error: Unable to calculate disk usage"
-                            echo "# WARNING: Disk usage data unavailable"
-                            metadata_errors=$((metadata_errors + 1))
+                            warning "Unable to create tmp file for disk usage calculation errors (datastore: $ds_name)"
+                            if disk_usage=$(du -sh "$ds_path" 2>/dev/null); then
+                                echo "$disk_usage"
+                            else
+                                handle_collection_error "disk usage calculation" "$ds_path" "warning" "tmp file setup failed"
+                                echo "# Error: Unable to calculate disk usage"
+                                echo "# WARNING: Disk usage data unavailable"
+                                metadata_errors=$((metadata_errors + 1))
+                            fi
                         fi
                         echo ""
 
