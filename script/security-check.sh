@@ -305,8 +305,7 @@ check_dependencies() {
     done
     
     if [ $missing -gt 0 ]; then
-        log_warning "$missing dependencies missing. Install with"
-        echo "apt-get update && apt-get install -y iptables net-tools iproute2"
+        log_warning "$missing dependencies missing. Install with: apt-get update && apt-get install -y iptables net-tools iproute2"
         
         # Check if automatic installation is enabled
         if [ "${AUTO_INSTALL_DEPENDENCIES:-false}" == "true" ]; then
@@ -664,7 +663,9 @@ check_suspicious_processes() {
         if [ -n "$matches" ]; then
             # Extract PIDs from matches
             local pids=$(echo "$matches" | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
-            log_warning "Potentially suspicious process found: \"$proc\" (PIDs: $pids)"
+            local sanitized_proc="${proc//:/ - }"
+            local sanitized_pids="${pids//:/ - }"
+            log_warning "Potentially suspicious process found: \"$sanitized_proc\" (PIDs: $sanitized_pids)"
             # Only show detailed process information in debug mode
             if [[ "${DEBUG_LEVEL:-standard}" == "advanced" ]] || [[ "${DEBUG_LEVEL:-standard}" == "extreme" ]]; then
                 echo "$matches"
