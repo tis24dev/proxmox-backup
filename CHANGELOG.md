@@ -2,10 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.3.2] - 2025-11-08 - Filesystem check
-### Standalone Script: install.sh
+## [1.1.0] - 2025-11-08 - Restore: unverifiable backups support
+### Standalone Script: proxmox-restore.sh
 **Add**
-- Filesystem check for change ownership
+- `show_backup_menu()` now lists verified backups (with `.metadata`/`.sha256`) separately from unverifiable ones, displaying size and catalog info for each.
+- Introduced `confirm_unverified_backup_selection()`: users must explicitly type “UNVERIFIED” before restoring a backup that lacks verification files.
+- Restore confirmation output now shows the integrity status using the new `SELECTED_BACKUP_IS_VERIFIED` flag.
+**Behavior**
+- Backups missing metadata or checksum files are still restorable, but they are clearly marked as “Unverified” and require explicit user confirmation, reducing the risk of restoring tampered or partially transferred archives.
+Adjust version/date if your release numbering differs, but this phrasing captures the change accurately without
 
 ## [2.0.5] - 2025-11-06 - Error Handling & Interactive Prompt Improvements
 ### Standalone Script: install.sh

@@ -2,9 +2,9 @@
 ##
 # Proxmox Restore Script for PVE and PBS
 # File: proxmox-restore.sh
-# Version: 1.0.1
-# Last Modified: 2025-11-03
-# Changes: New selective restore
+# Version: 1.1.0
+# Last Modified: 2025-11-08
+# Changes: Add restore unsecure file function
 #
 # This script performs restoration of Proxmox configurations from backup files
 # created by the Proxmox Backup System
@@ -62,6 +62,7 @@ set -o nounset
 
 SELECTED_LOCATION=""
 SELECTED_BACKUP=""
+SELECTED_BACKUP_IS_VERIFIED="false"
 HOSTNAME=$(hostname -f)
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 RESTORE_MODE="full"
@@ -220,59 +221,62 @@ validate_backup_file() {
     esac
 }
 
-# Function to list backup files in a location
-list_backup_files() {
+# Function to collect raw backup candidates without integrity checks
+collect_backup_candidates() {
     local storage_type="$1"
     local storage_path="$2"
 
     case "$storage_type" in
         "local"|"secondary")
             if [ -d "$storage_path" ]; then
-                # Find backup files excluding checksum and metadata files
-                local all_files=()
-                while IFS= read -r file; do
-                    [ -n "$file" ] && all_files+=("$file")
-                done < <(find "$storage_path" -name "*-backup-*.tar*" -type f 2>/dev/null | \
-                        grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
-                        sort -r)
-
-                # Filter only valid backup files
-                local valid_files=()
-                for file in "${all_files[@]}"; do
-                    if validate_backup_file "$file" "$storage_type"; then
-                        valid_files+=("$file")
-                    fi
-                done
-
-                # Output valid files
-                printf '%s\n' "${valid_files[@]}"
+                find "$storage_path" -name "*-backup-*.tar*" -type f 2>/dev/null | \
+                    grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
+                    sort -r
             fi
             ;;
         "cloud")
             if command -v rclone >/dev/null 2>&1; then
-                # Get all backup files
-                local all_files=()
-                while IFS= read -r file; do
-                    [ -n "$file" ] && all_files+=("$file")
-                done < <(rclone ls "$storage_path" 2>/dev/null | \
-                        grep -E ".*-backup-.*\.tar.*" | \
-                        awk '{print $2}' | \
-                        grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
-                        sort -r)
-
-                # Filter only valid backup files
-                local valid_files=()
-                for file in "${all_files[@]}"; do
-                    if validate_backup_file "$file" "$storage_type"; then
-                        valid_files+=("$file")
-                    fi
-                done
-
-                # Output valid files
-                printf '%s\n' "${valid_files[@]}"
+                rclone ls "$storage_path" 2>/dev/null | \
+                    grep -E ".*-backup-.*\.tar.*" | \
+                    awk '{print $2}' | \
+                    grep -v -E '\.(sha256|metadata|sum|md5|sha1|sha512)$' | \
+                    sort -r
             fi
             ;;
     esac
+}
+
+# Function to list backup files in a location
+list_backup_files() {
+    local storage_type="$1"
+    local storage_path="$2"
+    local output_mode="${3:-verified_only}"
+
+    local all_files=()
+    while IFS= read -r file; do
+        [ -n "$file" ] && all_files+=("$file")
+    done < <(collect_backup_candidates "$storage_type" "$storage_path")
+
+    if [ "$output_mode" = "include_unverified" ]; then
+        local delimiter=$'\037'
+        for file in "${all_files[@]}"; do
+            if validate_backup_file "$file" "$storage_type"; then
+                printf '%s%s%s\n' "verified" "$delimiter" "$file"
+            else
+                printf '%s%s%s\n' "unverified" "$delimiter" "$file"
+            fi
+        done
+        return 0
+    fi
+
+    local valid_files=()
+    for file in "${all_files[@]}"; do
+        if validate_backup_file "$file" "$storage_type"; then
+            valid_files+=("$file")
+        fi
+    done
+
+    printf '%s\n' "${valid_files[@]}"
 }
 
 # Function to read backup metadata file content without full extraction
@@ -371,6 +375,27 @@ get_backup_type_label() {
     fi
 }
 
+get_backup_size_display() {
+    local backup_file="$1"
+    local storage_type="$2"
+
+    case "$storage_type" in
+        "local"|"secondary")
+            if [ -f "$backup_file" ]; then
+                du -h "$backup_file" 2>/dev/null | cut -f1
+            else
+                echo "N/A"
+            fi
+            ;;
+        "cloud")
+            echo "N/A"
+            ;;
+        *)
+            echo "N/A"
+            ;;
+    esac
+}
+
 # Function to display storage selection menu
 show_storage_menu() {
     echo ""
@@ -432,7 +457,8 @@ show_storage_menu() {
 # Function to display backup files menu
 show_backup_menu() {
     local storage_type="$SELECTED_LOCATION"
-    local storage_path=$(get_storage_path "$storage_type")
+    local storage_path
+    storage_path=$(get_storage_path "$storage_type")
 
     echo ""
     echo -e "${CYAN}=== SELECT BACKUP FILE ===${NC}"
@@ -440,63 +466,136 @@ show_backup_menu() {
     info "Searching for backups in: $storage_path"
     echo ""
 
-    # Get list of backup files
-    local backup_files=()
-    local backup_labels=()
+    local delimiter=$'\037'
+    local verified_files=()
+    local unverified_files=()
     while IFS= read -r line; do
-        [ -n "$line" ] && backup_files+=("$line")
-    done < <(list_backup_files "$storage_type" "$storage_path")
+        [ -z "$line" ] && continue
+        [[ "$line" != *"$delimiter"* ]] && continue
+        local status="${line%%"$delimiter"*}"
+        local file="${line#*"$delimiter"}"
+        [ -z "$file" ] && continue
+        if [ "$status" = "verified" ]; then
+            verified_files+=("$file")
+        else
+            unverified_files+=("$file")
+        fi
+    done < <(list_backup_files "$storage_type" "$storage_path" "include_unverified")
 
-    if [ ${#backup_files[@]} -eq 0 ]; then
+    local total_files=$(( ${#verified_files[@]} + ${#unverified_files[@]} ))
+    if [ "$total_files" -eq 0 ]; then
         error "No backup files found in $storage_path"
         exit $EXIT_ERROR
     fi
 
-    # Display backup files
+    local -a selection_files=()
+    local -a selection_status=()
+    local -a selection_labels=()
     local count=0
-    for idx in "${!backup_files[@]}"; do
-        local backup_file="${backup_files[$idx]}"
-        count=$((count + 1))
-        local file_name=$(basename "$backup_file")
-        local file_size=""
-        local backup_label=$(get_backup_type_label "$backup_file" "$storage_type")
-        backup_labels[$idx]="$backup_label"
 
-        # Get file size
-        case "$storage_type" in
-            "local"|"secondary")
-                if [ -f "$backup_file" ]; then
-                    file_size=$(du -h "$backup_file" 2>/dev/null | cut -f1)
-                fi
-                ;;
-            "cloud")
-                # For cloud, we'll show the name without size for simplicity
-                file_size="N/A"
-                ;;
-        esac
+    if [ ${#verified_files[@]} -gt 0 ]; then
+        echo -e "${GREEN}--- VERIFIED BACKUPS (metadata + checksum OK) ---${NC}"
+        for backup_file in "${verified_files[@]}"; do
+            count=$((count + 1))
+            selection_files+=("$backup_file")
+            selection_status+=("verified")
+            local backup_label
+            backup_label=$(get_backup_type_label "$backup_file" "$storage_type")
+            selection_labels+=("$backup_label")
+            local file_name
+            file_name=$(basename "$backup_file")
+            local file_size
+            file_size=$(get_backup_size_display "$backup_file" "$storage_type")
+            echo -e "${GREEN}$count)${NC} $file_name ${BLUE}($file_size)${NC} ${PURPLE}[${backup_label}]${NC}"
+        done
+        echo ""
+    else
+        warning "No verified backups detected in this storage location"
+        echo ""
+    fi
 
-        echo -e "${GREEN}$count)${NC} $file_name ${BLUE}($file_size)${NC} ${PURPLE}[${backup_label}]${NC}"
-    done
+    if [ ${#unverified_files[@]} -gt 0 ]; then
+        echo -e "${RED}--- UNVERIFIED BACKUPS (missing metadata/checksum) ---${NC}"
+        for backup_file in "${unverified_files[@]}"; do
+            count=$((count + 1))
+            selection_files+=("$backup_file")
+            selection_status+=("unverified")
+            local backup_label
+            backup_label=$(get_backup_type_label "$backup_file" "$storage_type")
+            selection_labels+=("$backup_label")
+            local file_name
+            file_name=$(basename "$backup_file")
+            local file_size
+            file_size=$(get_backup_size_display "$backup_file" "$storage_type")
+            echo -e "${GREEN}$count)${NC} $file_name ${BLUE}($file_size)${NC} ${PURPLE}[${backup_label}]${NC} ${RED}[UNVERIFIED]${NC}"
+        done
+        echo ""
+        warning "These backups lack metadata or checksum verification. Use only if you fully trust the source."
+        echo ""
+    fi
 
-    echo ""
     echo -e "${YELLOW}0)${NC} Back to previous menu"
     echo ""
 
+    local menu_count=${#selection_files[@]}
+
     while true; do
-        read -p "Select backup file to restore [0-$count]: " choice
+        read -p "Select backup file to restore [0-$menu_count]: " choice
 
         if [ "$choice" = "0" ]; then
             return 1  # Go back to storage menu
-        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $count ]; then
-            SELECTED_BACKUP="${backup_files[$((choice-1))]}"
-            SELECTED_BACKUP_LABEL="${backup_labels[$((choice-1))]}"
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $menu_count ]; then
+            local idx=$((choice-1))
+            local chosen_status="${selection_status[$idx]}"
+            local chosen_file="${selection_files[$idx]}"
+            local chosen_label="${selection_labels[$idx]}"
+
+            if [ "$chosen_status" = "unverified" ]; then
+                if ! confirm_unverified_backup_selection "$chosen_file"; then
+                    continue
+                fi
+                SELECTED_BACKUP_IS_VERIFIED="false"
+            else
+                SELECTED_BACKUP_IS_VERIFIED="true"
+            fi
+
+            SELECTED_BACKUP="$chosen_file"
+            SELECTED_BACKUP_LABEL="$chosen_label"
             break
         else
-            warning "Invalid selection. Enter a number between 0 and $count"
+            warning "Invalid selection. Enter a number between 0 and $menu_count"
         fi
     done
 
     return 0
+}
+
+confirm_unverified_backup_selection() {
+    local backup_file="$1"
+    local file_name
+    file_name=$(basename "$backup_file")
+
+    echo ""
+    warning "The selected backup ($file_name) cannot be verified because metadata and/or checksum files are missing."
+    warning "Restoring from unverified backups may fail or import tampered data."
+    echo ""
+
+    while true; do
+        read -p "Type 'UNVERIFIED' to continue or press ENTER to cancel this selection: " response
+        case "$response" in
+            "UNVERIFIED")
+                info "Proceeding with unverified backup selection"
+                return 0
+                ;;
+            "")
+                info "Selection cancelled. Choose another backup."
+                return 1
+                ;;
+            *)
+                warning "Invalid input. Type 'UNVERIFIED' exactly or press ENTER to cancel."
+                ;;
+        esac
+    done
 }
 
 # Function to confirm restore operation
@@ -510,6 +609,11 @@ confirm_restore() {
     display_type=$(get_display_proxmox_type)
     if [ -n "$SELECTED_BACKUP_LABEL" ]; then
         echo -e "Backup type (catalog): ${GREEN}$SELECTED_BACKUP_LABEL${NC}"
+    fi
+    if [ "${SELECTED_BACKUP_IS_VERIFIED:-false}" = "true" ]; then
+        echo -e "Integrity status: ${GREEN}Verified${NC}"
+    else
+        echo -e "Integrity status: ${RED}Unverified${NC} ${YELLOW}(metadata/checksum missing)${NC}"
     fi
     echo -e "System detected: ${GREEN}$display_type${NC}"
     if [ "$BACKUP_DETECTED_SELECTIVE" = "true" ]; then
