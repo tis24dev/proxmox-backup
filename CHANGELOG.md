@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.2] - 2025-11-08 - Filesystem check
+### Standalone Script: install.sh
+**Add**
+- Filesystem check for change ownership
+
 ## [2.0.5] - 2025-11-06 - Error Handling & Interactive Prompt Improvements
 ### Standalone Script: install.sh
 **Fix**
@@ -236,6 +241,12 @@ All notable changes to this project are documented in this file.
 - Added full backup feature before complete removal of all files: allows creating a safety backup before the script fully deletes the files of the previous installation, in order to prevent accidental data loss.
 
 ---------------------------------------------------------------------------------------
+
+## [0.7.4] - 2025-11-07 - Fix warning log
+### script/security-check.sh
+**Fix**
+- `check_dependencies()` now incorporates the entire command `apt-get update && apt-get install -y iptables net-tools iproute2` directly into the ‘dependencies missing...’ warning, so emails/logs no longer truncate the installation instructions.
+- ‘Potentially suspicious process found’ messages sanitise patterns and PIDs by replacing ‘:’ with ‘-’, preventing notification systems from truncating lines and keeping the entire details of the suspicious process visible.
 
 ## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics & Datastore Directory Scan Diagnostics
 ### lib/storage.sh

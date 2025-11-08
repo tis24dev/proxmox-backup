@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Fix Permissions Script
 # File: fix-permissions.sh
-# Version: 0.3.1
-# Last Modified: 2025-10-28
-# Changes: Add new file check
+# Version: 0.3.2
+# Last Modified: 2025-11-08
+# Changes: Add filesystem check
 ##
 # Script per applicare i permessi corretti a tutti i file del sistema di backup
 # Questo script deve essere eseguito come root
@@ -96,6 +96,73 @@ load_config() {
         log_error "File di configurazione non trovato: $BASE_DIR/env/backup.env"
         exit 1
     fi
+}
+
+# Rileva se il filesystem supporta realmente i permessi Unix
+supports_unix_ownership() {
+    local path="$1"
+
+    if [ -z "$path" ]; then
+        return 1
+    fi
+
+    # Se il percorso non esiste ancora, assumiamo che supporterà i permessi quando creato
+    if [ ! -e "$path" ]; then
+        return 0
+    fi
+
+    local fstype
+    fstype=$(stat -f -c %T "$path" 2>/dev/null || true)
+    if [ -z "$fstype" ]; then
+        fstype=$(df -T "$path" 2>/dev/null | tail -n 1 | awk '{print $2}')
+    fi
+
+    case "$fstype" in
+        vfat|msdos|fat|exfat|ntfs)
+            log_info "Filesystem $fstype rilevato su $path: salto chown/chmod"
+            return 1
+            ;;
+        nfs|nfs4|cifs|smb|smbfs)
+            if test_ownership_capability "$path"; then
+                return 0
+            else
+                log_info "Filesystem $fstype non consente il cambio proprietario su $path: salto chown/chmod"
+                return 1
+            fi
+            ;;
+        ""|unknown)
+            log_warning "Impossibile determinare il filesystem per $path: provo comunque ad applicare i permessi"
+            return 0
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+# Testa se un percorso permette realmente chown (utile per share NFS/CIFS)
+test_ownership_capability() {
+    local path="$1"
+    local test_file="${path%/}/.fix-permissions-ownership-test.$$"
+
+    if [ ! -w "$path" ]; then
+        log_info "Impossibile scrivere in $path per testare il cambio proprietario"
+        return 1
+    fi
+
+    if ! touch "$test_file" 2>/dev/null; then
+        log_info "Impossibile creare file di test in $path"
+        return 1
+    fi
+
+    local result=0
+    if ! chown "${BACKUP_USER}:${BACKUP_GROUP}" "$test_file" 2>/dev/null; then
+        log_info "Test chown fallito in $path (probabile root_squash/all_squash)"
+        result=1
+    fi
+
+    rm -f "$test_file" 2>/dev/null || true
+    return $result
 }
 
 # Applica i permessi agli script eseguibili
@@ -230,10 +297,21 @@ fix_backup_directories() {
     )
     
     for dir in "${backup_dirs[@]}"; do
+        if [ -z "$dir" ]; then
+            continue
+        fi
         if [ -d "$dir" ]; then
-            log_info "Imposto permessi su $dir"
-            chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$dir"
-            chmod -R u=rwX,g=rX,o= "$dir"
+            if supports_unix_ownership "$dir"; then
+                log_info "Imposto permessi su $dir"
+                if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$dir"; then
+                    log_warning "Impossibile cambiare proprietario su $dir"
+                fi
+                if ! chmod -R u=rwX,g=rX,o= "$dir"; then
+                    log_warning "Impossibile aggiornare i permessi su $dir"
+                fi
+            else
+                log_info "Salto il cambio permessi su $dir"
+            fi
         else
             log_warning "Directory non trovata: $dir"
         fi
