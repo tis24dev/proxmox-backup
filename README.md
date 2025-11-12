@@ -28,12 +28,34 @@
 
 ---
 
-**Install or Update or Reinstall (Stable)**
+** Manual Install (Stable)**
+```bash
+# Clone the repository (main branch - stable)
+git clone https://github.com/tis24dev/proxmox-backup.git
+cd proxmox-backup
+
+# Configure the system
+cp env/backup.env.example env/backup.env
+nano env/backup.env
+
+# Set correct permissions
+chmod +x script/*.sh
+chmod 600 env/backup.env
+
+# Run first fix permission
+./script/fix-permissions.sh
+
+# Run first backup
+./script/proxmox-backup.sh
+```
+
+
+** Fast Install or Update or Reinstall (Stable)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**Development Version or Reinstall (Latest Features)**
+**Fast Development Version or Reinstall (Latest Features)**
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
 ```
