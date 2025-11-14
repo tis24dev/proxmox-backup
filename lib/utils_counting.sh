@@ -421,10 +421,10 @@ _TEST_CLOUD_CONNECTIVITY() {
     fi
     
     # Test basic connectivity with configurable timeout
-    if ! timeout "${cloud_timeout}" rclone about "${RCLONE_REMOTE}:" ${RCLONE_FLAGS:-} &>/dev/null; then
+    if ! timeout "${cloud_timeout}" rclone lsd "${RCLONE_REMOTE}:" ${RCLONE_FLAGS:-} --max-depth 1 &>/dev/null; then
         warning "Cloud backup is enabled but connectivity test failed for remote '${RCLONE_REMOTE}'"
         warning "Check rclone configuration and network connectivity"
-        warning "Test manually with: rclone about ${RCLONE_REMOTE}:"
+        warning "Test manually with: rclone lsd ${RCLONE_REMOTE}:"
         COUNT_CLOUD_CONNECTION_ERROR="true"
         COUNT_CLOUD_CONNECTIVITY_STATUS="error"
         return 1
