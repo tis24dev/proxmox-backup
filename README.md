@@ -39,8 +39,8 @@ wget https://github.com/tis24dev/proxmox-backup/archive/refs/tags/v0.7.3.tar.gz
 # Create the script directory
 mkdir proxmox-backup
 
-# Extract the script files into the newly created directory
-tar xzf v0.7.3.tar.gz -C proxmox-backup --strip-components=1
+# Extract the script files into the newly created directory, then delete the archive
+tar xzf v0.7.3.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.3.tar.gz
 
 # Enter the script directory
 cd proxmox-backup
@@ -53,6 +53,7 @@ nano env/backup.env
 
 # Run first backup
 ./script/proxmox-backup.sh
+
 ```
 
 
