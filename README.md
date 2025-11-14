@@ -30,20 +30,26 @@
 
 ** Manual Install (Stable)**
 ```bash
-# Clone the repository (main branch - stable)
-git clone https://github.com/tis24dev/proxmox-backup.git
+# Enter the /opt directory
+cd /opt
+
+# Download the repository (stable release)
+wget https://github.com/tis24dev/proxmox-backup/archive/refs/tags/v0.7.3.tar.gz
+
+# Create the script directory
+mkdir proxmox-backup
+
+# Extract the script files into the newly created directory
+tar xzf v0.7.3.tar.gz -C proxmox-backup --strip-components=1
+
+# Enter the script directory
 cd proxmox-backup
 
-# Configure the system
-cp env/backup.env.example env/backup.env
+# Start the installation (runs initial checks, creates symlinks, creates cron)
+./install.sh
+
+# Customize your settings
 nano env/backup.env
-
-# Set correct permissions
-chmod +x script/*.sh
-chmod 600 env/backup.env
-
-# Run first fix permission
-./script/fix-permissions.sh
 
 # Run first backup
 ./script/proxmox-backup.sh
