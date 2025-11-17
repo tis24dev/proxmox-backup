@@ -27,13 +27,13 @@ https://github.com/tis24dev/proxmox-backup/tree/old?tab=readme-ov-file
 cd /opt
 
 # Download the repository (stable release)
-wget https://github.com/tis24dev/proxmox-backup/archive/refs/tags/v0.7.3.tar.gz
+wget https://github.com/tis24dev/proxmox-backup/archive/refs/tags/v0.7.4-bash.tar.gz
 
 # Create the script directory
 mkdir proxmox-backup
 
 # Extract the script files into the newly created directory, then delete the archive
-tar xzf v0.7.3.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.3.tar.gz
+tar xzf v0.7.4-bash.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.4-bash.tar.gz
 
 # Enter the script directory
 cd proxmox-backup
