@@ -253,6 +253,10 @@ Adjust version/date if your release numbering differs, but this phrasing capture
 - `check_dependencies()` now incorporates the entire command `apt-get update && apt-get install -y iptables net-tools iproute2` directly into the ‘dependencies missing...’ warning, so emails/logs no longer truncate the installation instructions.
 - ‘Potentially suspicious process found’ messages sanitise patterns and PIDs by replacing ‘:’ with ‘-’, preventing notification systems from truncating lines and keeping the entire details of the suspicious process visible.
 
+### script/utils_counting.sh
+**Fix**
+- rclone from 'about' to 'lsd' for more compatibility and added more test e check
+
 ## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics & Datastore Directory Scan Diagnostics
 ### lib/storage.sh
 ### lib/environment.sh

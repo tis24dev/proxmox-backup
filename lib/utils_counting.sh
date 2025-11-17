@@ -2,9 +2,9 @@
 ##
 # Proxmox Backup System - Counting Utils Library
 # File: utils_counting.sh
-# Version: 0.7.2
-# Last Modified: 2025-11-05
-# Changes: add rclone timeout
+# Version: 0.7.4
+# Last Modified: 2025-11-17
+# Changes: rclone lsd
 ##
 
 # ======= AUTONOMOUS COUNTING SYSTEM - DOCUMENTATION =======
