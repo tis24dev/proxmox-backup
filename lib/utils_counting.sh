@@ -420,20 +420,30 @@ _TEST_CLOUD_CONNECTIVITY() {
         return 1
     fi
     
-    # Test basic connectivity with configurable timeout
-    if ! timeout "${cloud_timeout}" rclone about "${RCLONE_REMOTE}:" ${RCLONE_FLAGS:-} &>/dev/null; then
-        warning "Cloud backup is enabled but connectivity test failed for remote '${RCLONE_REMOTE}'"
+    # Test remote root connectivity using directory listing
+    if ! timeout "${cloud_timeout}" rclone lsd "${RCLONE_REMOTE}:" ${RCLONE_FLAGS:-} --max-depth 1 &>/dev/null; then
+        warning "Cloud backup is enabled but connectivity test failed for remote '${RCLONE_REMOTE}:'"
         warning "Check rclone configuration and network connectivity"
-        warning "Test manually with: rclone about ${RCLONE_REMOTE}:"
+        warning "Test manually with: rclone lsd ${RCLONE_REMOTE}: --max-depth 1"
         COUNT_CLOUD_CONNECTION_ERROR="true"
         COUNT_CLOUD_CONNECTIVITY_STATUS="error"
         return 1
     fi
     
-    # Test backup path accessibility (integrated from storage.sh)
-    if ! timeout "${cloud_timeout}" rclone mkdir "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}" ${RCLONE_FLAGS:-} 2>/dev/null; then
+    # Ensure backup path exists and is accessible
+    if ! timeout "${cloud_timeout}" rclone mkdir "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}" ${RCLONE_FLAGS:-} &>/dev/null; then
         warning "Cloud backup path not accessible: ${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}"
         warning "Check path permissions and rclone configuration"
+        COUNT_CLOUD_CONNECTION_ERROR="true"
+        COUNT_CLOUD_CONNECTIVITY_STATUS="error"
+        return 1
+    fi
+
+    # Verify backup path listing after creation for stronger validation
+    if ! timeout "${cloud_timeout}" rclone lsd "${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}" ${RCLONE_FLAGS:-} --max-depth 1 &>/dev/null; then
+        warning "Cloud backup is enabled but connectivity test failed for path '${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH}'"
+        warning "Check rclone configuration, path and network connectivity"
+        warning "Test manually with: rclone lsd ${RCLONE_REMOTE}:${CLOUD_BACKUP_PATH} --max-depth 1"
         COUNT_CLOUD_CONNECTION_ERROR="true"
         COUNT_CLOUD_CONNECTIVITY_STATUS="error"
         return 1
