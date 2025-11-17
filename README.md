@@ -62,11 +62,6 @@ nano env/backup.env
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
-**Fast Development Version or Reinstall (Latest Features)**
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" -- dev
-```
-
 ---
 
 ## 🎯 What does this script do?
