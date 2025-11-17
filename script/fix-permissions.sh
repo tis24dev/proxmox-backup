@@ -6,8 +6,8 @@
 # Last Modified: 2025-11-08
 # Changes: Add filesystem check
 ##
-# Script per applicare i permessi corretti a tutti i file del sistema di backup
-# Questo script deve essere eseguito come root
+# Script to apply correct permissions to all backup system files
+# This script must be run as root
 ##
 
 set -e
@@ -15,14 +15,14 @@ set -e
 # Script version (autonomo)
 FIX_PERMISSIONS_VERSION="0.2.0"
 
-# Directory di base
+# Base directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Mostra versione
+# Show version
 echo "Fix Permissions Script Version: $FIX_PERMISSIONS_VERSION"
 
-# Colori per output
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -39,7 +39,7 @@ if [[ "${DISABLE_COLORS}" == "1" || "${DISABLE_COLORS}" == "true" ]]; then
     USE_COLORS=0
 fi
 
-# Funzioni di logging
+# Logging functions
 log_step() {
     if [ "$USE_COLORS" -eq 1 ]; then
         echo -e "${CYAN}[STEP]${NC} $1"
@@ -80,25 +80,25 @@ log_error() {
     fi
 }
 
-# Verifica se lo script è eseguito come root
+# Check if the script is run as root
 check_root() {
     if [ "$(id -u)" != "0" ]; then
-        log_error "Questo script deve essere eseguito come root"
+        log_error "This script must be run as root"
         exit 1
     fi
 }
 
-# Carica il file di configurazione
+# Load the configuration file
 load_config() {
     if [ -f "$BASE_DIR/env/backup.env" ]; then
         source "$BASE_DIR/env/backup.env"
     else
-        log_error "File di configurazione non trovato: $BASE_DIR/env/backup.env"
+        log_error "Configuration file not found: $BASE_DIR/env/backup.env"
         exit 1
     fi
 }
 
-# Rileva se il filesystem supporta realmente i permessi Unix
+# Detect if the filesystem actually supports Unix permissions
 supports_unix_ownership() {
     local path="$1"
 
@@ -106,7 +106,7 @@ supports_unix_ownership() {
         return 1
     fi
 
-    # Se il percorso non esiste ancora, assumiamo che supporterà i permessi quando creato
+    # If the path does not exist yet, we assume it will support permissions when created
     if [ ! -e "$path" ]; then
         return 0
     fi
@@ -119,19 +119,19 @@ supports_unix_ownership() {
 
     case "$fstype" in
         vfat|msdos|fat|exfat|ntfs)
-            log_info "Filesystem $fstype rilevato su $path: salto chown/chmod"
+            log_info "Filesystem $fstype detected on $path: skipping chown/chmod"
             return 1
             ;;
         nfs|nfs4|cifs|smb|smbfs)
             if test_ownership_capability "$path"; then
                 return 0
             else
-                log_info "Filesystem $fstype non consente il cambio proprietario su $path: salto chown/chmod"
+                log_info "Filesystem $fstype does not allow ownership change on $path: skipping chown/chmod"
                 return 1
             fi
             ;;
         ""|unknown)
-            log_warning "Impossibile determinare il filesystem per $path: provo comunque ad applicare i permessi"
+            log_warning "Cannot determine filesystem for $path: trying to apply permissions anyway"
             return 0
             ;;
         *)
@@ -140,24 +140,24 @@ supports_unix_ownership() {
     esac
 }
 
-# Testa se un percorso permette realmente chown (utile per share NFS/CIFS)
+# Test if a path actually allows chown (useful for NFS/CIFS shares)
 test_ownership_capability() {
     local path="$1"
     local test_file="${path%/}/.fix-permissions-ownership-test.$$"
 
     if [ ! -w "$path" ]; then
-        log_info "Impossibile scrivere in $path per testare il cambio proprietario"
+        log_info "Cannot write to $path to test ownership change"
         return 1
     fi
 
     if ! touch "$test_file" 2>/dev/null; then
-        log_info "Impossibile creare file di test in $path"
+        log_info "Cannot create test file in $path"
         return 1
     fi
 
     local result=0
     if ! chown "${BACKUP_USER}:${BACKUP_GROUP}" "$test_file" 2>/dev/null; then
-        log_info "Test chown fallito in $path (probabile root_squash/all_squash)"
+        log_info "Test chown failed in $path (likely root_squash/all_squash)"
         result=1
     fi
 
@@ -165,9 +165,9 @@ test_ownership_capability() {
     return $result
 }
 
-# Applica i permessi agli script eseguibili
+# Apply permissions to executable scripts
 fix_script_permissions() {
-    log_step "Applico i permessi agli script eseguibili"
+    log_step "Applying permissions to executable scripts"
     
     local scripts=(
         "$BASE_DIR/script/proxmox-backup.sh"
@@ -182,9 +182,9 @@ fix_script_permissions() {
     for script in "${scripts[@]}"; do
         if [ -f "$script" ]; then
             if [[ "$script" == "$BASE_DIR/install.sh" || "$script" == "$BASE_DIR/new-install.sh" ]]; then
-                log_info "Imposto permessi 744 su $script"
+                log_info "Setting permissions 744 on $script"
             else
-                log_info "Imposto permessi 700 su $script"
+                log_info "Setting permissions 700 on $script"
             fi
             if [[ "$script" == "$BASE_DIR/install.sh" || "$script" == "$BASE_DIR/new-install.sh" ]]; then
                 chmod 744 "$script"
@@ -192,23 +192,23 @@ fix_script_permissions() {
                 chmod 700 "$script"
             fi
             chown root:root "$script"
-            
-            # Aggiorna anche il file hash se esiste
+
+            # Also update the hash file if it exists
             local hash_file="${script}.md5"
             if [ -f "$hash_file" ]; then
-                log_info "Imposto permessi 600 su $hash_file"
+                log_info "Setting permissions 600 on $hash_file"
                 chmod 600 "$hash_file"
                 chown root:root "$hash_file"
             fi
         else
-            log_warning "Script non trovato: $script"
+            log_warning "Script not found: $script"
         fi
     done
 }
 
-# Applica i permessi ai file di configurazione
+# Apply permissions to configuration files
 fix_config_permissions() {
-    log_step "Applico i permessi ai file di configurazione"
+    log_step "Applying permissions to configuration files"
     
     local config_files=(
         "$BASE_DIR/env/backup.env"
@@ -233,26 +233,26 @@ fix_config_permissions() {
     
     for config in "${config_files[@]}"; do
         if [ -f "$config" ]; then
-            log_info "Imposto permessi 400 su $config"
+            log_info "Setting permissions 400 on $config"
             chmod 400 "$config"
             chown root:root "$config"
-            
-            # Aggiorna anche il file hash se esiste
+
+            # Also update the hash file if it exists
             local hash_file="${config}.md5"
             if [ -f "$hash_file" ]; then
-                log_info "Imposto permessi 600 su $hash_file"
+                log_info "Setting permissions 600 on $hash_file"
                 chmod 600 "$hash_file"
                 chown root:root "$hash_file"
             fi
         else
-            log_warning "File di configurazione non trovato: $config"
+            log_warning "Configuration file not found: $config"
         fi
     done
 }
 
-# Applica i permessi alle directory di base
+# Apply permissions to base directories
 fix_base_directories() {
-    log_step "Applico i permessi alle directory di base"
+    log_step "Applying permissions to base directories"
     
     local base_dirs=(
         "$BASE_DIR/backup"
@@ -264,31 +264,31 @@ fix_base_directories() {
     
     for dir in "${base_dirs[@]}"; do
         if [ -d "$dir" ]; then
-            log_info "Imposto permessi 750 su $dir"
+            log_info "Setting permissions 750 on $dir"
             chmod 750 "$dir"
             chown root:root "$dir"
         else
-            log_warning "Directory non trovata: $dir"
+            log_warning "Directory not found: $dir"
         fi
     done
 }
 
-# Applica i permessi alle directory di backup e log
+# Apply permissions to backup and log directories
 fix_backup_directories() {
-    log_step "Applico i permessi alle directory di backup e log"
-    
-    # Verifica se l'utente e il gruppo di backup esistono
+    log_step "Applying permissions to backup and log directories"
+
+    # Check if backup user and group exist
     if ! id -u "${BACKUP_USER}" &>/dev/null; then
-        log_warning "Utente di backup ${BACKUP_USER} non trovato"
+        log_warning "Backup user ${BACKUP_USER} not found"
         return 1
     fi
-    
+
     if ! getent group "${BACKUP_GROUP}" &>/dev/null; then
-        log_warning "Gruppo di backup ${BACKUP_GROUP} non trovato"
+        log_warning "Backup group ${BACKUP_GROUP} not found"
         return 1
     fi
-    
-    # Directory da gestire
+
+    # Directories to manage
     local backup_dirs=(
         "$LOCAL_BACKUP_PATH"
         "$LOCAL_LOG_PATH"
@@ -302,42 +302,42 @@ fix_backup_directories() {
         fi
         if [ -d "$dir" ]; then
             if supports_unix_ownership "$dir"; then
-                log_info "Imposto permessi su $dir"
+                log_info "Setting permissions on $dir"
                 if ! chown -R "${BACKUP_USER}:${BACKUP_GROUP}" "$dir"; then
-                    log_warning "Impossibile cambiare proprietario su $dir"
+                    log_warning "Cannot change ownership on $dir"
                 fi
                 if ! chmod -R u=rwX,g=rX,o= "$dir"; then
-                    log_warning "Impossibile aggiornare i permessi su $dir"
+                    log_warning "Cannot update permissions on $dir"
                 fi
             else
-                log_info "Salto il cambio permessi su $dir"
+                log_info "Skipping permission change on $dir"
             fi
         else
-            log_warning "Directory non trovata: $dir"
+            log_warning "Directory not found: $dir"
         fi
     done
 }
 
-# Funzione principale
+# Main function
 main() {
-    log_step "Inizio applicazione permessi"
-    
-    # Verifica root
+    log_step "Starting permission application"
+
+    # Check root
     check_root
-    
-    # Carica configurazione
+
+    # Load configuration
     load_config
-    
-    # Applica i permessi in ordine
+
+    # Apply permissions in order
     fix_script_permissions
     fix_config_permissions
     fix_base_directories
     fix_backup_directories
-    
-    log_success "Applicazione permessi completata"
+
+    log_success "Permission application completed"
 }
 
-# Esegui solo se lo script è chiamato direttamente
+# Execute only if the script is called directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi 
