@@ -1,0 +1,1495 @@
+package orchestrator
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"filippo.io/age"
+	"github.com/tis24dev/proxmox-backup/internal/backup"
+	"github.com/tis24dev/proxmox-backup/internal/checks"
+	"github.com/tis24dev/proxmox-backup/internal/config"
+	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxmox-backup/internal/metrics"
+	"github.com/tis24dev/proxmox-backup/internal/storage"
+	"github.com/tis24dev/proxmox-backup/internal/types"
+)
+
+// BashExecutor handles execution of bash scripts
+type BashExecutor struct {
+	logger         *logging.Logger
+	scriptPath     string // Base path to bash scripts
+	dryRun         bool
+	defaultTimeout time.Duration // Default timeout for script execution
+}
+
+// NewBashExecutor creates a new BashExecutor
+func NewBashExecutor(logger *logging.Logger, scriptPath string, dryRun bool) *BashExecutor {
+	return &BashExecutor{
+		logger:         logger,
+		scriptPath:     scriptPath,
+		dryRun:         dryRun,
+		defaultTimeout: 30 * time.Minute, // 30 minutes default timeout
+	}
+}
+
+// SetDefaultTimeout sets the default timeout for script execution
+func (b *BashExecutor) SetDefaultTimeout(timeout time.Duration) {
+	b.defaultTimeout = timeout
+}
+
+// ExecuteScript executes a bash script with the given arguments
+func (b *BashExecutor) ExecuteScript(scriptName string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), b.defaultTimeout)
+	defer cancel()
+	return b.ExecuteScriptWithContext(ctx, scriptName, args...)
+}
+
+// ExecuteScriptWithContext executes a bash script with the given context and arguments
+func (b *BashExecutor) ExecuteScriptWithContext(ctx context.Context, scriptName string, args ...string) (string, error) {
+	scriptPath := filepath.Join(b.scriptPath, scriptName)
+
+	// Check if script exists
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("script not found: %s", scriptPath)
+	}
+
+	if b.dryRun {
+		b.logger.Info("[DRY RUN] Would execute: %s %s", scriptPath, strings.Join(args, " "))
+		return "[dry-run]", nil
+	}
+
+	b.logger.Debug("Executing bash script: %s %s", scriptPath, strings.Join(args, " "))
+
+	// Create command with context
+	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
+
+	// Capture stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute command
+	err := cmd.Run()
+
+	// Log output
+	if stdout.Len() > 0 {
+		b.logger.Debug("Script stdout: %s", stdout.String())
+	}
+	if stderr.Len() > 0 {
+		b.logger.Debug("Script stderr: %s", stderr.String())
+	}
+
+	if err != nil {
+		// Check if context was canceled
+		if ctx.Err() == context.DeadlineExceeded {
+			return stdout.String(), fmt.Errorf("script execution timeout after %v: %s", b.defaultTimeout, scriptPath)
+		}
+		if ctx.Err() == context.Canceled {
+			return stdout.String(), fmt.Errorf("script execution canceled: %s", scriptPath)
+		}
+		return stdout.String(), fmt.Errorf("script execution failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	return stdout.String(), nil
+}
+
+// ExecuteScriptWithEnv executes a bash script with custom environment variables
+func (b *BashExecutor) ExecuteScriptWithEnv(scriptName string, env map[string]string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), b.defaultTimeout)
+	defer cancel()
+	return b.ExecuteScriptWithEnvContext(ctx, scriptName, env, args...)
+}
+
+// ExecuteScriptWithEnvContext executes a bash script with context and custom environment variables
+func (b *BashExecutor) ExecuteScriptWithEnvContext(ctx context.Context, scriptName string, env map[string]string, args ...string) (string, error) {
+	scriptPath := filepath.Join(b.scriptPath, scriptName)
+
+	// Check if script exists
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("script not found: %s", scriptPath)
+	}
+
+	if b.dryRun {
+		b.logger.Info("[DRY RUN] Would execute: %s %s with env: %v", scriptPath, strings.Join(args, " "), env)
+		return "[dry-run]", nil
+	}
+
+	b.logger.Debug("Executing bash script with env: %s %s", scriptPath, strings.Join(args, " "))
+
+	// Create command with context
+	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
+
+	// Set environment variables
+	cmd.Env = os.Environ()
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Capture stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute command
+	err := cmd.Run()
+
+	// Log output
+	if stdout.Len() > 0 {
+		b.logger.Debug("Script stdout: %s", stdout.String())
+	}
+	if stderr.Len() > 0 {
+		b.logger.Debug("Script stderr: %s", stderr.String())
+	}
+
+	if err != nil {
+		// Check if context was canceled
+		if ctx.Err() == context.DeadlineExceeded {
+			return stdout.String(), fmt.Errorf("script execution timeout after %v: %s", b.defaultTimeout, scriptPath)
+		}
+		if ctx.Err() == context.Canceled {
+			return stdout.String(), fmt.Errorf("script execution canceled: %s", scriptPath)
+		}
+		return stdout.String(), fmt.Errorf("script execution failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	return stdout.String(), nil
+}
+
+// ValidateScript checks if a bash script is valid and executable
+func (b *BashExecutor) ValidateScript(scriptName string) error {
+	scriptPath := filepath.Join(b.scriptPath, scriptName)
+
+	// Check if file exists
+	info, err := os.Stat(scriptPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("script not found: %s", scriptPath)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to stat script: %w", err)
+	}
+
+	// Check if it's a regular file
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", scriptPath)
+	}
+
+	// Check if it's executable
+	if info.Mode().Perm()&0111 == 0 {
+		return fmt.Errorf("script is not executable: %s", scriptPath)
+	}
+
+	return nil
+}
+
+// BackupError represents a backup error with specific phase and exit code
+type BackupError struct {
+	Phase string         // "collection", "archive", "compression", "verification"
+	Err   error          // Underlying error
+	Code  types.ExitCode // Specific exit code
+}
+
+func (e *BackupError) Error() string {
+	return fmt.Sprintf("%s phase failed: %v", e.Phase, e.Err)
+}
+
+func (e *BackupError) Unwrap() error {
+	return e.Err
+}
+
+// BackupStats contains statistics from backup operations
+type BackupStats struct {
+	Hostname                  string
+	ProxmoxType               types.ProxmoxType
+	ProxmoxVersion            string
+	BundleCreated             bool
+	Timestamp                 time.Time
+	Version                   string
+	StartTime                 time.Time
+	EndTime                   time.Time
+	FilesCollected            int
+	FilesFailed               int
+	DirsCreated               int
+	BytesCollected            int64
+	ArchiveSize               int64
+	UncompressedSize          int64
+	CompressedSize            int64
+	Duration                  time.Duration
+	ArchivePath               string
+	RequestedCompression      types.CompressionType
+	RequestedCompressionMode  string
+	Compression               types.CompressionType
+	CompressionLevel          int
+	CompressionMode           string
+	CompressionThreads        int
+	CompressionRatio          float64
+	CompressionRatioPercent   float64
+	CompressionSavingsPercent float64
+	ReportPath                string
+	ManifestPath              string
+	Checksum                  string
+	LocalPath                 string
+	SecondaryPath             string
+	CloudPath                 string
+	LocalStatus               string
+	SecondaryStatus           string
+	CloudStatus               string
+
+	// System identification
+	ServerID  string
+	ServerMAC string
+
+	// File counts for notifications
+	FilesIncluded int
+	FilesMissing  int
+
+	// Storage statistics
+	SecondaryEnabled    bool
+	LocalBackups        int
+	LocalFreeSpace      uint64
+	LocalTotalSpace     uint64
+	SecondaryBackups    int
+	SecondaryFreeSpace  uint64
+	SecondaryTotalSpace uint64
+	CloudEnabled        bool
+	CloudBackups        int
+	MaxLocalBackups     int
+	MaxSecondaryBackups int
+	MaxCloudBackups     int
+
+	// Retention policy info (for notifications)
+	LocalRetentionPolicy       string
+	LocalGFSDaily              int
+	LocalGFSWeekly             int
+	LocalGFSMonthly            int
+	LocalGFSYearly             int
+	LocalGFSCurrentDaily       int
+	LocalGFSCurrentWeekly      int
+	LocalGFSCurrentMonthly     int
+	LocalGFSCurrentYearly      int
+	SecondaryRetentionPolicy   string
+	SecondaryGFSDaily          int
+	SecondaryGFSWeekly         int
+	SecondaryGFSMonthly        int
+	SecondaryGFSYearly         int
+	SecondaryGFSCurrentDaily   int
+	SecondaryGFSCurrentWeekly  int
+	SecondaryGFSCurrentMonthly int
+	SecondaryGFSCurrentYearly  int
+	CloudRetentionPolicy       string
+	CloudGFSDaily              int
+	CloudGFSWeekly             int
+	CloudGFSMonthly            int
+	CloudGFSYearly             int
+	CloudGFSCurrentDaily       int
+	CloudGFSCurrentWeekly      int
+	CloudGFSCurrentMonthly     int
+	CloudGFSCurrentYearly      int
+
+	// Error/warning counts
+	ErrorCount   int
+	WarningCount int
+	LogFilePath  string
+
+	// Exit code
+	ExitCode       int
+	ScriptVersion  string
+	TelegramStatus string
+	EmailStatus    string
+}
+
+// Orchestrator coordinates the backup process using both Go and Bash components
+type Orchestrator struct {
+	bashExecutor         *BashExecutor
+	checker              *checks.Checker
+	logger               *logging.Logger
+	cfg                  *config.Config
+	version              string
+	proxmoxVersion       string
+	dryRun               bool
+	forceNewAgeRecipient bool
+	ageRecipientCache    []age.Recipient
+
+	// Backup configuration
+	backupPath         string
+	logPath            string
+	compressionType    types.CompressionType
+	compressionLevel   int
+	compressionThreads int
+	compressionMode    string
+	excludePatterns    []string
+	optimizationCfg    backup.OptimizationConfig
+
+	storageTargets       []StorageTarget
+	notificationChannels []NotificationChannel
+	tempRegistry         *TempDirRegistry
+
+	// Identity
+	serverID  string
+	serverMAC string
+
+	startTime time.Time
+}
+
+const tempDirCleanupAge = 24 * time.Hour
+const backupTotalSteps = 8
+
+// New creates a new Orchestrator
+func New(logger *logging.Logger, scriptPath string, dryRun bool) *Orchestrator {
+	return &Orchestrator{
+		bashExecutor:         NewBashExecutor(logger, scriptPath, dryRun),
+		logger:               logger,
+		dryRun:               dryRun,
+		storageTargets:       make([]StorageTarget, 0),
+		notificationChannels: make([]NotificationChannel, 0),
+	}
+}
+
+func (o *Orchestrator) logStep(step int, format string, args ...interface{}) {
+	if o == nil || o.logger == nil {
+		return
+	}
+	message := format
+	if len(args) > 0 {
+		message = fmt.Sprintf(format, args...)
+	}
+	o.logger.Step("%s", message)
+}
+
+func (o *Orchestrator) logGlobalRetentionPolicy() {
+	if o == nil || o.logger == nil || o.cfg == nil {
+		return
+	}
+
+	// If GFS is enabled globally, policy is the same for all storage paths
+	if o.cfg.IsGFSRetentionEnabled() {
+		rc := storage.NewRetentionConfigFromConfig(o.cfg, storage.LocationPrimary)
+		rc = storage.NormalizeGFSRetentionConfig(o.logger, "All Storage", rc)
+		o.logger.Info("  Policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
+			rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
+		return
+	}
+
+	// Simple (count-based) retention: may vary per path, summarize compactly
+	local := o.cfg.LocalRetentionDays
+	secondary := o.cfg.SecondaryRetentionDays
+	cloud := o.cfg.CloudRetentionDays
+
+	if local == 0 && secondary == 0 && cloud == 0 {
+		o.logger.Info("  Policy: simple (disabled)")
+		return
+	}
+
+	parts := make([]string, 0, 3)
+	if local > 0 {
+		parts = append(parts, fmt.Sprintf("local=%d", local))
+	}
+	if secondary > 0 {
+		parts = append(parts, fmt.Sprintf("secondary=%d", secondary))
+	}
+	if cloud > 0 {
+		parts = append(parts, fmt.Sprintf("cloud=%d", cloud))
+	}
+
+	o.logger.Info("  Policy: simple (%s)", strings.Join(parts, ", "))
+}
+
+func (o *Orchestrator) SetForceNewAgeRecipient(force bool) {
+	o.forceNewAgeRecipient = force
+	if force {
+		o.ageRecipientCache = nil
+	}
+}
+
+func (o *Orchestrator) SetProxmoxVersion(version string) {
+	o.proxmoxVersion = strings.TrimSpace(version)
+}
+
+// SetStartTime injects the timestamp to reuse across logs/backups.
+func (o *Orchestrator) SetStartTime(t time.Time) {
+	o.startTime = t
+}
+
+// RunBackup coordinates the full backup process
+// Currently calls the main bash backup script (proxmox-backup.sh)
+// This is a hybrid approach during migration
+func (o *Orchestrator) RunBackup(ctx context.Context, pType types.ProxmoxType) error {
+	o.logger.Info("Starting backup orchestration for %s", pType)
+
+	if o.dryRun {
+		o.logger.Info("[DRY RUN] Backup orchestration would call proxmox-backup.sh")
+		return nil
+	}
+
+	// Phase 2: Call the main bash script
+	// This maintains compatibility while we migrate incrementally
+	mainScript := "proxmox-backup.sh"
+
+	// Validate script exists and is executable
+	if err := o.bashExecutor.ValidateScript(mainScript); err != nil {
+		o.logger.Warning("Main backup script not found or not executable: %v", err)
+		o.logger.Warning("Skipping backup execution - this is expected in test/dev environments")
+		return nil
+	}
+
+	o.logger.Info("Executing main backup script: %s", mainScript)
+
+	// Execute with a longer timeout for backup operations
+	// Combine parent context with timeout
+	execCtx, cancel := context.WithTimeout(ctx, 2*time.Hour)
+	defer cancel()
+
+	output, err := o.bashExecutor.ExecuteScriptWithContext(execCtx, mainScript)
+	if err != nil {
+		// Check if parent context was canceled (e.g., SIGINT)
+		if ctx.Err() == context.Canceled {
+			o.logger.Warning("Backup canceled by user")
+			return fmt.Errorf("backup canceled: %w", ctx.Err())
+		}
+		o.logger.Error("Backup script execution failed: %v", err)
+		return fmt.Errorf("backup failed: %w", err)
+	}
+
+	o.logger.Debug("Backup script output: %s", output)
+	o.logger.Info("Backup completed successfully")
+
+	return nil
+}
+
+// GetBashExecutor returns the underlying bash executor
+func (o *Orchestrator) GetBashExecutor() *BashExecutor {
+	return o.bashExecutor
+}
+
+// SetConfig attaches the loaded configuration to the orchestrator
+func (o *Orchestrator) SetConfig(cfg *config.Config) {
+	o.cfg = cfg
+	o.ageRecipientCache = nil
+}
+
+// SetVersion sets the current tool version (for metadata reporting)
+func (o *Orchestrator) SetVersion(version string) {
+	o.version = version
+}
+
+// SetChecker sets the pre-backup checker
+func (o *Orchestrator) SetChecker(checker *checks.Checker) {
+	o.checker = checker
+}
+
+// SetIdentity configures server identity information for downstream consumers.
+func (o *Orchestrator) SetIdentity(serverID, serverMAC string) {
+	o.serverID = strings.TrimSpace(serverID)
+	o.serverMAC = strings.TrimSpace(serverMAC)
+}
+
+// RunPreBackupChecks performs all pre-backup validation checks
+func (o *Orchestrator) RunPreBackupChecks(ctx context.Context) error {
+	if o.checker == nil {
+		o.logger.Debug("No checker configured, skipping pre-backup checks")
+		return nil
+	}
+
+	o.logger.Step("Pre-backup validation checks")
+
+	results, err := o.checker.RunAllChecks(ctx)
+
+	// Log all check results
+	for _, result := range results {
+		if result.Passed {
+			if result.Name == "Disk Space (Estimated)" {
+				o.logger.Debug("✓ %s: %s", result.Name, result.Message)
+			} else {
+				o.logger.Info("✓ %s: %s", result.Name, result.Message)
+			}
+		} else {
+			o.logger.Error("✗ %s: %s", result.Name, result.Message)
+		}
+	}
+
+	if err != nil {
+		o.logger.Error("Pre-backup checks failed: %v", err)
+		return fmt.Errorf("pre-backup checks failed: %w", err)
+	}
+
+	o.logger.Info("All pre-backup checks passed")
+	return nil
+}
+
+// ReleaseBackupLock releases the backup lock file
+func (o *Orchestrator) ReleaseBackupLock() error {
+	if o.checker == nil {
+		return nil
+	}
+	return o.checker.ReleaseLock()
+}
+
+// SetBackupConfig configures paths and compression for Go-based backup
+func (o *Orchestrator) SetBackupConfig(backupPath, logPath string, compression types.CompressionType, level int, threads int, mode string, excludePatterns []string) {
+	o.backupPath = backupPath
+	o.logPath = logPath
+	o.compressionType = compression
+	o.compressionLevel = level
+	o.compressionThreads = threads
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "standard"
+	}
+	o.compressionMode = mode
+	o.excludePatterns = append([]string(nil), excludePatterns...)
+}
+
+// SetOptimizationConfig configures optional preprocessing (chunking/dedup/prefilter)
+func (o *Orchestrator) SetOptimizationConfig(cfg backup.OptimizationConfig) {
+	o.optimizationCfg = cfg
+}
+
+// SetTempDirRegistry allows callers (main/tests) to inject a custom registry.
+func (o *Orchestrator) SetTempDirRegistry(reg *TempDirRegistry) {
+	o.tempRegistry = reg
+}
+
+func (o *Orchestrator) describeTelegramConfig() string {
+	if o == nil || o.cfg == nil || !o.cfg.TelegramEnabled {
+		return "disabled"
+	}
+	mode := strings.ToLower(strings.TrimSpace(o.cfg.TelegramBotType))
+	if mode == "" {
+		return "personal"
+	}
+	switch mode {
+	case "personal", "centralized":
+		return mode
+	default:
+		return mode
+	}
+}
+
+func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
+	if o.tempRegistry != nil {
+		return o.tempRegistry
+	}
+
+	registryPath := resolveRegistryPath()
+	registry, err := NewTempDirRegistry(o.logger, registryPath)
+	if err != nil {
+		o.logger.Debug("Temp dir registry disabled: %v", err)
+		return nil
+	}
+	o.tempRegistry = registry
+	return registry
+}
+
+// RunGoBackup performs the entire backup using Go components (collector + archiver)
+func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType, hostname string) (stats *BackupStats, err error) {
+	o.logger.Info("Starting Go-based backup orchestration for %s", pType)
+
+	// Unified cleanup of previous execution artifacts
+	registry := o.cleanupPreviousExecutionArtifacts()
+
+	startTime := o.startTime
+	if startTime.IsZero() {
+		startTime = time.Now()
+		o.startTime = startTime
+	}
+	normalizedLevel := normalizeCompressionLevel(o.compressionType, o.compressionLevel)
+
+	fmt.Println()
+	o.logStep(1, "Initializing backup statistics and temporary workspace")
+	stats = &BackupStats{
+		Hostname:                 hostname,
+		ProxmoxType:              pType,
+		ProxmoxVersion:           o.proxmoxVersion,
+		Timestamp:                startTime,
+		Version:                  o.version,
+		ScriptVersion:            o.version, // Use same version for script version (for cloud relay)
+		StartTime:                startTime,
+		RequestedCompression:     o.compressionType,
+		RequestedCompressionMode: o.compressionMode,
+		Compression:              o.compressionType,
+		CompressionLevel:         normalizedLevel,
+		CompressionMode:          o.compressionMode,
+		CompressionThreads:       o.compressionThreads,
+		LocalPath:                o.backupPath,
+		LocalStatus:              "ok",
+		EmailStatus:              "ok",
+		TelegramStatus:           o.describeTelegramConfig(),
+		ServerID:                 o.serverID,
+		ServerMAC:                o.serverMAC,
+		ExitCode:                 types.ExitSuccess.Int(),
+	}
+	if logFile := strings.TrimSpace(os.Getenv("LOG_FILE")); logFile != "" {
+		stats.LogFilePath = logFile
+	}
+
+	if o.cfg != nil {
+		stats.SecondaryEnabled = o.cfg.SecondaryEnabled
+		stats.CloudEnabled = o.cfg.CloudEnabled
+		stats.SecondaryPath = o.cfg.SecondaryPath
+		stats.CloudPath = o.cfg.CloudRemote
+		stats.MaxLocalBackups = o.cfg.MaxLocalBackups
+		stats.MaxSecondaryBackups = o.cfg.MaxSecondaryBackups
+		stats.MaxCloudBackups = o.cfg.MaxCloudBackups
+		if stats.LocalPath == "" {
+			stats.LocalPath = o.cfg.BackupPath
+		}
+	}
+
+	if stats.SecondaryEnabled {
+		stats.SecondaryStatus = "ok"
+	} else {
+		stats.SecondaryStatus = "disabled"
+	}
+
+	if stats.CloudEnabled {
+		stats.CloudStatus = "ok"
+	} else {
+		stats.CloudStatus = "disabled"
+	}
+
+	o.logger.Debug("Creating temporary directory for collection output")
+	// Create temporary directory for collection (outside backup path)
+	timestampStr := startTime.Format("20060102-150405")
+	tempDir, err := os.MkdirTemp("", fmt.Sprintf("proxmox-backup-%s-%s-", hostname, timestampStr))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+	if o.dryRun {
+		o.logger.Info("[DRY RUN] Temporary directory would be: %s", tempDir)
+	} else {
+		o.logger.Debug("Using temporary directory: %s", tempDir)
+	}
+	defer func() {
+		if registry == nil {
+			if cleanupErr := os.RemoveAll(tempDir); cleanupErr != nil {
+				o.logger.Warning("Failed to remove temp directory %s: %v", tempDir, cleanupErr)
+			}
+			return
+		}
+		o.logger.Debug("Temporary workspace preserved at %s (will be removed at the next startup)", tempDir)
+	}()
+
+	// Create marker file for parity with Bash cleanup guarantees
+	markerPath := filepath.Join(tempDir, ".proxmox-backup-marker")
+	markerContent := fmt.Sprintf(
+		"Created by PID %d on %s UTC\n",
+		os.Getpid(),
+		time.Now().UTC().Format("2006-01-02 15:04:05"),
+	)
+	if err := os.WriteFile(markerPath, []byte(markerContent), 0600); err != nil {
+		return nil, fmt.Errorf("failed to create temp marker file: %w", err)
+	}
+
+	if registry != nil {
+		if err := registry.Register(tempDir); err != nil {
+			o.logger.Debug("Failed to register temp directory %s: %v", tempDir, err)
+		}
+	}
+
+	// Step 1: Collect configuration files
+	fmt.Println()
+	o.logStep(2, "Collection of configuration files and optimizations")
+	o.logger.Info("Collecting configuration files...")
+	o.logger.Debug("Collector dry-run=%v excludePatterns=%d", o.dryRun, len(o.excludePatterns))
+	collectorConfig := backup.GetDefaultCollectorConfig()
+	collectorConfig.ExcludePatterns = append([]string(nil), o.excludePatterns...)
+	if o.cfg != nil {
+		applyCollectorOverrides(collectorConfig, o.cfg)
+		if len(o.cfg.BackupBlacklist) > 0 {
+			collectorConfig.ExcludePatterns = append(collectorConfig.ExcludePatterns, o.cfg.BackupBlacklist...)
+		}
+	}
+
+	if err := collectorConfig.Validate(); err != nil {
+		return nil, &BackupError{
+			Phase: "config",
+			Err:   err,
+			Code:  types.ExitConfigError,
+		}
+	}
+
+	collector := backup.NewCollector(o.logger, collectorConfig, tempDir, pType, o.dryRun)
+
+	o.logger.Debug("Starting collector run (type=%s)", pType)
+	if err := collector.CollectAll(ctx); err != nil {
+		// Return collection-specific error
+		return nil, &BackupError{
+			Phase: "collection",
+			Err:   err,
+			Code:  types.ExitCollectionError,
+		}
+	}
+
+	// Get collection statistics
+	collStats := collector.GetStats()
+	stats.FilesCollected = int(collStats.FilesProcessed)
+	stats.FilesFailed = int(collStats.FilesFailed)
+	stats.DirsCreated = int(collStats.DirsCreated)
+	stats.BytesCollected = collStats.BytesCollected
+	stats.FilesIncluded = int(collStats.FilesProcessed)
+	stats.FilesMissing = int(collStats.FilesFailed)
+	stats.UncompressedSize = collStats.BytesCollected
+
+	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
+		o.logger.Debug("Failed to write backup metadata: %v", err)
+	}
+
+	o.logger.Info("Collection completed: %d files (%s), %d failed, %d dirs created",
+		collStats.FilesProcessed,
+		backup.FormatBytes(collStats.BytesCollected),
+		collStats.FilesFailed,
+		collStats.DirsCreated)
+
+	// Additional disk space check using estimated size and safety factor
+	if o.checker != nil && stats.BytesCollected > 0 {
+		o.logger.Debug("Running disk-space validation for estimated data size")
+		estimatedSizeGB := float64(stats.BytesCollected) / (1024.0 * 1024.0 * 1024.0)
+		// Ensure we always reserve at least a small amount
+		if estimatedSizeGB < 0.001 {
+			estimatedSizeGB = 0.001
+		}
+		result := o.checker.CheckDiskSpaceForEstimate(estimatedSizeGB)
+		if result.Passed {
+			o.logger.Debug("Disk check passed: %s", result.Message)
+		} else {
+			errMsg := result.Message
+			if errMsg == "" && result.Error != nil {
+				errMsg = result.Error.Error()
+			}
+			if errMsg == "" {
+				errMsg = "insufficient disk space"
+			}
+			return nil, &BackupError{
+				Phase: "disk",
+				Err:   fmt.Errorf("%s", errMsg),
+				Code:  types.ExitDiskSpaceError,
+			}
+		}
+	}
+
+	if o.optimizationCfg.Enabled() {
+		fmt.Println()
+		o.logger.Step("Backup optimizations on collected data")
+		if err := backup.ApplyOptimizations(ctx, o.logger, tempDir, o.optimizationCfg); err != nil {
+			o.logger.Warning("Backup optimizations completed with warnings: %v", err)
+		}
+	} else {
+		o.logger.Debug("Skipping optimization step (all features disabled)")
+	}
+
+	// Step 2: Create archive
+	fmt.Println()
+	o.logStep(3, "Creation of compressed archive")
+	o.logger.Info("Creating compressed archive...")
+	o.logger.Debug("Archiver configuration: type=%s level=%d mode=%s threads=%d",
+		o.compressionType, normalizedLevel, o.compressionMode, o.compressionThreads)
+
+	// Generate archive filename
+	archiveBasename := fmt.Sprintf("%s-backup-%s", hostname, timestampStr)
+
+	ageRecipients, err := o.prepareAgeRecipients(ctx)
+	if err != nil {
+		return nil, &BackupError{
+			Phase: "config",
+			Err:   err,
+			Code:  types.ExitConfigError,
+		}
+	}
+
+	archiverConfig := &backup.ArchiverConfig{
+		Compression:        o.compressionType,
+		CompressionLevel:   normalizedLevel,
+		CompressionThreads: o.compressionThreads,
+		CompressionMode:    o.compressionMode,
+		DryRun:             o.dryRun,
+		EncryptArchive:     o.cfg != nil && o.cfg.EncryptArchive,
+		AgeRecipients:      ageRecipients,
+	}
+
+	if err := archiverConfig.Validate(); err != nil {
+		return nil, &BackupError{
+			Phase: "config",
+			Err:   err,
+			Code:  types.ExitConfigError,
+		}
+	}
+
+	archiver := backup.NewArchiver(o.logger, archiverConfig)
+	effectiveCompression := archiver.ResolveCompression()
+	stats.Compression = effectiveCompression
+	stats.CompressionLevel = archiver.CompressionLevel()
+	stats.CompressionMode = archiver.CompressionMode()
+	stats.CompressionThreads = archiver.CompressionThreads()
+	archiveExt := archiver.GetArchiveExtension()
+	archivePath := filepath.Join(o.backupPath, archiveBasename+archiveExt)
+	if stats.RequestedCompression != stats.Compression {
+		o.logger.Info("Using %s compression (requested %s)", stats.Compression, stats.RequestedCompression)
+	}
+
+	if err := archiver.CreateArchive(ctx, tempDir, archivePath); err != nil {
+		phase := "archive"
+		code := types.ExitArchiveError
+		var compressionErr *backup.CompressionError
+		if errors.As(err, &compressionErr) {
+			phase = "compression"
+			code = types.ExitCompressionError
+		}
+
+		return nil, &BackupError{
+			Phase: phase,
+			Err:   err,
+			Code:  code,
+		}
+	}
+
+	stats.ArchivePath = archivePath
+	checksumPath := archivePath + ".sha256"
+
+	// Get archive size
+	if !o.dryRun {
+		fmt.Println()
+		o.logStep(4, "Verification of archive and metadata generation")
+		if size, err := archiver.GetArchiveSize(archivePath); err == nil {
+			stats.ArchiveSize = size
+			stats.CompressedSize = size
+			stats.updateCompressionMetrics()
+			o.logger.Debug("Archive created: %s (%s)", archivePath, backup.FormatBytes(size))
+		} else {
+			o.logger.Warning("Failed to get archive size: %v", err)
+		}
+
+		// Verify archive (skipped internally when encryption is enabled)
+		if err := archiver.VerifyArchive(ctx, archivePath); err != nil {
+			// Return verification-specific error
+			return nil, &BackupError{
+				Phase: "verification",
+				Err:   err,
+				Code:  types.ExitVerificationError,
+			}
+		}
+
+		// Generate checksum and manifest for the archive
+		checksum, err := backup.GenerateChecksum(ctx, o.logger, archivePath)
+		if err != nil {
+			return nil, &BackupError{
+				Phase: "verification",
+				Err:   fmt.Errorf("checksum generation failed: %w", err),
+				Code:  types.ExitVerificationError,
+			}
+		}
+		stats.Checksum = checksum
+
+		checksumContent := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(archivePath))
+		if err := os.WriteFile(checksumPath, []byte(checksumContent), 0640); err != nil {
+			o.logger.Warning("Failed to write checksum file %s: %v", checksumPath, err)
+		} else {
+			o.logger.Debug("Checksum file written to %s", checksumPath)
+		}
+
+		manifestPath := archivePath + ".manifest.json"
+		manifestCreatedAt := stats.Timestamp
+		encryptionMode := "none"
+		if o.cfg != nil && o.cfg.EncryptArchive {
+			encryptionMode = "age"
+		}
+		targets := make([]string, 0, 1)
+		if stats.ProxmoxType != "" {
+			targets = append(targets, string(stats.ProxmoxType))
+		}
+		manifest := &backup.Manifest{
+			ArchivePath:      archivePath,
+			ArchiveSize:      stats.ArchiveSize,
+			SHA256:           checksum,
+			CreatedAt:        manifestCreatedAt,
+			CompressionType:  string(stats.Compression),
+			CompressionLevel: stats.CompressionLevel,
+			CompressionMode:  stats.CompressionMode,
+			ProxmoxType:      string(stats.ProxmoxType),
+			ProxmoxTargets:   targets,
+			ProxmoxVersion:   stats.ProxmoxVersion,
+			Hostname:         stats.Hostname,
+			ScriptVersion:    stats.ScriptVersion,
+			EncryptionMode:   encryptionMode,
+		}
+
+		if err := backup.CreateManifest(ctx, o.logger, manifest, manifestPath); err != nil {
+			return nil, &BackupError{
+				Phase: "verification",
+				Err:   fmt.Errorf("manifest creation failed: %w", err),
+				Code:  types.ExitVerificationError,
+			}
+		}
+		stats.ManifestPath = manifestPath
+
+		// Maintain Bash-compatible metadata filename for downstream tooling
+		metadataAlias := archivePath + ".metadata"
+		if err := copyFile(manifestPath, metadataAlias); err != nil {
+			o.logger.Warning("Failed to write legacy metadata file %s: %v", metadataAlias, err)
+		} else {
+			o.logger.Debug("Legacy metadata file written to %s", metadataAlias)
+		}
+
+		// Create bundle (if requested) before dispatching to other storage targets
+		bundleEnabled := o.cfg != nil && o.cfg.BundleAssociatedFiles
+		if bundleEnabled {
+			fmt.Println()
+			o.logStep(5, "Bundling of archive, checksum and metadata")
+			o.logger.Debug("Bundling enabled: creating bundle from %s", filepath.Base(archivePath))
+			bundlePath, err := createBundle(ctx, o.logger, archivePath)
+			if err != nil {
+				return nil, &BackupError{
+					Phase: "archive",
+					Err:   fmt.Errorf("bundle creation failed: %w", err),
+					Code:  types.ExitArchiveError,
+				}
+			}
+
+			if err := removeAssociatedFiles(o.logger, archivePath); err != nil {
+				o.logger.Warning("Failed to remove raw files after bundling: %v", err)
+			} else {
+				o.logger.Debug("Removed raw tar/checksum/metadata after bundling")
+			}
+
+			if info, err := os.Stat(bundlePath); err == nil {
+				stats.ArchiveSize = info.Size()
+				stats.CompressedSize = info.Size()
+				stats.updateCompressionMetrics()
+			}
+			stats.ArchivePath = bundlePath
+			stats.ManifestPath = ""
+			stats.BundleCreated = true
+			archivePath = bundlePath
+			o.logger.Debug("Bundle ready: %s", filepath.Base(bundlePath))
+		} else {
+			fmt.Println()
+			o.logger.Skip("Bundling disabled")
+		}
+
+		stats.EndTime = time.Now()
+
+		o.logger.Info("✓ Archive created and verified")
+	} else {
+		fmt.Println()
+		o.logStep(4, "Verification skipped (dry run mode)")
+		o.logger.Info("[DRY RUN] Would create archive: %s", archivePath)
+		stats.EndTime = time.Now()
+	}
+
+	stats.Duration = stats.EndTime.Sub(stats.StartTime)
+
+	// Parse log file to populate error/warning counts before dispatch
+	if stats.LogFilePath != "" {
+		o.logger.Debug("Parsing log file for error/warning counts: %s", stats.LogFilePath)
+		_, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, 0)
+		stats.ErrorCount = errorCount
+		stats.WarningCount = warningCount
+		if errorCount > 0 || warningCount > 0 {
+			o.logger.Debug("Found %d errors and %d warnings in log file", errorCount, warningCount)
+		}
+	} else {
+		o.logger.Debug("No log file path specified, error/warning counts will be 0")
+	}
+
+	// Determine aggregated exit code (similar to legacy Bash logic)
+	switch {
+	case stats.ErrorCount > 0:
+		stats.ExitCode = types.ExitBackupError.Int()
+	case stats.WarningCount > 0:
+		stats.ExitCode = types.ExitGenericError.Int()
+	default:
+		stats.ExitCode = types.ExitSuccess.Int()
+	}
+	o.logger.Debug("Aggregated exit code based on log analysis: %d", stats.ExitCode)
+
+	if len(o.storageTargets) == 0 {
+		fmt.Println()
+		o.logStep(6, "No storage targets registered - skipping")
+	} else if o.dryRun {
+		fmt.Println()
+		o.logStep(6, "Storage dispatch skipped (dry run mode)")
+	} else {
+		fmt.Println()
+		o.logStep(6, "Dispatching archive to %d storage target(s)", len(o.storageTargets))
+		o.logGlobalRetentionPolicy()
+	}
+
+	if !o.dryRun {
+		o.logger.Debug("Dispatching archive to %d storage targets", len(o.storageTargets))
+		if err := o.dispatchPostBackup(ctx, stats); err != nil {
+			return nil, err
+		}
+	}
+
+	fmt.Println()
+	o.logger.Debug("Go backup completed in %s", backup.FormatDuration(stats.Duration))
+
+	// Export Prometheus metrics via node_exporter textfile, if enabled.
+	if o.cfg != nil && o.cfg.MetricsEnabled && !o.dryRun {
+		m := &metrics.BackupMetrics{
+			Hostname:       stats.Hostname,
+			ProxmoxType:    stats.ProxmoxType.String(),
+			ProxmoxVersion: stats.ProxmoxVersion,
+			ScriptVersion:  stats.ScriptVersion,
+			StartTime:      stats.StartTime,
+			EndTime:        stats.EndTime,
+			Duration:       stats.Duration,
+			ExitCode:       stats.ExitCode,
+			ErrorCount:     stats.ErrorCount,
+			WarningCount:   stats.WarningCount,
+			LocalBackups:   stats.LocalBackups,
+			SecBackups:     stats.SecondaryBackups,
+			CloudBackups:   stats.CloudBackups,
+		}
+
+		exporter := metrics.NewPrometheusExporter(o.cfg.MetricsPath, o.logger)
+		if err := exporter.Export(m); err != nil {
+			o.logger.Warning("Failed to export Prometheus metrics: %v", err)
+		}
+	}
+
+	return stats, nil
+}
+
+func normalizeCompressionLevel(comp types.CompressionType, level int) int {
+	const defaultLevel = 6
+
+	switch comp {
+	case types.CompressionGzip:
+		if level < 1 || level > 9 {
+			return defaultLevel
+		}
+	case types.CompressionXZ:
+		if level < 0 || level > 9 {
+			return defaultLevel
+		}
+	case types.CompressionZstd:
+		if level < 1 || level > 22 {
+			return defaultLevel
+		}
+	case types.CompressionNone:
+		return 0
+	default:
+		return level
+	}
+	return level
+}
+
+func (s *BackupStats) updateCompressionMetrics() {
+	if s == nil {
+		return
+	}
+
+	if s.UncompressedSize <= 0 || s.CompressedSize <= 0 {
+		s.CompressionRatio = 0
+		s.CompressionRatioPercent = 0
+		s.CompressionSavingsPercent = 0
+		return
+	}
+
+	ratio := float64(s.CompressedSize) / float64(s.UncompressedSize)
+	if ratio < 0 {
+		ratio = 0
+	}
+
+	s.CompressionRatio = ratio
+	s.CompressionRatioPercent = ratio * 100
+
+	savings := (1 - ratio) * 100
+	if savings < 0 {
+		savings = 0
+	}
+	s.CompressionSavingsPercent = savings
+}
+
+func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
+	dir := filepath.Dir(archivePath)
+	base := filepath.Base(archivePath)
+
+	associated := []string{
+		base,
+		base + ".sha256",
+		base + ".metadata",
+	}
+
+	metaChecksum := base + ".metadata.sha256"
+	if _, err := os.Stat(filepath.Join(dir, metaChecksum)); err == nil {
+		associated = append(associated, metaChecksum)
+	}
+
+	for _, file := range associated[:3] {
+		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
+			return "", fmt.Errorf("associated file not found: %s: %w", file, err)
+		}
+	}
+
+	bundlePath := archivePath + ".bundle.tar"
+	args := []string{"tar", "-cf", bundlePath, "-C", dir}
+	args = append(args, associated...)
+
+	logger.Debug("Creating bundle with command: %s", strings.Join(args, " "))
+
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("tar failed: %w (output: %s)", err, bytes.TrimSpace(output))
+	}
+
+	if _, err := os.Stat(bundlePath); err != nil {
+		return "", fmt.Errorf("bundle file not created: %w", err)
+	}
+
+	return bundlePath, nil
+}
+
+func removeAssociatedFiles(logger *logging.Logger, archivePath string) error {
+	files := []string{
+		archivePath,
+		archivePath + ".sha256",
+		archivePath + ".metadata",
+		archivePath + ".metadata.sha256",
+		archivePath + ".manifest.json",
+	}
+
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("remove %s: %w", filepath.Base(f), err)
+		}
+		logger.Debug("Removed raw artifact: %s", filepath.Base(f))
+	}
+	return nil
+}
+
+// encryptArchive was replaced by streaming encryption inside the archiver.
+
+// SaveStatsReport writes a JSON report with backup statistics to the log directory.
+func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
+	if stats == nil {
+		return fmt.Errorf("stats cannot be nil")
+	}
+
+	if o.logPath == "" || stats.Timestamp.IsZero() {
+		return nil
+	}
+
+	timestampStr := stats.Timestamp.Format("20060102-150405")
+	reportPath := filepath.Join(o.logPath, fmt.Sprintf("backup-stats-%s.json", timestampStr))
+	stats.ReportPath = reportPath
+
+	if o.dryRun {
+		o.logger.Info("[DRY RUN] Would write stats report: %s", reportPath)
+		return nil
+	}
+
+	if err := os.MkdirAll(o.logPath, 0755); err != nil {
+		return fmt.Errorf("create log directory: %w", err)
+	}
+
+	file, err := os.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	if err != nil {
+		return fmt.Errorf("create stats report: %w", err)
+	}
+	defer file.Close()
+
+	durationSeconds := stats.Duration.Seconds()
+	compressionRatio := stats.CompressionRatio
+	if compressionRatio == 0 && stats.BytesCollected > 0 {
+		if stats.BytesCollected > 0 {
+			compressionRatio = float64(stats.ArchiveSize) / float64(stats.BytesCollected)
+		}
+	}
+	compressionRatioPercent := stats.CompressionRatioPercent
+	if compressionRatioPercent == 0 && compressionRatio > 0 {
+		compressionRatioPercent = compressionRatio * 100
+	}
+	compressionSavingsPercent := stats.CompressionSavingsPercent
+	if compressionSavingsPercent == 0 && compressionRatioPercent > 0 {
+		savings := 100 - compressionRatioPercent
+		if savings < 0 {
+			savings = 0
+		}
+		compressionSavingsPercent = savings
+	}
+
+	payload := struct {
+		Hostname           string                `json:"hostname"`
+		ProxmoxType        types.ProxmoxType     `json:"proxmox_type"`
+		Timestamp          string                `json:"timestamp"`
+		StartTime          time.Time             `json:"start_time"`
+		EndTime            time.Time             `json:"end_time"`
+		DurationSeconds    float64               `json:"duration_seconds"`
+		DurationHuman      string                `json:"duration_human"`
+		FilesCollected     int                   `json:"files_collected"`
+		FilesFailed        int                   `json:"files_failed"`
+		DirsCreated        int                   `json:"directories_created"`
+		BytesCollected     int64                 `json:"bytes_collected"`
+		BytesCollectedStr  string                `json:"bytes_collected_human"`
+		ArchivePath        string                `json:"archive_path"`
+		ArchiveSize        int64                 `json:"archive_size"`
+		ArchiveSizeStr     string                `json:"archive_size_human"`
+		RequestedComp      types.CompressionType `json:"requested_compression"`
+		RequestedCompMode  string                `json:"requested_compression_mode"`
+		Compression        types.CompressionType `json:"compression"`
+		CompressionLevel   int                   `json:"compression_level"`
+		CompressionMode    string                `json:"compression_mode"`
+		CompressionThreads int                   `json:"compression_threads"`
+		CompressionRatio   float64               `json:"compression_ratio"`
+		CompressionPct     float64               `json:"compression_ratio_percent"`
+		CompressionSavings float64               `json:"compression_savings_percent"`
+		Checksum           string                `json:"checksum"`
+		ManifestPath       string                `json:"manifest_path"`
+	}{
+		Hostname:           stats.Hostname,
+		ProxmoxType:        stats.ProxmoxType,
+		Timestamp:          stats.Timestamp.Format("20060102-150405"),
+		StartTime:          stats.StartTime,
+		EndTime:            stats.EndTime,
+		DurationSeconds:    durationSeconds,
+		DurationHuman:      backup.FormatDuration(stats.Duration),
+		FilesCollected:     stats.FilesCollected,
+		FilesFailed:        stats.FilesFailed,
+		DirsCreated:        stats.DirsCreated,
+		BytesCollected:     stats.BytesCollected,
+		BytesCollectedStr:  backup.FormatBytes(stats.BytesCollected),
+		ArchivePath:        stats.ArchivePath,
+		ArchiveSize:        stats.ArchiveSize,
+		ArchiveSizeStr:     backup.FormatBytes(stats.ArchiveSize),
+		RequestedComp:      stats.RequestedCompression,
+		RequestedCompMode:  stats.RequestedCompressionMode,
+		Compression:        stats.Compression,
+		CompressionLevel:   stats.CompressionLevel,
+		CompressionMode:    stats.CompressionMode,
+		CompressionThreads: stats.CompressionThreads,
+		CompressionRatio:   compressionRatio,
+		CompressionPct:     compressionRatioPercent,
+		CompressionSavings: compressionSavingsPercent,
+		Checksum:           stats.Checksum,
+		ManifestPath:       stats.ManifestPath,
+	}
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(payload); err != nil {
+		return fmt.Errorf("write stats report: %w", err)
+	}
+
+	o.logger.Debug("Backup stats written to %s", reportPath)
+	return nil
+}
+
+// cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats and orphaned temp directories
+// Returns the TempDirRegistry for use by the caller
+func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
+	// Check if there's anything to clean
+	hasStatsFiles := false
+
+	// Check for JSON stats files
+	if o.logPath != "" {
+		pattern := filepath.Join(o.logPath, "backup-stats-*.json")
+		matches, err := filepath.Glob(pattern)
+		if err == nil && len(matches) > 0 {
+			hasStatsFiles = true
+		}
+	}
+
+	// Get temp directory registry
+	registry := o.ensureTempRegistry()
+
+	removedFiles := 0
+	failedFiles := 0
+	removedDirs := 0
+	cleanupStarted := false
+
+	// Phase 1: Cleanup JSON stats files
+	if hasStatsFiles {
+		pattern := filepath.Join(o.logPath, "backup-stats-*.json")
+		matches, _ := filepath.Glob(pattern)
+
+		if len(matches) > 0 {
+			if !cleanupStarted {
+				o.logger.Debug("Starting cleanup of previous execution files...")
+				cleanupStarted = true
+			}
+			o.logger.Debug("Found %d stats file(s) from previous execution", len(matches))
+
+			for _, file := range matches {
+				filename := filepath.Base(file)
+				if err := os.Remove(file); err != nil {
+					o.logger.Debug("Failed to remove file %s: %v", filename, err)
+					failedFiles++
+				} else {
+					o.logger.Debug("Cleanup file %s executed", filename)
+					removedFiles++
+				}
+			}
+		}
+	}
+
+	// Phase 2: Cleanup orphaned temp directories
+	if registry != nil {
+		if !cleanupStarted {
+			o.logger.Debug("Starting cleanup of previous execution files...")
+			cleanupStarted = true
+		}
+		o.logger.Debug("Checking for orphaned temp directories older than %s", tempDirCleanupAge)
+
+		// CleanupOrphaned now returns the count of directories removed
+		count, err := registry.CleanupOrphaned(tempDirCleanupAge)
+		if err != nil {
+			o.logger.Debug("Temp dir cleanup skipped: %v", err)
+		} else {
+			removedDirs = count
+		}
+	}
+
+	// Final summary - only show if cleanup was actually performed
+	if cleanupStarted {
+		if removedFiles > 0 || removedDirs > 0 {
+			totalRemoved := removedFiles + removedDirs
+			if failedFiles > 0 {
+				o.logger.Info("Cleanup of previous execution files completed with errors (%d item(s) removed: %d file(s), %d dir(s); %d failed)", totalRemoved, removedFiles, removedDirs, failedFiles)
+			} else {
+				o.logger.Info("Cleanup of previous execution files completed successfully (%d item(s) removed: %d file(s), %d dir(s))", totalRemoved, removedFiles, removedDirs)
+			}
+		}
+	}
+
+	return registry
+}
+
+func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) error {
+	infoDir := filepath.Join(tempDir, "var/lib/proxmox-backup-info")
+	if err := os.MkdirAll(infoDir, 0755); err != nil {
+		return err
+	}
+
+	version := strings.TrimSpace(stats.Version)
+	if version == "" {
+		version = "0.0.0"
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString("# Proxmox Backup Metadata\n")
+	builder.WriteString("# This file enables selective restore functionality in newer restore scripts\n")
+	builder.WriteString(fmt.Sprintf("VERSION=%s\n", version))
+	builder.WriteString(fmt.Sprintf("BACKUP_TYPE=%s\n", stats.ProxmoxType.String()))
+	builder.WriteString(fmt.Sprintf("TIMESTAMP=%s\n", stats.Timestamp))
+	builder.WriteString(fmt.Sprintf("HOSTNAME=%s\n", stats.Hostname))
+	builder.WriteString("SUPPORTS_SELECTIVE_RESTORE=true\n")
+	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
+
+	target := filepath.Join(infoDir, "backup_metadata.txt")
+	if err := os.WriteFile(target, []byte(builder.String()), 0640); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
+	cc.BackupVMConfigs = cfg.BackupVMConfigs
+	cc.BackupClusterConfig = cfg.BackupClusterConfig
+	cc.BackupPVEFirewall = cfg.BackupPVEFirewall
+	cc.BackupVZDumpConfig = cfg.BackupVZDumpConfig
+	cc.BackupPVEACL = cfg.BackupPVEACL
+	cc.BackupPVEJobs = cfg.BackupPVEJobs
+	cc.BackupPVESchedules = cfg.BackupPVESchedules
+	cc.BackupPVEReplication = cfg.BackupPVEReplication
+	cc.BackupPVEBackupFiles = cfg.BackupPVEBackupFiles
+	cc.BackupSmallPVEBackups = cfg.BackupSmallPVEBackups
+	cc.MaxPVEBackupSizeBytes = cfg.MaxPVEBackupSizeBytes
+	cc.PVEBackupIncludePattern = cfg.PVEBackupIncludePattern
+	cc.BackupCephConfig = cfg.BackupCephConfig
+	cc.CephConfigPath = cfg.CephConfigPath
+
+	cc.BackupDatastoreConfigs = cfg.BackupDatastoreConfigs
+	cc.BackupUserConfigs = cfg.BackupUserConfigs
+	cc.BackupRemoteConfigs = cfg.BackupRemoteConfigs
+	cc.BackupSyncJobs = cfg.BackupSyncJobs
+	cc.BackupVerificationJobs = cfg.BackupVerificationJobs
+	cc.BackupTapeConfigs = cfg.BackupTapeConfigs
+	cc.BackupPruneSchedules = cfg.BackupPruneSchedules
+	cc.BackupPxarFiles = cfg.BackupPxarFiles
+
+	cc.BackupNetworkConfigs = cfg.BackupNetworkConfigs
+	cc.BackupAptSources = cfg.BackupAptSources
+	cc.BackupCronJobs = cfg.BackupCronJobs
+	cc.BackupSystemdServices = cfg.BackupSystemdServices
+	cc.BackupSSLCerts = cfg.BackupSSLCerts
+	cc.BackupSysctlConfig = cfg.BackupSysctlConfig
+	cc.BackupKernelModules = cfg.BackupKernelModules
+	cc.BackupFirewallRules = cfg.BackupFirewallRules
+	cc.BackupInstalledPackages = cfg.BackupInstalledPackages
+	cc.BackupScriptDir = cfg.BackupScriptDir
+	cc.BackupCriticalFiles = cfg.BackupCriticalFiles
+	cc.BackupSSHKeys = cfg.BackupSSHKeys
+	cc.BackupZFSConfig = cfg.BackupZFSConfig
+	cc.BackupRootHome = cfg.BackupRootHome
+	cc.BackupScriptRepository = cfg.BackupScriptRepository
+	cc.BackupUserHomes = cfg.BackupUserHomes
+	cc.BackupConfigFile = cfg.BackupConfigFile
+	cc.ScriptRepositoryPath = cfg.BaseDir
+	if cfg.PxarDatastoreConcurrency > 0 {
+		cc.PxarDatastoreConcurrency = cfg.PxarDatastoreConcurrency
+	}
+	if cfg.PxarIntraConcurrency > 0 {
+		cc.PxarIntraConcurrency = cfg.PxarIntraConcurrency
+	}
+	if cfg.PxarScanFanoutLevel > 0 {
+		cc.PxarScanFanoutLevel = cfg.PxarScanFanoutLevel
+	}
+	if cfg.PxarScanMaxRoots > 0 {
+		cc.PxarScanMaxRoots = cfg.PxarScanMaxRoots
+	}
+	cc.PxarStopOnCap = cfg.PxarStopOnCap
+	if cfg.PxarEnumWorkers > 0 {
+		cc.PxarEnumWorkers = cfg.PxarEnumWorkers
+	}
+	if cfg.PxarEnumBudgetMs >= 0 {
+		cc.PxarEnumBudgetMs = cfg.PxarEnumBudgetMs
+	}
+	cc.PxarFileIncludePatterns = append([]string(nil), cfg.PxarFileIncludePatterns...)
+	cc.PxarFileExcludePatterns = append([]string(nil), cfg.PxarFileExcludePatterns...)
+
+	cc.CustomBackupPaths = append([]string(nil), cfg.CustomBackupPaths...)
+	cc.BackupBlacklist = append([]string(nil), cfg.BackupBlacklist...)
+
+	cc.ConfigFilePath = cfg.ConfigPath
+
+	cc.PVEConfigPath = cfg.PVEConfigPath
+	cc.PVEClusterPath = cfg.PVEClusterPath
+	cc.CorosyncConfigPath = cfg.CorosyncConfigPath
+	cc.VzdumpConfigPath = cfg.VzdumpConfigPath
+	cc.PBSDatastorePaths = append([]string(nil), cfg.PBSDatastorePaths...)
+
+	// Pass PBS authentication (auto-detected, zero user input)
+	cc.PBSRepository = cfg.PBSRepository
+	cc.PBSPassword = cfg.PBSPassword
+	cc.PBSFingerprint = cfg.PBSFingerprint
+}
+func copyFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
