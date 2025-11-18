@@ -49,12 +49,7 @@ var (
 )
 
 func main() {
-	code := run()
-	status := notify.StatusFromExitCode(code)
-	statusLabel := strings.ToUpper(status.String())
-	emoji := notify.GetStatusEmoji(status)
-	logging.Info("Final exit status: %s %s (code=%d)", emoji, statusLabel, code)
-	os.Exit(code)
+	os.Exit(run())
 }
 
 var closeStdinOnce sync.Once
