@@ -1,4 +1,4 @@
-# 🔄 Proxmox Backup PBS & PVE System Files - GO Version
+# 🔄 Proxmox Backup PBS & PVE System Files - GO
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8.svg?logo=go)](https://golang.org/)
@@ -112,7 +112,7 @@
 
 ### 1-Minute Setup
 
-1. Navigate to installation directory
+1. Download & start Install
 ```bash
 cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --install
 ```
