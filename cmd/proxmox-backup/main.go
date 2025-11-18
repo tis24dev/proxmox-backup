@@ -949,36 +949,55 @@ func run() int {
 	}
 	fmt.Println()
 
-	// Summary
-	summarySig := buildSignature()
-	if summarySig == "" {
-		summarySig = "unknown"
-	}
-	fmt.Println("===========================================")
-	fmt.Printf("Proxmox Backup Script - Go - %s\n", summarySig)
-	fmt.Println("===========================================")
-fmt.Println()
-fmt.Println("\033[31mEXTRA STEP - IF YOU FIND THIS TOOL USEFUL AND WANT TO THANK ME, A COFFEE IS ALWAYS WELCOME!\033[0m")
-fmt.Println("https://buymeacoffee.com/tis24dev")
-fmt.Println()
-fmt.Println("Commands:")
-fmt.Println("  proxmox-backup     - Start backup")
-fmt.Println("  make test          - Run all tests")
-fmt.Println("  make build         - Build binary")
-fmt.Println("  --help             - Show all options")
-	fmt.Println("  --dry-run          - Test without changes")
-	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
-	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
-	fmt.Println("  --newkey           - Generate a new encryption key for backups")
-	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
-	fmt.Println("  --restore          - Restore data from a decrypted backup")
-	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
-	fmt.Println()
+		// Summary (colorized by final exit code)
+		summarySig := buildSignature()
+		if summarySig == "" {
+			summarySig = "unknown"
+		}
 
-	return finalExitCode
-}
+		colorReset := "\033[0m"
+		color := ""
+		switch finalExitCode {
+		case 0:
+			color = "\033[32m" // green
+		case 1:
+			color = "\033[33m" // yellow
+		case 2:
+			color = "\033[31m" // red
+		}
+
+		if color != "" {
+			fmt.Printf("%s===========================================\n", color)
+			fmt.Printf("Proxmox Backup Script - Go - %s\n", summarySig)
+			fmt.Printf("===========================================%s\n", colorReset)
+		} else {
+			fmt.Println("===========================================")
+			fmt.Printf("Proxmox Backup Script - Go - %s\n", summarySig)
+			fmt.Println("===========================================")
+		}
+
+		fmt.Println()
+		fmt.Println("\033[31mEXTRA STEP - IF YOU FIND THIS TOOL USEFUL AND WANT TO THANK ME, A COFFEE IS ALWAYS WELCOME!\033[0m")
+		fmt.Println("https://buymeacoffee.com/tis24dev")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  proxmox-backup     - Start backup")
+		fmt.Println("  make test          - Run all tests")
+		fmt.Println("  make build         - Build binary")
+		fmt.Println("  --help             - Show all options")
+		fmt.Println("  --dry-run          - Test without changes")
+		fmt.Println("  --install          - Re-run interactive installation/setup")
+		fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
+		fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
+		fmt.Println("  --newkey           - Generate a new encryption key for backups")
+		fmt.Println("  --decrypt          - Decrypt an existing backup archive")
+		fmt.Println("  --restore          - Restore data from a decrypted backup")
+		fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
+		fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
+		fmt.Println()
+
+		return finalExitCode
+	}
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).
 func checkGoRuntimeVersion(min string) error {
