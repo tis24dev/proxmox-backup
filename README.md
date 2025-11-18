@@ -15,6 +15,14 @@
 
 ---
 
+### New features!!
+
+Advanced AGE encryptio - Gotify and Webhook channels for notifications
+
+Intelligent backup rotation - Intelligent deletion of logs associated with specific backups
+
+---
+
 ## 📑 Table of Contents
 
 - [🎯 Introduction](#introduction)
