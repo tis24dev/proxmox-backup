@@ -112,22 +112,22 @@
 
 ### 1-Minute Setup
 
-# 1. Navigate to installation directory
+1. Navigate to installation directory
 ```bash
 cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --install
 ```
 
-# 2. OPTIONAL - Run igration installation from bash with old env file
+2. OPTIONAL - Run igration installation from bash with old env file
 ```bash
 ./build/proxmox-backup --env-migration
 ```
 
-# 3. Run your first backup with go version
+3. Run your first backup with go version
 ```bash
 ./build/proxmox-backup
 ```
 
-# 4. Check results
+4. Check results
 ```bash
 ls -lh backup/
 ```
@@ -373,42 +373,42 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 
 #### Option 2: Manual
 
-# Enter the /opt directory
+Enter the /opt directory
 ```bash
 cd /opt
 ```
 
-# Download the repository (stable release)
+Download the repository (stable release)
 ```bash
 wget https://github.com/tis24dev/proxmox-backup/archive/refs/tags/v0.7.4-bash.tar.gz
 ```
 
-# Create the script directory
+Create the script directory
 ```bash
 mkdir proxmox-backup
 ```
 
-# Extract the script files into the newly created directory, then delete the archive
+Extract the script files into the newly created directory, then delete the archive
 ```bash
 tar xzf v0.7.4-bash.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.4-bash.tar.gz
 ```
 
-# Enter the script directory
+Enter the script directory
 ```bash
 cd proxmox-backup
 ```
 
-# Start the installation (runs initial checks, creates symlinks, creates cron)
+Start the installation (runs initial checks, creates symlinks, creates cron)
 ```bash
 ./install.sh
 ```
 
-# Customize your settings
+Customize your settings
 ```bash
 nano env/backup.env
 ```
 
-# Run first backup
+Run first backup
 ```bash
 ./script/proxmox-backup.sh
 
