@@ -950,15 +950,22 @@ func run() int {
 	fmt.Println()
 
 	// Summary
+	summarySig := buildSignature()
+	if summarySig == "" {
+		summarySig = "unknown"
+	}
 	fmt.Println("===========================================")
-	fmt.Println("Status: Phase 5.1 Notifications")
+	fmt.Printf("Proxmox Backup Script - Go - %s\n", summarySig)
 	fmt.Println("===========================================")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  proxmox-backup     - Start backup")
-	fmt.Println("  make test          - Run all tests")
-	fmt.Println("  make build         - Build binary")
-	fmt.Println("  --help             - Show all options")
+fmt.Println()
+fmt.Println("\033[31mEXTRA STEP - IF YOU FIND THIS TOOL USEFUL AND WANT TO THANK ME, A COFFEE IS ALWAYS WELCOME!\033[0m")
+fmt.Println("https://buymeacoffee.com/tis24dev")
+fmt.Println()
+fmt.Println("Commands:")
+fmt.Println("  proxmox-backup     - Start backup")
+fmt.Println("  make test          - Run all tests")
+fmt.Println("  make build         - Build binary")
+fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
