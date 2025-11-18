@@ -770,13 +770,20 @@ func run() int {
 
 	fmt.Println()
 
-	// Validate bash scripts exist
-	logging.Info("Validating bash script environment...")
-	if utils.DirExists(bashScriptPath) {
-		logging.Info("✓ Bash scripts directory exists: %s", bashScriptPath)
+	useGoPipeline := cfg.EnableGoBackup
+
+	// Validate / report hybrid (bash) mode
+	if useGoPipeline {
+		// Go pipeline attiva: gli script bash non sono richiesti
+		logging.Skip("Hybrid mode: disabled")
 	} else {
-		logging.Warning("✗ Bash scripts directory not found: %s", bashScriptPath)
-		logging.Warning("  Hybrid mode may not work correctly")
+		if utils.DirExists(bashScriptPath) {
+			logging.Info("Validating bash script environment...")
+			logging.Info("✓ Bash scripts directory exists: %s", bashScriptPath)
+		} else {
+			logging.Info("✗ Bash scripts directory not found: %s", bashScriptPath)
+			logging.Skip("Hybrid mode: disabled")
+		}
 	}
 	fmt.Println()
 
@@ -827,7 +834,6 @@ func run() int {
 	logging.Info("  Metrics: %v", cfg.MetricsEnabled)
 	fmt.Println()
 
-	useGoPipeline := cfg.EnableGoBackup
 	if useGoPipeline {
 		logging.Debug("Go backup pipeline enabled")
 	} else {
@@ -1719,6 +1725,16 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	newCommandToken := "/usr/local/bin/proxmox-backup"
+	if _, err := os.Stat(newCommandToken); err != nil {
+		fallback := strings.TrimSpace(execPath)
+		if fallback != "" {
+			bootstrap.Info("Symlink %s not found, falling back to %s for cron entries", newCommandToken, fallback)
+			newCommandToken = fallback
+		} else {
+			bootstrap.Warning("WARNING: Unable to locate Go binary for cron migration")
+			return
+		}
+	}
 
 	// Read current root crontab via "crontab -l".
 	readCron := func() (string, error) {

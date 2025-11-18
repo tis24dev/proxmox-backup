@@ -159,23 +159,37 @@ ls -lh backup/
 
 ```bash
 # Install Go (if building from source)
-wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.25.4.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.25.4.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Install rclone (for cloud storage)
-curl https://rclone.org/install.sh | sudo bash
+curl https://rclone.org/install.sh | bash
+
+# Install git
+apt update && apt install -y git
+
+# Install make
+apt update && apt install -y make
 
 # Verify installations
 go version    # Should show go1.21+
 rclone version  # Should show rclone v1.50+
+git --version # Should show git 2.47.3+
+make --version # Should show make 4.4.1+
 ```
 
 ### Building from Source
 
 ```bash
-# Clone or navigate to project directory
+# Create folder
+mkdir /opt/proxmox-backup
+
+# Navigate to project directory
 cd /opt/proxmox-backup
+
+# Copy from github
+git clone --branch main https://github.com/tis24dev/proxmox-backup.git .
 
 # Initialize Go module
 go mod init github.com/tis24dev/proxmox-backup
