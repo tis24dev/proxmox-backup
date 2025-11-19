@@ -149,6 +149,12 @@ func run() int {
 	// Handle install wizard (runs before normal execution)
 	if args.Install {
 		if err := runInstall(ctx, args.ConfigPath, bootstrap); err != nil {
+			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
+			// and already summarized by the install footer.
+			if isInstallAbortedError(err) {
+				bootstrap.Warning("Installation aborted by user")
+				return types.ExitSuccess.Int()
+			}
 			bootstrap.Error("ERROR: %v", err)
 			return types.ExitConfigError.Int()
 		}

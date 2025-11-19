@@ -18,10 +18,6 @@ import (
 )
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
-	if err := ensureInteractiveStdin(); err != nil {
-		return err
-	}
-
 	resolvedPath, err := resolveInstallConfigPath(configPath)
 	if err != nil {
 		return err
@@ -36,6 +32,18 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 
+	var telegramCode string
+	var installErr error
+
+	defer func() {
+		printInstallFooter(installErr, configPath, baseDir, telegramCode)
+	}()
+
+	if err := ensureInteractiveStdin(); err != nil {
+		installErr = err
+		return installErr
+	}
+
 	tmpConfigPath := configPath + ".tmp"
 	defer func() {
 		if _, err := os.Stat(tmpConfigPath); err == nil {
@@ -48,21 +56,26 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	template, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
-		return wrapInstallError(err)
+		installErr = wrapInstallError(err)
+		return installErr
 	}
 
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
-		return wrapInstallError(err)
+		installErr = wrapInstallError(err)
+		return installErr
 	}
 	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
-		return wrapInstallError(err)
+		installErr = wrapInstallError(err)
+		return installErr
 	}
 	if template, err = configureNotifications(ctx, reader, template); err != nil {
-		return wrapInstallError(err)
+		installErr = wrapInstallError(err)
+		return installErr
 	}
 	enableEncryption, err := configureEncryption(ctx, reader, &template)
 	if err != nil {
-		return wrapInstallError(err)
+		installErr = wrapInstallError(err)
+		return installErr
 	}
 
 	// Ensure BASE_DIR is explicitly present in the generated env file so that
@@ -70,17 +83,20 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	template = setEnvValue(template, "BASE_DIR", baseDir)
 
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
-		return err
+		installErr = err
+		return installErr
 	}
 	bootstrap.Info("✓ Configuration saved at %s", configPath)
 
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
-		return fmt.Errorf("install documentation: %w", err)
+		installErr = fmt.Errorf("install documentation: %w", err)
+		return installErr
 	}
 
 	if enableEncryption {
 		if err := runInitialEncryptionSetup(ctx, configPath); err != nil {
-			return err
+			installErr = err
+			return installErr
 		}
 	}
 
@@ -101,23 +117,53 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	// Attempt to resolve or create a server identity so that we can show a
 	// Telegram pairing code to the user (similar to the legacy installer).
-	var telegramCode string
 	if info, err := identity.Detect(baseDir, nil); err == nil {
 		if code := strings.TrimSpace(info.ServerID); code != "" {
 			telegramCode = code
 		}
 	}
 
+	installErr = nil
+	return nil
+}
+
+func printInstallFooter(installErr error, configPath, baseDir, telegramCode string) {
+	colorReset := "\033[0m"
+
+	title := "Go-based installation completed"
+	color := "\033[32m" // green by default
+
+	if installErr != nil {
+		if isInstallAbortedError(installErr) {
+			// User-driven abort (Ctrl+C, exit, setup aborted) -> SKIP color
+			color = "\033[35m"
+			title = "Go-based installation aborted"
+		} else {
+			// Any other error -> red
+			color = "\033[31m"
+			title = "Go-based installation failed"
+		}
+	}
+
 	fmt.Println()
-	fmt.Println("================================================")
-	fmt.Println(" Go-based installation completed ")
-	fmt.Println("================================================")
+	fmt.Printf("%s================================================\n", color)
+	fmt.Printf(" %s\n", title)
+	fmt.Printf("================================================%s\n", colorReset)
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("0. If you need, start migration from old backup.env:  proxmox-backup --env-migration")
-	fmt.Printf("1. Edit configuration: %s\n", configPath)
-	fmt.Println("2. Run first backup: proxmox-backup")
-	fmt.Printf("3. Check logs: tail -f %s/log/*.log\n", baseDir)
+	if strings.TrimSpace(configPath) != "" {
+		fmt.Printf("1. Edit configuration: %s\n", configPath)
+	} else {
+		fmt.Println("1. Edit configuration: <configuration path unavailable>")
+	}
+	if strings.TrimSpace(baseDir) != "" {
+		fmt.Println("2. Run first backup: proxmox-backup")
+		fmt.Printf("3. Check logs: tail -f %s/log/*.log\n", baseDir)
+	} else {
+		fmt.Println("2. Run first backup: proxmox-backup")
+		fmt.Println("3. Check logs: tail -f /opt/proxmox-backup/log/*.log")
+	}
 	if telegramCode != "" {
 		fmt.Printf("4. Telegram: Open @ProxmoxAN_bot and enter code: %s\n", telegramCode)
 	} else {
@@ -140,8 +186,6 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
 	fmt.Println()
-
-	return nil
 }
 
 func printInstallBanner(configPath string) {
@@ -303,7 +347,8 @@ func runInitialEncryptionSetup(ctx context.Context, configPath string) error {
 	orch.SetConfig(cfg)
 	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
-			return fmt.Errorf("encryption setup aborted by user")
+			// Treat AGE wizard abort as an interactive abort for install UX
+			return fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)
 		}
 		return fmt.Errorf("encryption setup failed: %w", err)
 	}
@@ -315,7 +360,28 @@ func wrapInstallError(err error) error {
 		return nil
 	}
 	if errors.Is(err, errInteractiveAborted) {
-		return fmt.Errorf("installation aborted by user")
+		// Preserve sentinel so callers can detect user-aborted installs with errors.Is
+		return fmt.Errorf("installation aborted by user: %w", err)
 	}
 	return err
+}
+
+func isInstallAbortedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errInteractiveAborted) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "installation aborted by user") {
+		return true
+	}
+	if strings.Contains(msg, "installation aborted (existing configuration kept)") {
+		return true
+	}
+	if strings.Contains(msg, "encryption setup aborted by user") {
+		return true
+	}
+	return false
 }
