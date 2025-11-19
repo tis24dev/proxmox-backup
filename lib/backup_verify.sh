@@ -517,7 +517,13 @@ verify_backup() {
 # Optimized backup consistency verification
 verify_backup_consistency() {
     step "Verifying backup consistency across storage locations"
-    
+
+    # Handle dry run mode
+    if [ "$DRY_RUN_MODE" == "true" ]; then
+        info "Dry run mode: Skipping backup consistency verification"
+        return $EXIT_SUCCESS
+    fi
+
     local verify_errors=0
     local start_time=$(date +%s)
     
