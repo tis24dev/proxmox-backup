@@ -371,6 +371,24 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		}
 	}
 
+	// ZFS configuration files
+	if c.config.BackupZFSConfig {
+		c.logger.Debug("Collecting ZFS configuration (/etc/zfs, /etc/hostid)")
+		if err := c.safeCopyDir(ctx,
+			"/etc/zfs",
+			filepath.Join(c.tempDir, "etc/zfs"),
+			"ZFS configuration"); err != nil {
+			c.logger.Warning("Failed to collect /etc/zfs: %v", err)
+		}
+
+		if err := c.safeCopyFile(ctx,
+			"/etc/hostid",
+			filepath.Join(c.tempDir, "etc/hostid"),
+			"ZFS host identifier"); err != nil {
+			c.logger.Warning("Failed to collect /etc/hostid: %v", err)
+		}
+	}
+
 	// Firewall rules (iptables/nftables)
 	if c.config.BackupFirewallRules {
 		c.logger.Debug("Collecting firewall rules (/etc/iptables, nftables)")

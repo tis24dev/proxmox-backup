@@ -1449,7 +1449,7 @@ BACKUP_CRITICAL_FILES=true         # /etc/fstab, /etc/hostname, /etc/resolv.conf
 BACKUP_SSH_KEYS=true               # /root/.ssh
 
 # ZFS configuration
-BACKUP_ZFS_CONFIG=true             # zpool.cache, zfs properties
+BACKUP_ZFS_CONFIG=true             # /etc/zfs, /etc/hostid, zpool cache & properties
 
 # Root home directory
 BACKUP_ROOT_HOME=true              # /root (excluding .cache, .local/share/Trash)
@@ -2489,6 +2489,7 @@ BACKUP_SSL_CERTS=true
 BACKUP_CRITICAL_FILES=true
 BACKUP_SSH_KEYS=true
 BACKUP_ZFS_CONFIG=true
+# Includes /etc/zfs, /etc/hostid and command snapshots for zpool/zfs
 BACKUP_ROOT_HOME=true
 
 # Custom paths

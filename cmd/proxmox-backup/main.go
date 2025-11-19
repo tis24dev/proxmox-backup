@@ -32,13 +32,13 @@ import (
 )
 
 const (
-	version                    = "0.9.0" // Semantic version format required by cloud relay worker
-	defaultLegacyEnvPath       = "/opt/proxmox-backup/env/backup.env"
-	goRuntimeMinVersion        = "1.25.4"
-	networkPreflightTimeout    = 2 * time.Second
-	bytesPerMegabyte     int64 = 1024 * 1024
-	defaultDirPerm             = 0o755
-	exitCodeInterrupted        = 128 + int(syscall.SIGINT)
+	version                       = "0.9.0" // Semantic version format required by cloud relay worker
+	defaultLegacyEnvPath          = "/opt/proxmox-backup/env/backup.env"
+	goRuntimeMinVersion           = "1.25.4"
+	networkPreflightTimeout       = 2 * time.Second
+	bytesPerMegabyte        int64 = 1024 * 1024
+	defaultDirPerm                = 0o755
+	exitCodeInterrupted           = 128 + int(syscall.SIGINT)
 )
 
 // Build-time variables (injected via ldflags)
@@ -485,12 +485,16 @@ func run() int {
 		if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version); err != nil {
 			if errors.Is(err, orchestrator.ErrRestoreAborted) || errors.Is(err, orchestrator.ErrDecryptAborted) {
 				logging.Info("Restore workflow aborted by user")
-				return finalize(types.ExitSuccess.Int())
+				return finalize(exitCodeInterrupted)
 			}
 			logging.Error("Restore workflow failed: %v", err)
 			return finalize(types.ExitGenericError.Int())
 		}
-		logging.Info("Restore workflow completed successfully")
+		if logger.HasWarnings() {
+			logging.Warning("Restore workflow completed with warnings (see log above)")
+		} else {
+			logging.Info("Restore workflow completed successfully")
+		}
 		return finalize(types.ExitSuccess.Int())
 	}
 
@@ -1019,15 +1023,20 @@ func printFinalSummary(finalExitCode int) {
 
 	colorReset := "\033[0m"
 	color := ""
-	switch finalExitCode {
-	case 0:
-		color = "\033[32m" // green
-	case 1:
-		color = "\033[33m" // yellow
-	case exitCodeInterrupted:
+	logger := logging.GetDefaultLogger()
+	hasWarnings := logger != nil && logger.HasWarnings()
+
+	switch {
+	case finalExitCode == exitCodeInterrupted:
 		color = "\033[35m" // magenta for Ctrl+C
+	case finalExitCode == 0 && hasWarnings:
+		color = "\033[33m" // yellow for success with warnings
+	case finalExitCode == 0:
+		color = "\033[32m" // green for clean success
+	case finalExitCode == types.ExitGenericError.Int():
+		color = "\033[33m" // yellow for generic error (non-fatal)
 	default:
-		color = "\033[31m" // red
+		color = "\033[31m" // red for all other errors
 	}
 
 	if color != "" {

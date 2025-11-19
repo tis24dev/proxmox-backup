@@ -12,12 +12,14 @@ import (
 
 // Logger gestisce il logging dell'applicazione
 type Logger struct {
-	mu         sync.Mutex
-	level      types.LogLevel
-	useColor   bool
-	output     io.Writer
-	timeFormat string
-	logFile    *os.File // File di log (opzionale)
+	mu           sync.Mutex
+	level        types.LogLevel
+	useColor     bool
+	output       io.Writer
+	timeFormat   string
+	logFile      *os.File // File di log (opzionale)
+	warningCount int64
+	errorCount   int64
 }
 
 // New crea un nuovo logger
@@ -115,6 +117,14 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		return
 	}
 
+	// Track warning/error counters for summary/exit coloring
+	switch level {
+	case types.LogLevelWarning:
+		l.warningCount++
+	case types.LogLevelError, types.LogLevelCritical:
+		l.errorCount++
+	}
+
 	timestamp := time.Now().Format(l.timeFormat)
 	levelStr := level.String()
 	if label != "" {
@@ -168,6 +178,20 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 	if l.logFile != nil {
 		fmt.Fprint(l.logFile, outputFile)
 	}
+}
+
+// HasWarnings returns true if at least one warning was logged.
+func (l *Logger) HasWarnings() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warningCount > 0
+}
+
+// HasErrors returns true if at least one error or critical message was logged.
+func (l *Logger) HasErrors() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.errorCount > 0
 }
 
 // Debug scrive un log di debug

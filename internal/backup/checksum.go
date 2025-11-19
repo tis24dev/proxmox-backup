@@ -186,6 +186,8 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 			legacy.Hostname = value
 		case "SCRIPT_VERSION":
 			legacy.ScriptVersion = value
+		case "ENCRYPTION_MODE":
+			legacy.EncryptionMode = value
 		}
 	}
 
@@ -194,6 +196,17 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 		fields := strings.Fields(string(shaData))
 		if len(fields) > 0 {
 			legacy.SHA256 = fields[0]
+		}
+	}
+
+	// Fallback: infer encryption from file extension if not specified in metadata
+	if legacy.EncryptionMode == "" {
+		// Get the actual archive path (remove .metadata suffix)
+		actualArchivePath := strings.TrimSuffix(archivePath, ".metadata")
+		if strings.HasSuffix(actualArchivePath, ".age") {
+			legacy.EncryptionMode = "age"
+		} else {
+			legacy.EncryptionMode = "plain"
 		}
 	}
 

@@ -270,14 +270,24 @@ func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCa
 				continue
 			}
 			checksumPath := archivePath + ".sha256"
+			hasChecksum := true
 			if _, err := os.Stat(checksumPath); err != nil {
-				continue
+				// Checksum missing - allow but warn
+				logger.Warning("Backup %s is missing .sha256 checksum file", baseName)
+				checksumPath = ""
+				hasChecksum = false
 			}
 			manifest, err := backup.LoadManifest(fullPath)
 			if err != nil {
 				logger.Warning("Skipping metadata %s: %v", name, err)
 				continue
 			}
+
+			// If checksum is missing from both file and manifest, warn user
+			if !hasChecksum && manifest.SHA256 == "" {
+				logger.Warning("Backup %s has no checksum verification available", baseName)
+			}
+
 			rawBases[baseName] = struct{}{}
 			candidates = append(candidates, &decryptCandidate{
 				Manifest:        manifest,
@@ -432,10 +442,15 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 			return nil, err
 		}
 	} else {
-		if err := copyFile(staged.ArchivePath, plainArchivePath); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("copy archive: %w", err)
+		// For plain archives, only copy if source and destination are different
+		// to avoid truncating the file when copying to itself
+		if staged.ArchivePath != plainArchivePath {
+			if err := copyFile(staged.ArchivePath, plainArchivePath); err != nil {
+				cleanup()
+				return nil, fmt.Errorf("copy archive: %w", err)
+			}
 		}
+		// If paths are identical, file is already in the correct location
 	}
 
 	archiveInfo, err := os.Stat(plainArchivePath)
