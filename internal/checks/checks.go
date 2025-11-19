@@ -433,8 +433,9 @@ func (c *Checker) CheckDiskSpaceForEstimate(estimatedSizeGB float64) CheckResult
 		availableGB, err := diskSpaceGB(entry.path)
 		if err != nil {
 			errMsg := fmt.Sprintf("%s disk space check failed (%s): %v", entry.label, entry.path, err)
+			wrappedErr := fmt.Errorf("%s disk space check failed (%s): %w", entry.label, entry.path, err)
 			if entry.critical {
-				result.Error = fmt.Errorf("%s", errMsg)
+				result.Error = wrappedErr
 				result.Message = errMsg
 				return result
 			}

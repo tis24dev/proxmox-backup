@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxmox-backup/internal/config"
+	"github.com/tis24dev/proxmox-backup/internal/types"
 )
 
 type commandCall struct {
@@ -396,5 +397,157 @@ func TestCloudStorageSkipsCloudLogsWhenPathMissing(t *testing.T) {
 	}
 	if len(queue.calls) != 1 {
 		t.Fatalf("expected no rclone delete when log path missing, got %d calls", len(queue.calls))
+	}
+}
+
+func TestCloudStorageMetadataHelpers(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:    true,
+		CloudRemote:     "remote",
+		CloudRemotePath: "tenant/projects",
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	if got := cs.Name(); got != "Cloud Storage (rclone)" {
+		t.Fatalf("Name() = %s", got)
+	}
+	if cs.Location() != LocationCloud {
+		t.Fatalf("Location() = %v, want %v", cs.Location(), LocationCloud)
+	}
+	if !cs.IsEnabled() {
+		t.Fatal("IsEnabled() returned false")
+	}
+	if cs.IsCritical() {
+		t.Fatal("cloud storage should be non-critical")
+	}
+	if got := cs.remoteRoot(); got != "remote:" {
+		t.Fatalf("remoteRoot() = %s", got)
+	}
+	if got := cs.remotePathFor("backups/full.tar.zst"); got != "remote:tenant/projects/backups/full.tar.zst" {
+		t.Fatalf("remotePathFor() = %s", got)
+	}
+
+	cfg.CloudEnabled = false
+	cfg.CloudRemote = ""
+	if cs.IsEnabled() {
+		t.Fatal("IsEnabled() should reflect config updates")
+	}
+}
+
+func TestRemoteDirRef(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{"root only", "remote:", "remote:"},
+		{"nested path", "remote:foo/bar/baz.tar", "remote:foo/bar"},
+		{"single file", "remote:file.tar", "remote:"},
+		{"no colon", "local", "local:"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := remoteDirRef(tt.ref); got != tt.want {
+				t.Fatalf("remoteDirRef(%q) = %q, want %q", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:          true,
+		CloudRemote:           "remote",
+		CloudBatchSize:        0,
+		CloudBatchPause:       0,
+		BundleAssociatedFiles: false,
+	}
+	cs := newCloudStorageForTest(cfg)
+	cs.sleep = func(time.Duration) {}
+	cs.setRemoteSnapshot(map[string]struct{}{
+		"alpha-backup.tar.zst": {},
+		"beta-backup.tar.zst":  {},
+	})
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup.tar.zst"}},
+			{name: "rclone", args: []string{"deletefile", "remote:beta-backup.tar.zst"}},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	now := time.Now()
+	backups := []*types.BackupMetadata{
+		{BackupFile: "alpha-backup.tar.zst", Timestamp: now.Add(-48 * time.Hour)},
+		{BackupFile: "beta-backup.tar.zst", Timestamp: now.Add(-72 * time.Hour)},
+	}
+	retentionCfg := RetentionConfig{Policy: "gfs", Daily: 0, Weekly: 0, Monthly: 0, Yearly: -1}
+
+	deleted, err := cs.applyGFSRetention(context.Background(), backups, retentionCfg)
+	if err != nil {
+		t.Fatalf("applyGFSRetention() error = %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("applyGFSRetention() deleted = %d, want 2", deleted)
+	}
+	if len(queue.calls) != 2 {
+		t.Fatalf("expected 2 delete commands, got %d", len(queue.calls))
+	}
+
+	summary := cs.LastRetentionSummary()
+	if summary.BackupsDeleted != 2 || summary.BackupsRemaining != 0 {
+		t.Fatalf("unexpected retention summary: %+v", summary)
+	}
+}
+
+func TestCloudStorageGetStatsSummarizesList(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "remote",
+	}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"lsl", "remote:"},
+				out: strings.TrimSpace(`
+10 2025-06-01 10:00:00 host-backup-20250601.tar.zst
+5 2025-05-30 08:00:00 host-backup-20250530.tar.zst
+`),
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	stats, err := cs.GetStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetStats() error = %v", err)
+	}
+	if stats.TotalBackups != 2 {
+		t.Fatalf("TotalBackups = %d, want 2", stats.TotalBackups)
+	}
+	if stats.TotalSize != 15 {
+		t.Fatalf("TotalSize = %d, want 15", stats.TotalSize)
+	}
+	if stats.FilesystemType != FilesystemType("rclone-remote") {
+		t.Fatalf("FilesystemType = %s", stats.FilesystemType)
+	}
+	layout := "2006-01-02 15:04:05"
+	newest, _ := time.Parse(layout, "2025-06-01 10:00:00")
+	oldest, _ := time.Parse(layout, "2025-05-30 08:00:00")
+	if stats.NewestBackup == nil || !stats.NewestBackup.Equal(newest) {
+		t.Fatalf("NewestBackup = %v, want %v", stats.NewestBackup, newest)
+	}
+	if stats.OldestBackup == nil || !stats.OldestBackup.Equal(oldest) {
+		t.Fatalf("OldestBackup = %v, want %v", stats.OldestBackup, oldest)
+	}
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected a single lsl call, got %d", len(queue.calls))
 	}
 }

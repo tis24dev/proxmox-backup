@@ -21,12 +21,16 @@ type BackupMetrics struct {
 	EndTime   time.Time
 	Duration  time.Duration
 
-	ExitCode     int
-	ErrorCount   int
-	WarningCount int
-	LocalBackups int
-	SecBackups   int
-	CloudBackups int
+	ExitCode       int
+	ErrorCount     int
+	WarningCount   int
+	LocalBackups   int
+	SecBackups     int
+	CloudBackups   int
+	BytesCollected int64
+	ArchiveSize    int64
+	FilesCollected int
+	FilesFailed    int
 }
 
 // PrometheusExporter writes backup metrics in Prometheus textfile format for node_exporter.
@@ -136,6 +140,34 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) error {
 		"gauge",
 		"Total number of warnings in last backup",
 		fmt.Sprintf("proxmox_backup_warnings_total %d", m.WarningCount),
+	)
+
+	writeMetric(
+		"proxmox_backup_bytes_collected",
+		"gauge",
+		"Total number of bytes collected during last backup",
+		fmt.Sprintf("proxmox_backup_bytes_collected %d", m.BytesCollected),
+	)
+
+	writeMetric(
+		"proxmox_backup_archive_size_bytes",
+		"gauge",
+		"Size of last backup archive in bytes",
+		fmt.Sprintf("proxmox_backup_archive_size_bytes %d", m.ArchiveSize),
+	)
+
+	writeMetric(
+		"proxmox_backup_files_collected_total",
+		"gauge",
+		"Total files successfully collected during last backup",
+		fmt.Sprintf("proxmox_backup_files_collected_total %d", m.FilesCollected),
+	)
+
+	writeMetric(
+		"proxmox_backup_files_failed_total",
+		"gauge",
+		"Total files that failed to collect during last backup",
+		fmt.Sprintf("proxmox_backup_files_failed_total %d", m.FilesFailed),
 	)
 
 	// Per-location backup counts

@@ -718,6 +718,9 @@ DEBUG_LEVEL=standard               # standard | advanced | extreme
 
 # Dry-run mode (test without changes)
 DRY_RUN=false                      # true | false
+
+# Enable/disable always-on pprof profiling (CPU + heap)
+PROFILING_ENABLED=true             # true | false (profiles written under LOG_PATH)
 ```
 
 **`DEBUG_LEVEL` details**:
@@ -1306,11 +1309,13 @@ METRICS_ENABLED=false              # true | false
 METRICS_PATH=${BASE_DIR}/metrics   # Empty = /var/lib/prometheus/node-exporter
 ```
 
+> ℹ️ Metrics export is available only for the Go pipeline (`ENABLE_GO_BACKUP=true`).
+
 **Output**: Creates `proxmox_backup.prom` in `METRICS_PATH` with:
-- Backup duration
-- Backup size
-- Success/failure counts
-- Storage usage
+- Backup duration and start/end timestamps
+- Archive size and raw bytes collected
+- Files collected/failed and success/failure status
+- Storage usage counters per location (local/secondary/cloud)
 
 **Integration**: Point Prometheus node_exporter to `METRICS_PATH`.
 

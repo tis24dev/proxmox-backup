@@ -387,7 +387,11 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 }
 
 func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (*preparedBundle, error) {
-	workDir, err := os.MkdirTemp("", "proxmox-decrypt-*")
+	tempRoot := filepath.Join("/tmp", "proxmox-backup")
+	if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create temp root: %w", err)
+	}
+	workDir, err := os.MkdirTemp(tempRoot, "proxmox-decrypt-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}

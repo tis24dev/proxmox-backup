@@ -34,6 +34,7 @@ type Config struct {
 	UseColor                 bool
 	ColorizeStepLogs         bool
 	EnableGoBackup           bool
+	ProfilingEnabled         bool
 	BaseDir                  string
 	DryRun                   bool
 	DisableNetworkPreflight  bool
@@ -285,6 +286,7 @@ func (c *Config) loadEnvOverrides() {
 	// List of all configuration keys that can be overridden by environment variables
 	envKeys := []string{
 		"BACKUP_ENABLED", "DRY_RUN", "DEBUG_LEVEL", "USE_COLOR", "COLORIZE_STEP_LOGS",
+		"PROFILING_ENABLED",
 		"COMPRESSION_TYPE", "COMPRESSION_LEVEL", "COMPRESSION_THREADS", "COMPRESSION_MODE",
 		"ENABLE_SMART_CHUNKING", "ENABLE_DEDUPLICATION", "ENABLE_PREFILTER",
 		"CHUNK_SIZE_MB", "CHUNK_THRESHOLD_MB", "PREFILTER_MAX_FILE_SIZE_MB",
@@ -329,6 +331,7 @@ func (c *Config) parse() error {
 	// General settings
 	c.BackupEnabled = c.getBool("BACKUP_ENABLED", true)
 	c.DryRun = c.getBool("DRY_RUN", false)
+	c.ProfilingEnabled = c.getBool("PROFILING_ENABLED", true)
 
 	// DEBUG_LEVEL: supporta sia numerico che string ("standard", "advanced", "extreme")
 	c.DebugLevel = c.getLogLevel("DEBUG_LEVEL", types.LogLevelInfo)

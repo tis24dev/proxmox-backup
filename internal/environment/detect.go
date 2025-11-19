@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -345,7 +346,11 @@ func dirExists(path string) bool {
 }
 
 func writeDetectionDebug() string {
-	path := fmt.Sprintf("/tmp/proxmox_detection_debug_%d.log", time.Now().Unix())
+	debugDir := filepath.Join("/tmp", "proxmox-backup")
+	if err := os.MkdirAll(debugDir, 0o755); err != nil {
+		return ""
+	}
+	path := filepath.Join(debugDir, fmt.Sprintf("proxmox_detection_debug_%d.log", time.Now().Unix()))
 
 	var builder strings.Builder
 	now := time.Now().Format("2006-01-02 15:04:05")

@@ -655,10 +655,46 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		stats.CloudStatus = "disabled"
 	}
 
+	metricsStats := stats
+	defer func() {
+		if metricsStats == nil || o.cfg == nil || !o.cfg.MetricsEnabled || o.dryRun {
+			return
+		}
+
+		if metricsStats.EndTime.IsZero() {
+			metricsStats.EndTime = time.Now()
+		}
+		if metricsStats.Duration == 0 && !metricsStats.StartTime.IsZero() {
+			metricsStats.Duration = metricsStats.EndTime.Sub(metricsStats.StartTime)
+		}
+
+		if err != nil {
+			var backupErr *BackupError
+			if errors.As(err, &backupErr) {
+				metricsStats.ExitCode = backupErr.Code.Int()
+			} else {
+				metricsStats.ExitCode = types.ExitGenericError.Int()
+			}
+		} else if metricsStats.ExitCode == 0 {
+			metricsStats.ExitCode = types.ExitSuccess.Int()
+		}
+
+		if m := metricsStats.toPrometheusMetrics(); m != nil {
+			exporter := metrics.NewPrometheusExporter(o.cfg.MetricsPath, o.logger)
+			if exportErr := exporter.Export(m); exportErr != nil {
+				o.logger.Warning("Failed to export Prometheus metrics: %v", exportErr)
+			}
+		}
+	}()
+
 	o.logger.Debug("Creating temporary directory for collection output")
 	// Create temporary directory for collection (outside backup path)
 	timestampStr := startTime.Format("20060102-150405")
-	tempDir, err := os.MkdirTemp("", fmt.Sprintf("proxmox-backup-%s-%s-", hostname, timestampStr))
+	tempRoot := filepath.Join("/tmp", "proxmox-backup")
+	if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create temporary root directory: %w", err)
+	}
+	tempDir, err := os.MkdirTemp(tempRoot, fmt.Sprintf("proxmox-backup-%s-%s-", hostname, timestampStr))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary directory: %w", err)
 	}
@@ -761,15 +797,19 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			o.logger.Debug("Disk check passed: %s", result.Message)
 		} else {
 			errMsg := result.Message
-			if errMsg == "" && result.Error != nil {
-				errMsg = result.Error.Error()
+			diskErr := result.Error
+			if errMsg == "" && diskErr != nil {
+				errMsg = diskErr.Error()
 			}
 			if errMsg == "" {
 				errMsg = "insufficient disk space"
 			}
+			if diskErr == nil {
+				diskErr = errors.New(errMsg)
+			}
 			return nil, &BackupError{
 				Phase: "disk",
-				Err:   fmt.Errorf("%s", errMsg),
+				Err:   fmt.Errorf("disk space validation failed: %w", diskErr),
 				Code:  types.ExitDiskSpaceError,
 			}
 		}
@@ -1031,30 +1071,6 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	fmt.Println()
 	o.logger.Debug("Go backup completed in %s", backup.FormatDuration(stats.Duration))
 
-	// Export Prometheus metrics via node_exporter textfile, if enabled.
-	if o.cfg != nil && o.cfg.MetricsEnabled && !o.dryRun {
-		m := &metrics.BackupMetrics{
-			Hostname:       stats.Hostname,
-			ProxmoxType:    stats.ProxmoxType.String(),
-			ProxmoxVersion: stats.ProxmoxVersion,
-			ScriptVersion:  stats.ScriptVersion,
-			StartTime:      stats.StartTime,
-			EndTime:        stats.EndTime,
-			Duration:       stats.Duration,
-			ExitCode:       stats.ExitCode,
-			ErrorCount:     stats.ErrorCount,
-			WarningCount:   stats.WarningCount,
-			LocalBackups:   stats.LocalBackups,
-			SecBackups:     stats.SecondaryBackups,
-			CloudBackups:   stats.CloudBackups,
-		}
-
-		exporter := metrics.NewPrometheusExporter(o.cfg.MetricsPath, o.logger)
-		if err := exporter.Export(m); err != nil {
-			o.logger.Warning("Failed to export Prometheus metrics: %v", err)
-		}
-	}
-
 	return stats, nil
 }
 
@@ -1107,6 +1123,32 @@ func (s *BackupStats) updateCompressionMetrics() {
 		savings = 0
 	}
 	s.CompressionSavingsPercent = savings
+}
+
+func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
+	if s == nil {
+		return nil
+	}
+
+	return &metrics.BackupMetrics{
+		Hostname:       s.Hostname,
+		ProxmoxType:    s.ProxmoxType.String(),
+		ProxmoxVersion: s.ProxmoxVersion,
+		ScriptVersion:  s.ScriptVersion,
+		StartTime:      s.StartTime,
+		EndTime:        s.EndTime,
+		Duration:       s.Duration,
+		ExitCode:       s.ExitCode,
+		ErrorCount:     s.ErrorCount,
+		WarningCount:   s.WarningCount,
+		LocalBackups:   s.LocalBackups,
+		SecBackups:     s.SecondaryBackups,
+		CloudBackups:   s.CloudBackups,
+		BytesCollected: s.BytesCollected,
+		ArchiveSize:    s.ArchiveSize,
+		FilesCollected: s.FilesCollected,
+		FilesFailed:    s.FilesFailed,
+	}
 }
 
 func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {

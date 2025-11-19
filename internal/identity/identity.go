@@ -21,7 +21,8 @@ import (
 const (
 	identityDirName       = "identity"
 	identityFileName      = ".server_identity"
-	fallbackIdentityPath  = "/tmp/.proxmox_backup_identity"
+	fallbackIdentityDir   = "/tmp/proxmox-backup"
+	fallbackIdentityPath  = fallbackIdentityDir + "/.proxmox_backup_identity"
 	maxProcVersionBytes   = 100
 	maxMachineIDBytes     = 32
 	systemKeyPrefixLength = 8
@@ -52,9 +53,12 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 		identityDir := filepath.Join(baseDir, identityDirName)
 		if err := os.MkdirAll(identityDir, 0o755); err != nil {
 			logWarning(logger, "Failed to create identity directory %s: %v (falling back to %s)", identityDir, err, fallbackIdentityPath)
+			_ = os.MkdirAll(fallbackIdentityDir, 0o755)
 		} else {
 			identityPath = filepath.Join(identityDir, identityFileName)
 		}
+	} else {
+		_ = os.MkdirAll(fallbackIdentityDir, 0o755)
 	}
 	info.IdentityFile = identityPath
 
@@ -76,6 +80,7 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 		if identityPath != fallbackIdentityPath {
 			logWarning(logger, "Failed to write server identity file %s: %v (retrying in %s)", identityPath, err, fallbackIdentityPath)
 			info.IdentityFile = fallbackIdentityPath
+			_ = os.MkdirAll(fallbackIdentityDir, 0o755)
 			if err2 := writeIdentityFile(fallbackIdentityPath, encodedFile); err2 != nil {
 				return info, fmt.Errorf("failed to persist server identity: %w", err2)
 			}
