@@ -15,6 +15,15 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 )
 
+const (
+	defaultChunkSizeBytes        = 10 * 1024 * 1024
+	defaultChunkThresholdBytes   = 50 * 1024 * 1024
+	defaultPrefilterMaxSizeBytes = 8 * 1024 * 1024
+	chunkBufferSize              = 1 << 20 // 1 MiB
+	defaultChunkDirPerm          = 0o755
+	defaultChunkFilePerm         = 0o640
+)
+
 // OptimizationConfig controls optional preprocessing steps executed before archiving.
 type OptimizationConfig struct {
 	EnableChunking            bool
@@ -151,15 +160,15 @@ func replaceWithSymlink(target, duplicate string) error {
 
 func chunkLargeFiles(ctx context.Context, logger *logging.Logger, root string, chunkSize, threshold int64) error {
 	if chunkSize <= 0 {
-		chunkSize = 10 * 1024 * 1024
+		chunkSize = defaultChunkSizeBytes
 	}
 	if threshold <= 0 {
-		threshold = 50 * 1024 * 1024
+		threshold = defaultChunkThresholdBytes
 	}
 	logger.Debug("Scanning %s for files >= %d bytes to chunk (chunk size %d)", root, threshold, chunkSize)
 
 	chunkDir := filepath.Join(root, "chunked_files")
-	if err := os.MkdirAll(chunkDir, 0755); err != nil {
+	if err := os.MkdirAll(chunkDir, defaultChunkDirPerm); err != nil {
 		return fmt.Errorf("create chunk dir: %w", err)
 	}
 
@@ -201,7 +210,7 @@ func chunkLargeFiles(ctx context.Context, logger *logging.Logger, root string, c
 
 		if err := os.Remove(path); err != nil {
 			logger.Warning("Failed to remove original file %s after chunking: %v", path, err)
-		} else if err := os.WriteFile(path+".chunked", []byte{}, 0640); err != nil {
+		} else if err := os.WriteFile(path+".chunked", []byte{}, defaultChunkFilePerm); err != nil {
 			logger.Warning("Failed to write chunk marker for %s: %v", path, err)
 		}
 		processed++
@@ -218,7 +227,7 @@ func chunkLargeFiles(ctx context.Context, logger *logging.Logger, root string, c
 }
 
 func splitFile(path, destBase string, chunkSize int64) error {
-	if err := os.MkdirAll(filepath.Dir(destBase), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destBase), defaultChunkDirPerm); err != nil {
 		return err
 	}
 
@@ -228,7 +237,7 @@ func splitFile(path, destBase string, chunkSize int64) error {
 	}
 	defer in.Close()
 
-	buf := make([]byte, 1<<20) // 1 MiB buffer
+	buf := make([]byte, chunkBufferSize)
 	index := 0
 	for {
 		index++
@@ -245,7 +254,7 @@ func splitFile(path, destBase string, chunkSize int64) error {
 }
 
 func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (bool, error) {
-	out, err := os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	out, err := os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
 	if err != nil {
 		return false, err
 	}
@@ -279,7 +288,7 @@ func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (bool, 
 
 func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, maxSize int64) error {
 	if maxSize <= 0 {
-		maxSize = 8 * 1024 * 1024
+		maxSize = defaultPrefilterMaxSizeBytes
 	}
 	logger.Debug("Prefiltering files under %s (max size %d bytes)", root, maxSize)
 
@@ -338,7 +347,7 @@ func normalizeTextFile(path string) error {
 	if bytes.Equal(data, normalized) {
 		return nil
 	}
-	return os.WriteFile(path, normalized, 0640)
+	return os.WriteFile(path, normalized, defaultChunkFilePerm)
 }
 
 func normalizeConfigFile(path string) error {
@@ -356,7 +365,7 @@ func normalizeConfigFile(path string) error {
 		filtered = append(filtered, line)
 	}
 	sort.Strings(filtered)
-	return os.WriteFile(path, []byte(strings.Join(filtered, "\n")), 0640)
+	return os.WriteFile(path, []byte(strings.Join(filtered, "\n")), defaultChunkFilePerm)
 }
 
 func minifyJSON(path string) error {
@@ -372,5 +381,5 @@ func minifyJSON(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, minified, 0640)
+	return os.WriteFile(path, minified, defaultChunkFilePerm)
 }

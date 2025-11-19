@@ -32,8 +32,13 @@ import (
 )
 
 const (
-	version              = "0.9.0" // Semantic version format required by cloud relay worker
-	defaultLegacyEnvPath = "/opt/proxmox-backup/env/backup.env"
+	version                    = "0.9.0" // Semantic version format required by cloud relay worker
+	defaultLegacyEnvPath       = "/opt/proxmox-backup/env/backup.env"
+	goRuntimeMinVersion        = "1.25.4"
+	networkPreflightTimeout    = 2 * time.Second
+	bytesPerMegabyte     int64 = 1024 * 1024
+	defaultDirPerm             = 0o755
+	exitCodeInterrupted        = 128 + int(syscall.SIGINT)
 )
 
 // Build-time variables (injected via ldflags)
@@ -151,7 +156,7 @@ func run() int {
 	}
 
 	// Pre-flight: enforce Go runtime version
-	if err := checkGoRuntimeVersion("1.25.4"); err != nil {
+	if err := checkGoRuntimeVersion(goRuntimeMinVersion); err != nil {
 		bootstrap.Error("ERROR: %v", err)
 		return types.ExitEnvironmentError.Int()
 	}
@@ -285,7 +290,7 @@ func run() int {
 		if cfg.DisableNetworkPreflight {
 			logging.Warning("WARNING: Network preflight disabled via DISABLE_NETWORK_PREFLIGHT; features: %s", strings.Join(reasons, ", "))
 		} else {
-			if err := checkInternetConnectivity(2 * time.Second); err != nil {
+			if err := checkInternetConnectivity(networkPreflightTimeout); err != nil {
 				bootstrap.Warning("WARNING: Network connectivity unavailable for: %s. %v", strings.Join(reasons, ", "), err)
 				bootstrap.Warning("WARNING: Disabling network-dependent features for this run")
 				disableNetworkFeaturesForRun(cfg, bootstrap)
@@ -313,7 +318,7 @@ func run() int {
 	logFilePath := filepath.Join(cfg.LogPath, logFileName)
 
 	// Ensure log directory exists
-	if err := os.MkdirAll(cfg.LogPath, 0755); err != nil {
+	if err := os.MkdirAll(cfg.LogPath, defaultDirPerm); err != nil {
 		logging.Warning("Failed to create log directory %s: %v", cfg.LogPath, err)
 	} else {
 		if err := logger.OpenLogFile(logFilePath); err != nil {
@@ -349,7 +354,7 @@ func run() int {
 				logging.Info("CPU profiling enabled: %s", cpuProfilePath)
 
 				tmpProfileDir := filepath.Join("/tmp", "proxmox-backup")
-				if err := os.MkdirAll(tmpProfileDir, 0o755); err != nil {
+				if err := os.MkdirAll(tmpProfileDir, defaultDirPerm); err != nil {
 					logging.Warning("Failed to create temp profile directory %s: %v", tmpProfileDir, err)
 				} else {
 					heapProfilePath = filepath.Join(tmpProfileDir, fmt.Sprintf("heap-%s-%s.pprof", hostname, timestampStr))
@@ -532,9 +537,9 @@ func run() int {
 		EnableChunking:            cfg.EnableSmartChunking,
 		EnableDeduplication:       cfg.EnableDeduplication,
 		EnablePrefilter:           cfg.EnablePrefilter,
-		ChunkSizeBytes:            int64(cfg.ChunkSizeMB) * 1024 * 1024,
-		ChunkThresholdBytes:       int64(cfg.ChunkThresholdMB) * 1024 * 1024,
-		PrefilterMaxFileSizeBytes: int64(cfg.PrefilterMaxFileSizeMB) * 1024 * 1024,
+		ChunkSizeBytes:            int64(cfg.ChunkSizeMB) * bytesPerMegabyte,
+		ChunkThresholdBytes:       int64(cfg.ChunkThresholdMB) * bytesPerMegabyte,
+		PrefilterMaxFileSizeBytes: int64(cfg.PrefilterMaxFileSizeMB) * bytesPerMegabyte,
 	})
 
 	// Dedicated mode: --newkey only runs AGE setup
@@ -904,7 +909,7 @@ func run() int {
 				// Check if error is due to cancellation
 				if ctx.Err() == context.Canceled {
 					logging.Warning("Backup was canceled")
-					return finalize(128 + int(syscall.SIGINT)) // Standard Unix exit code for SIGINT
+					return finalize(exitCodeInterrupted) // Standard Unix exit code for SIGINT
 				}
 
 				// Check if it's a BackupError with specific exit code
@@ -983,7 +988,7 @@ func run() int {
 			if err := orch.RunBackup(ctx, envInfo.Type); err != nil {
 				if ctx.Err() == context.Canceled {
 					logging.Warning("Backup was canceled")
-					return finalize(128 + int(syscall.SIGINT))
+					return finalize(exitCodeInterrupted)
 				}
 				logging.Error("Bash backup orchestration failed: %v", err)
 				return finalize(types.ExitBackupError.Int())
@@ -1013,7 +1018,7 @@ func printFinalSummary(finalExitCode int) {
 		color = "\033[32m" // green
 	case 1:
 		color = "\033[33m" // yellow
-	case 128 + int(syscall.SIGINT):
+	case exitCodeInterrupted:
 		color = "\033[35m" // magenta for Ctrl+C
 	default:
 		color = "\033[31m" // red

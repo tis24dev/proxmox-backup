@@ -53,7 +53,7 @@ release:
     name: proxmox-backup
   draft: false
   prerelease: false
-  name_template: "v{{ .Version }}"
+  name_template: "{{ .Tag }}"
 
 changelog:
   use: git
