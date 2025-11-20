@@ -247,7 +247,14 @@ Adjust version/date if your release numbering differs, but this phrasing capture
 
 ---------------------------------------------------------------------------------------
 
-## [0.7.4] - 2025-11-07 - Fix warning log
+## [0.7.5] - 2025-11-19 - Dry-Run Mode: Backup Consistency Verification Fix
+### lib/backup_verify.sh
+**Fix**
+- Fixed `verify_backup_consistency()` attempting to read hash files in dry-run mode when no files were created
+- Added dry-run mode check at the beginning of `verify_backup_consistency()` function (lines 521-525)
+- Eliminated "Local backup hash file not found" error during dry-run execution
+
+## [0.7.4-bash] - 2025-11-17 - Fix warning log & rclone Improvements
 ### script/security-check.sh
 **Fix**
 - `check_dependencies()` now incorporates the entire command `apt-get update && apt-get install -y iptables net-tools iproute2` directly into the ‘dependencies missing...’ warning, so emails/logs no longer truncate the installation instructions.
@@ -255,7 +262,8 @@ Adjust version/date if your release numbering differs, but this phrasing capture
 
 ### script/utils_counting.sh
 **Fix**
-- rclone from 'about' to 'lsd' for more compatibility and added more test e check
+- Improved cloud connectivity checks: _TEST_CLOUD_CONNECTIVITY() now validates the rclone remote root and backup path separately (mkdir + lsd), with clearer error messages and status flags.
+- Switched cloud connectivity test from 'rclone about' to 'rclone lsd' (remote root and backup path), providing more accurate path-level validation and clearer error messages.
 
 ## [0.7.3] - 2025-11-06 - Enhanced Secondary Backup Error Diagnostics & Datastore Directory Scan Diagnostics
 ### lib/storage.sh

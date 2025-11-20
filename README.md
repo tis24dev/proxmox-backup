@@ -45,6 +45,9 @@ tar xzf v0.7.4-bash.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.4-b
 # Enter the script directory
 cd proxmox-backup
 
+# Make your installation file executable
+chmod +x install.sh
+
 # Start the installation (runs initial checks, creates symlinks, creates cron)
 ./install.sh
 
