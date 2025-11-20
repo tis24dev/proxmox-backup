@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -27,6 +29,8 @@ type EmailConfig struct {
 	Enabled          bool
 	DeliveryMethod   EmailDeliveryMethod
 	FallbackSendmail bool
+	AttachLogFile    bool
+	SubjectOverride  string
 	Recipient        string // Empty = auto-detect
 	From             string
 	CloudRelayConfig CloudRelayConfig
@@ -121,6 +125,9 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	// Build email subject and body
 	subject := BuildEmailSubject(data)
+	if strings.TrimSpace(e.config.SubjectOverride) != "" {
+		subject = strings.TrimSpace(e.config.SubjectOverride)
+	}
 	htmlBody := BuildEmailHTML(data)
 	textBody := BuildEmailPlainText(data)
 
@@ -140,7 +147,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 			result.Method = "email-sendmail-fallback"
 			result.UsedFallback = true
-			err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody)
+			err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
 
 			// If fallback succeeds, preserve the original relay error for logging
 			if err == nil {
@@ -149,7 +156,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		}
 	} else {
 		result.Method = "email-sendmail"
-		err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody)
+		err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
 	}
 
 	// Handle result
@@ -261,7 +268,7 @@ func (e *EmailNotifier) sendViaRelay(ctx context.Context, recipient, subject, ht
 }
 
 // sendViaSendmail sends email via local sendmail command
-func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string) error {
+func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) error {
 	// Check if sendmail exists
 	sendmailPath := "/usr/sbin/sendmail"
 	if _, err := exec.LookPath(sendmailPath); err != nil {
@@ -277,26 +284,99 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	email.WriteString(fmt.Sprintf("From: %s\n", e.config.From))
 	email.WriteString(fmt.Sprintf("Subject: =?UTF-8?B?%s?=\n", encodedSubject))
 	email.WriteString("MIME-Version: 1.0\n")
-	email.WriteString("Content-Type: multipart/alternative; boundary=\"boundary42\"\n")
-	email.WriteString("\n")
 
-	// Plain text part
-	email.WriteString("--boundary42\n")
-	email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
-	email.WriteString("Content-Transfer-Encoding: 8bit\n")
-	email.WriteString("\n")
-	email.WriteString(textBody)
-	email.WriteString("\n\n")
+	// Decide whether to attach log file
+	attachLog := e.config.AttachLogFile && data != nil && strings.TrimSpace(data.LogFilePath) != ""
 
-	// HTML part
-	email.WriteString("--boundary42\n")
-	email.WriteString("Content-Type: text/html; charset=UTF-8\n")
-	email.WriteString("Content-Transfer-Encoding: 8bit\n")
-	email.WriteString("\n")
-	email.WriteString(htmlBody)
-	email.WriteString("\n\n")
+	if attachLog {
+		// Try to read log file; on failure, fall back to plain multipart/alternative
+		logPath := strings.TrimSpace(data.LogFilePath)
+		content, err := os.ReadFile(logPath)
+		if err != nil {
+			e.logger.Warning("Failed to read log file for email attachment (%s): %v", logPath, err)
+			attachLog = false
+		} else {
+			mixedBoundary := "mixed_boundary_42"
+			altBoundary := "alt_boundary_42"
 
-	email.WriteString("--boundary42--\n")
+			email.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\n", mixedBoundary))
+			email.WriteString("\n")
+
+			// First part: multipart/alternative with text and HTML bodies
+			email.WriteString(fmt.Sprintf("--%s\n", mixedBoundary))
+			email.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\n", altBoundary))
+			email.WriteString("\n")
+
+			// Plain text part
+			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+			email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
+			email.WriteString("Content-Transfer-Encoding: 8bit\n")
+			email.WriteString("\n")
+			email.WriteString(textBody)
+			email.WriteString("\n\n")
+
+			// HTML part
+			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+			email.WriteString("Content-Type: text/html; charset=UTF-8\n")
+			email.WriteString("Content-Transfer-Encoding: 8bit\n")
+			email.WriteString("\n")
+			email.WriteString(htmlBody)
+			email.WriteString("\n\n")
+
+			email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
+			email.WriteString("\n")
+
+			// Second part: log file attachment (Base64 encoded)
+			filename := filepath.Base(logPath)
+			if filename == "" {
+				filename = "backup.log"
+			}
+
+			email.WriteString(fmt.Sprintf("--%s\n", mixedBoundary))
+			email.WriteString(fmt.Sprintf("Content-Type: text/plain; charset=UTF-8; name=\"%s\"\n", filename))
+			email.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\n", filename))
+			email.WriteString("Content-Transfer-Encoding: base64\n")
+			email.WriteString("\n")
+
+			encoded := base64.StdEncoding.EncodeToString(content)
+			const maxLineLength = 76
+			for i := 0; i < len(encoded); i += maxLineLength {
+				end := i + maxLineLength
+				if end > len(encoded) {
+					end = len(encoded)
+				}
+				email.WriteString(encoded[i:end])
+				email.WriteString("\n")
+			}
+			email.WriteString("\n")
+			email.WriteString(fmt.Sprintf("--%s--\n", mixedBoundary))
+		}
+	}
+
+	if !attachLog {
+		// Fallback / default: simple multipart/alternative (no attachment)
+		altBoundary := "boundary42"
+		email.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\n", altBoundary))
+		email.WriteString("\n")
+
+		// Plain text part
+		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+		email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
+		email.WriteString("Content-Transfer-Encoding: 8bit\n")
+		email.WriteString("\n")
+		email.WriteString(textBody)
+		email.WriteString("\n\n")
+
+		// HTML part
+		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+		email.WriteString("Content-Type: text/html; charset=UTF-8\n")
+		email.WriteString("Content-Transfer-Encoding: 8bit\n")
+		email.WriteString("\n")
+		email.WriteString(htmlBody)
+		email.WriteString("\n\n")
+
+		email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
+	}
 
 	// Create sendmail command
 	cmd := exec.CommandContext(ctx, sendmailPath, "-t", "-oi")

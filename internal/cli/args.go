@@ -14,6 +14,9 @@ type Args struct {
 	ConfigPathSource string
 	LogLevel         types.LogLevel
 	DryRun           bool
+	Support          bool
+	SupportGitHubUser string
+	SupportIssueID     string
 	ShowVersion      bool
 	ShowHelp         bool
 	ForceNewKey      bool
@@ -48,6 +51,9 @@ func Parse() *Args {
 		"Perform a dry run without making actual changes")
 	flag.BoolVar(&args.DryRun, "n", false,
 		"Perform a dry run (shorthand)")
+
+	flag.BoolVar(&args.Support, "support", false,
+		"Run backup in support mode (force debug log level and send a support email with the attached log to github-support@tis24.it)")
 
 	flag.BoolVar(&args.ShowVersion, "version", false,
 		"Show version information")

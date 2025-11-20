@@ -64,6 +64,7 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		fsInfo, err = s.backend.DetectFilesystem(ctx)
 		if err != nil {
 			if s.backend.IsCritical() {
+				s.setStorageStatus(stats, "error")
 				return fmt.Errorf("%s filesystem detection failed (CRITICAL): %w", s.backend.Name(), err)
 			}
 			s.logger.Warning("WARNING: %s filesystem detection failed: %v", s.backend.Name(), err)
@@ -90,6 +91,7 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 	if err := s.backend.Store(ctx, stats.ArchivePath, metadata); err != nil {
 		// Check if error is critical
 		if s.backend.IsCritical() {
+			s.setStorageStatus(stats, "error")
 			return fmt.Errorf("%s store operation failed (CRITICAL): %w", s.backend.Name(), err)
 		}
 
@@ -121,6 +123,7 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		if err != nil {
 			// Check if error is critical
 			if s.backend.IsCritical() {
+				s.setStorageStatus(stats, "error")
 				return fmt.Errorf("%s retention failed (CRITICAL): %w", s.backend.Name(), err)
 			}
 

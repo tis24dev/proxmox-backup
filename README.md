@@ -647,6 +647,20 @@ Next step: ./build/proxmox-backup --dry-run
 ./build/proxmox-backup -l info    # debug|info|warning|error|critical
 ```
 
+#### Support & Diagnostics
+
+```bash
+# Run backup in support mode: force DEBUG logging and send log to developer
+./build/proxmox-backup --support
+```
+
+Launches an interactive wizard that:
+- Requests consent to share potentially sensitive log information
+- Collects GitHub username and issue number
+- Runs backup with forced DEBUG logging
+- Emails complete log file to github-support@tis24.it
+- Requires existing GitHub issue for tracking
+
 ### Command Examples
 
 ```bash
@@ -3798,6 +3812,7 @@ SOFTWARE.
 
 - 🐛 **Bug Reports**: [GitHub Issues](https://github.com/tis24dev/proxmox-backup/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/tis24dev/proxmox-backup/discussions)
+- 🆘 **Support Mode**: Run `./build/proxmox-backup --support` to execute backup with DEBUG logging and automatically send logs to the developer (requires GitHub issue)
 - 📧 **Email**: Contact via GitHub profile
 
 ### Support the Project

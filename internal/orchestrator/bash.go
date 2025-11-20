@@ -205,6 +205,20 @@ func (e *BackupError) Unwrap() error {
 	return e.Err
 }
 
+// EarlyErrorState represents an error that occurred before the backup started
+// This is used to send notifications for initialization/configuration errors
+type EarlyErrorState struct {
+	Phase     string         // e.g., "config", "security", "encryption", "storage_init"
+	Error     error          // The actual error that occurred
+	ExitCode  types.ExitCode // Exit code to return
+	Timestamp time.Time      // When the error occurred
+}
+
+// HasError returns true if an error has been recorded
+func (e *EarlyErrorState) HasError() bool {
+	return e.Error != nil
+}
+
 // BackupStats contains statistics from backup operations
 type BackupStats struct {
 	Hostname                  string
@@ -240,6 +254,7 @@ type BackupStats struct {
 	SecondaryPath             string
 	CloudPath                 string
 	LocalStatus               string
+	LocalStatusSummary        string // Summary message for early errors
 	SecondaryStatus           string
 	CloudStatus               string
 
@@ -619,14 +634,14 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		CompressionMode:          o.compressionMode,
 		CompressionThreads:       o.compressionThreads,
 		LocalPath:                o.backupPath,
-		LocalStatus:              "ok",
 		EmailStatus:              "ok",
 		TelegramStatus:           o.describeTelegramConfig(),
 		ServerID:                 o.serverID,
 		ServerMAC:                o.serverMAC,
 		ExitCode:                 types.ExitSuccess.Int(),
 	}
-	if logFile := strings.TrimSpace(os.Getenv("LOG_FILE")); logFile != "" {
+	// Get log file path from logger (more reliable than env var)
+	if logFile := o.logger.GetLogFilePath(); logFile != "" {
 		stats.LogFilePath = logFile
 	}
 
@@ -687,6 +702,44 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		}
 	}()
 
+	// Ensure that, in case of failure, we still perform log parsing,
+	// derive an exit code and dispatch notifications/log rotation.
+	defer func() {
+		if err == nil || stats == nil {
+			return
+		}
+
+		// Ensure end time and duration are set
+		if stats.EndTime.IsZero() {
+			stats.EndTime = time.Now()
+		}
+		if stats.Duration == 0 && !stats.StartTime.IsZero() {
+			stats.Duration = stats.EndTime.Sub(stats.StartTime)
+		}
+
+		// Parse log file to populate error/warning counts
+		if stats.LogFilePath != "" {
+			o.logger.Debug("Parsing log file for error/warning counts after failure: %s", stats.LogFilePath)
+			_, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, 0)
+			stats.ErrorCount = errorCount
+			stats.WarningCount = warningCount
+			if errorCount > 0 || warningCount > 0 {
+				o.logger.Debug("Found %d errors and %d warnings in log file (failure path)", errorCount, warningCount)
+			}
+		} else {
+			o.logger.Debug("No log file path specified, error/warning counts will be 0 (failure path)")
+		}
+
+		// Derive exit code from the error when possible
+		var backupErr *BackupError
+		if errors.As(err, &backupErr) {
+			stats.ExitCode = backupErr.Code.Int()
+		} else {
+			stats.ExitCode = types.ExitBackupError.Int()
+		}
+
+	}()
+
 	o.logger.Debug("Creating temporary directory for collection output")
 	// Create temporary directory for collection (outside backup path)
 	timestampStr := startTime.Format("20060102-150405")
@@ -721,7 +774,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		time.Now().UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err := os.WriteFile(markerPath, []byte(markerContent), 0600); err != nil {
-		return nil, fmt.Errorf("failed to create temp marker file: %w", err)
+		return stats, fmt.Errorf("failed to create temp marker file: %w", err)
 	}
 
 	if registry != nil {
@@ -745,7 +798,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	}
 
 	if err := collectorConfig.Validate(); err != nil {
-		return nil, &BackupError{
+		return stats, &BackupError{
 			Phase: "config",
 			Err:   err,
 			Code:  types.ExitConfigError,
@@ -757,7 +810,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	o.logger.Debug("Starting collector run (type=%s)", pType)
 	if err := collector.CollectAll(ctx); err != nil {
 		// Return collection-specific error
-		return nil, &BackupError{
+		return stats, &BackupError{
 			Phase: "collection",
 			Err:   err,
 			Code:  types.ExitCollectionError,
@@ -807,7 +860,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			if diskErr == nil {
 				diskErr = errors.New(errMsg)
 			}
-			return nil, &BackupError{
+			return stats, &BackupError{
 				Phase: "disk",
 				Err:   fmt.Errorf("disk space validation failed: %w", diskErr),
 				Code:  types.ExitDiskSpaceError,
@@ -837,7 +890,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 	ageRecipients, err := o.prepareAgeRecipients(ctx)
 	if err != nil {
-		return nil, &BackupError{
+		return stats, &BackupError{
 			Phase: "config",
 			Err:   err,
 			Code:  types.ExitConfigError,
@@ -855,7 +908,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	}
 
 	if err := archiverConfig.Validate(); err != nil {
-		return nil, &BackupError{
+		return stats, &BackupError{
 			Phase: "config",
 			Err:   err,
 			Code:  types.ExitConfigError,
@@ -883,7 +936,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			code = types.ExitCompressionError
 		}
 
-		return nil, &BackupError{
+		return stats, &BackupError{
 			Phase: phase,
 			Err:   err,
 			Code:  code,
@@ -909,7 +962,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		// Verify archive (skipped internally when encryption is enabled)
 		if err := archiver.VerifyArchive(ctx, archivePath); err != nil {
 			// Return verification-specific error
-			return nil, &BackupError{
+			return stats, &BackupError{
 				Phase: "verification",
 				Err:   err,
 				Code:  types.ExitVerificationError,
@@ -919,7 +972,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		// Generate checksum and manifest for the archive
 		checksum, err := backup.GenerateChecksum(ctx, o.logger, archivePath)
 		if err != nil {
-			return nil, &BackupError{
+			return stats, &BackupError{
 				Phase: "verification",
 				Err:   fmt.Errorf("checksum generation failed: %w", err),
 				Code:  types.ExitVerificationError,
@@ -961,7 +1014,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		}
 
 		if err := backup.CreateManifest(ctx, o.logger, manifest, manifestPath); err != nil {
-			return nil, &BackupError{
+			return stats, &BackupError{
 				Phase: "verification",
 				Err:   fmt.Errorf("manifest creation failed: %w", err),
 				Code:  types.ExitVerificationError,
@@ -985,7 +1038,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			o.logger.Debug("Bundling enabled: creating bundle from %s", filepath.Base(archivePath))
 			bundlePath, err := createBundle(ctx, o.logger, archivePath)
 			if err != nil {
-				return nil, &BackupError{
+				return stats, &BackupError{
 					Phase: "archive",
 					Err:   fmt.Errorf("bundle creation failed: %w", err),
 					Code:  types.ExitArchiveError,
@@ -1064,7 +1117,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	if !o.dryRun {
 		o.logger.Debug("Dispatching archive to %d storage targets", len(o.storageTargets))
 		if err := o.dispatchPostBackup(ctx, stats); err != nil {
-			return nil, err
+			return stats, err
 		}
 	}
 

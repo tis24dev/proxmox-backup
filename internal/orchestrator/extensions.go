@@ -83,19 +83,72 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	}
 }
 
-func (o *Orchestrator) dispatchPostBackup(ctx context.Context, stats *BackupStats) error {
-	if o == nil {
+// DispatchEarlyErrorNotification sends notifications for errors that occurred before backup started
+// This creates a minimal BackupStats with error information for notification purposes
+func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, earlyErr *EarlyErrorState) *BackupStats {
+	if o == nil || o.logger == nil || earlyErr == nil || !earlyErr.HasError() {
 		return nil
 	}
-	// Phase 1: Storage operations (critical - failures abort backup)
-	for _, target := range o.storageTargets {
-		if err := target.Sync(ctx, stats); err != nil {
-			return &BackupError{
-				Phase: "storage",
-				Err:   fmt.Errorf("storage target failed: %w", err),
-				Code:  types.ExitStorageError,
-			}
-		}
+
+	o.logger.Info("Sending notifications for early error: %s phase", earlyErr.Phase)
+
+	// Get hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+		o.logger.Warning("Failed to get hostname: %v", err)
+	}
+
+	// Create minimal stats with error information
+	stats := &BackupStats{
+		Hostname:     hostname,
+		Timestamp:    earlyErr.Timestamp,
+		StartTime:    earlyErr.Timestamp,
+		EndTime:      earlyErr.Timestamp,
+		ExitCode:     earlyErr.ExitCode.Int(),
+		ErrorCount:   1,
+		WarningCount: 0,
+		LocalStatus:  "error",
+	}
+
+	phaseLabel := describeEarlyErrorPhase(earlyErr.Phase)
+	errorMessage := ""
+	if earlyErr.Error != nil {
+		errorMessage = earlyErr.Error.Error()
+	}
+	if phaseLabel != "" && errorMessage != "" {
+		stats.LocalStatusSummary = fmt.Sprintf("%s: %s", phaseLabel, errorMessage)
+	} else if errorMessage != "" {
+		stats.LocalStatusSummary = errorMessage
+	} else {
+		stats.LocalStatusSummary = "Initialization error"
+	}
+
+	// Try to populate version info from orchestrator
+	if o.version != "" {
+		stats.Version = o.version
+	}
+	if o.proxmoxVersion != "" {
+		stats.ProxmoxVersion = o.proxmoxVersion
+	}
+
+	// Set log file path if logger has one
+	if logPath := o.logger.GetLogFilePath(); logPath != "" {
+		stats.LogFilePath = logPath
+	}
+
+	// Dispatch notifications with minimal stats
+	o.dispatchNotifications(ctx, stats)
+
+	return stats
+}
+
+// dispatchNotificationsAndLogs esegue la fase di notifiche e gestione file di log.
+// Viene usata sia nel percorso di successo che in quello di errore, così che
+// le notifiche vengano comunque inviate e il log venga sempre chiuso/ruotato.
+func (o *Orchestrator) dispatchNotificationsAndLogs(ctx context.Context, stats *BackupStats) {
+	if o == nil || o.logger == nil {
+		return
 	}
 
 	// Log explicit SKIP lines for disabled storage tiers so that
@@ -114,29 +167,68 @@ func (o *Orchestrator) dispatchPostBackup(ctx context.Context, stats *BackupStat
 	fmt.Println()
 	o.logStep(7, "Notifications - dispatching channels")
 	o.dispatchNotifications(ctx, stats)
+}
 
-	// Phase 3: Close log file and dispatch to storage/rotation
-	fmt.Println()
-	o.logStep(8, "Log file management")
-	logFilePath := o.logger.GetLogFilePath()
-	if logFilePath != "" {
-		o.logger.Info("Closing log file: %s", logFilePath)
-		if err := o.logger.CloseLogFile(); err != nil {
-			o.logger.Warning("Failed to close log file: %v", err)
-		} else {
-			o.logger.Debug("Log file closed successfully")
-
-			// Copy log to secondary and cloud storage
-			if err := o.dispatchLogFile(ctx, logFilePath); err != nil {
-				o.logger.Warning("Log file dispatch failed: %v", err)
+func (o *Orchestrator) dispatchPostBackup(ctx context.Context, stats *BackupStats) error {
+	if o == nil {
+		return nil
+	}
+	// Phase 1: Storage operations (critical - failures abort backup)
+	for _, target := range o.storageTargets {
+		if err := target.Sync(ctx, stats); err != nil {
+			return &BackupError{
+				Phase: "storage",
+				Err:   fmt.Errorf("storage target failed: %w", err),
+				Code:  types.ExitStorageError,
 			}
-
 		}
-	} else {
-		o.logger.Debug("No log file to close (logging to stdout only)")
 	}
 
+	// Phase 2 + 3: Notifications and log management (non-critical)
+	o.FinalizeAfterRun(ctx, stats)
 	return nil
+}
+
+// FinalizeAfterRun dispatches notifications (when applicable) and ensures the log
+// file is closed/copied to the configured destinations. Safe to call multiple times.
+func (o *Orchestrator) FinalizeAfterRun(ctx context.Context, stats *BackupStats) {
+	if o == nil {
+		return
+	}
+
+	if !o.dryRun && stats != nil {
+		o.dispatchNotificationsAndLogs(ctx, stats)
+	}
+
+	o.FinalizeAndCloseLog(ctx)
+}
+
+// FinalizeAndCloseLog closes the active log file (if any) and copies it to
+// secondary/cloud storage destinations.
+func (o *Orchestrator) FinalizeAndCloseLog(ctx context.Context) {
+	if o == nil || o.logger == nil {
+		return
+	}
+
+	logFilePath := o.logger.GetLogFilePath()
+	if logFilePath == "" {
+		o.logger.Debug("No log file to close (logging to stdout only)")
+		return
+	}
+
+	fmt.Println()
+	o.logStep(8, "Log file management")
+	o.logger.Info("Closing log file: %s", logFilePath)
+	if err := o.logger.CloseLogFile(); err != nil {
+		o.logger.Warning("Failed to close log file: %v", err)
+		return
+	}
+	o.logger.Debug("Log file closed successfully")
+
+	// Copy log to secondary and cloud storage
+	if err := o.dispatchLogFile(ctx, logFilePath); err != nil {
+		o.logger.Warning("Log file dispatch failed: %v", err)
+	}
 }
 
 // dispatchLogFile copies the log file to secondary and cloud storage
@@ -208,4 +300,22 @@ func buildCloudLogDestination(basePath, fileName string) string {
 		return base + "/" + fileName
 	}
 	return filepath.Join(base, fileName)
+}
+
+func describeEarlyErrorPhase(phase string) string {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "encryption_setup":
+		return "Encryption setup failed"
+	case "checker_config":
+		return "Checker configuration failed"
+	case "storage_init":
+		return "Storage initialization failed"
+	case "pre_backup_checks":
+		return "Pre-backup checks failed"
+	default:
+		if phase == "" {
+			return "Initialization failed"
+		}
+		return fmt.Sprintf("%s failed", phase)
+	}
 }

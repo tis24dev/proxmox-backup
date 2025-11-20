@@ -54,6 +54,40 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
 
+	// Detect legacy Bash-based installation (old backup.env or proxmox-backup.sh)
+	legacyPaths := []string{
+		filepath.Join(baseDir, "env", "backup.env"),
+		filepath.Join(baseDir, "proxmox-backup.sh"),
+		filepath.Join(baseDir, "script", "proxmox-backup.sh"),
+	}
+	legacyFound := false
+	for _, p := range legacyPaths {
+		if _, err := os.Stat(p); err == nil {
+			legacyFound = true
+			break
+		}
+	}
+
+	if legacyFound {
+		yellow := "\033[33m"
+		reset := "\033[0m"
+		fmt.Println(string(yellow) + "A previous Bash-based version of the Proxmox Backup script has been detected on this system." + string(reset))
+		fmt.Println(string(yellow) + "This Go version requires migrating or recreating the configuration file. You will also have access to the migration tool." + string(reset))
+		fmt.Println()
+
+		confirm, err := promptYesNo(ctx, reader, "Do you want to continue with the Go install wizard? [y/N]: ", false)
+		if err != nil {
+			installErr = wrapInstallError(err)
+			return installErr
+		}
+		if !confirm {
+			installErr = wrapInstallError(errInteractiveAborted)
+			return installErr
+		}
+
+		fmt.Println()
+	}
+
 	template, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
 		installErr = wrapInstallError(err)
@@ -185,6 +219,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println("  --restore          - Restore data from a decrypted backup")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
+	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
 	fmt.Println()
 }
 
@@ -209,14 +244,6 @@ func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath s
 		if !overwrite {
 			return "", fmt.Errorf("installation aborted (existing configuration kept)")
 		}
-	}
-
-	create, err := promptYesNo(ctx, reader, "Generate configuration file from default template? [y/N]: ", false)
-	if err != nil {
-		return "", err
-	}
-	if !create {
-		return "", fmt.Errorf("installation aborted by user")
 	}
 
 	return config.DefaultEnvTemplate(), nil

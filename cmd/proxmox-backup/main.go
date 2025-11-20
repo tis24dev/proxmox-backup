@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -61,6 +62,12 @@ func run() int {
 		return code
 	}
 
+	// Track early errors that occur before backup starts
+	// This ensures notifications are sent even for initialization/config errors
+	var earlyErrorState *orchestrator.EarlyErrorState
+	var orch *orchestrator.Orchestrator
+	var pendingSupportStats *orchestrator.BackupStats
+
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -101,6 +108,35 @@ func run() int {
 	if args.ShowHelp {
 		cli.ShowHelp()
 		return types.ExitSuccess.Int()
+	}
+
+	// Validate support mode compatibility with other CLI modes
+	if args.Support {
+		incompatible := make([]string, 0, 6)
+		if args.Restore {
+			incompatible = append(incompatible, "--restore")
+		}
+		if args.Decrypt {
+			incompatible = append(incompatible, "--decrypt")
+		}
+		if args.Install {
+			incompatible = append(incompatible, "--install")
+		}
+		if args.EnvMigration || args.EnvMigrationDry {
+			incompatible = append(incompatible, "--env-migration")
+		}
+		if args.UpgradeConfig || args.UpgradeConfigDry {
+			incompatible = append(incompatible, "--upgrade-config")
+		}
+		if args.ForceNewKey {
+			incompatible = append(incompatible, "--newkey")
+		}
+
+		if len(incompatible) > 0 {
+			bootstrap.Error("Support mode cannot be combined with: %s", strings.Join(incompatible, ", "))
+			bootstrap.Error("--support is only available for the standard backup run.")
+			return types.ExitConfigError.Int()
+		}
 	}
 
 	// Resolve configuration path relative to the executable's base directory so
@@ -235,6 +271,23 @@ func run() int {
 		return runEnvMigration(ctx, args, bootstrap)
 	}
 
+	// Support mode: interactive pre-flight questionnaire (mandatory)
+	if args.Support {
+		continueRun, interrupted := runSupportIntro(ctx, bootstrap, args)
+		if !continueRun {
+			if interrupted {
+				// Interrupted by signal (Ctrl+C): set exit code and still show footer.
+				finalize(exitCodeInterrupted)
+				printFinalSummary(finalExitCode)
+				return finalExitCode
+			}
+			// Graceful abort (user declined support flow) - show standard footer.
+			finalize(types.ExitGenericError.Int())
+			printFinalSummary(finalExitCode)
+			return finalExitCode
+		}
+	}
+
 	// Load configuration
 	autoBaseDir, autoFound := detectBaseDir()
 	if autoBaseDir == "" {
@@ -306,7 +359,10 @@ func run() int {
 
 	// Determine log level (CLI overrides config)
 	logLevel := cfg.DebugLevel
-	if args.LogLevel != types.LogLevelNone {
+	if args.Support {
+		bootstrap.Println("Support mode enabled: forcing log level to DEBUG")
+		logLevel = types.LogLevelDebug
+	} else if args.LogLevel != types.LogLevelNone {
 		logLevel = args.LogLevel
 	}
 
@@ -372,6 +428,29 @@ func run() int {
 	defer func() {
 		if showSummary {
 			printFinalSummary(finalExitCode)
+		}
+	}()
+
+	defer func() {
+		if !args.Support || pendingSupportStats == nil {
+			return
+		}
+		logging.Step("Support mode - sending support email with attached log")
+		sendSupportEmail(ctx, cfg, logger, envInfo.Type, pendingSupportStats, args.SupportGitHubUser, args.SupportIssueID)
+	}()
+
+	// Defer for early error notifications
+	// This executes BEFORE the footer defer (LIFO order)
+	// Ensures notifications are sent even for errors that occur before backup starts
+	defer func() {
+		if earlyErrorState != nil && earlyErrorState.HasError() && orch != nil {
+			fmt.Println()
+			logging.Step("Sending error notifications")
+			stats := orch.DispatchEarlyErrorNotification(ctx, earlyErrorState)
+			if stats != nil {
+				pendingSupportStats = stats
+			}
+			orch.FinalizeAndCloseLog(ctx)
 		}
 	}()
 
@@ -515,7 +594,7 @@ func run() int {
 	// Initialize orchestrator
 	logging.Step("Initializing backup orchestrator")
 	bashScriptPath := "/opt/proxmox-backup/script"
-	orch := orchestrator.New(logger, bashScriptPath, dryRun)
+	orch = orchestrator.New(logger, bashScriptPath, dryRun)
 	orch.SetForceNewAgeRecipient(args.ForceNewKey)
 	orch.SetVersion(version)
 	orch.SetConfig(cfg)
@@ -558,9 +637,21 @@ func run() int {
 		if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
 			if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
 				logging.Warning("Encryption setup aborted by user. Exiting...")
+				earlyErrorState = &orchestrator.EarlyErrorState{
+					Phase:     "encryption_setup",
+					Error:     err,
+					ExitCode:  types.ExitGenericError,
+					Timestamp: time.Now(),
+				}
 				return finalize(types.ExitGenericError.Int())
 			}
 			logging.Error("ERROR: %v", err)
+			earlyErrorState = &orchestrator.EarlyErrorState{
+				Phase:     "encryption_setup",
+				Error:     err,
+				ExitCode:  types.ExitConfigError,
+				Timestamp: time.Now(),
+			}
 			return finalize(types.ExitConfigError.Int())
 		}
 		logging.Info("✓ AGE recipients updated successfully; no backup will be run (--newkey)")
@@ -570,9 +661,21 @@ func run() int {
 	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
 			logging.Warning("Encryption setup aborted by user. Exiting...")
+			earlyErrorState = &orchestrator.EarlyErrorState{
+				Phase:     "encryption_setup",
+				Error:     err,
+				ExitCode:  types.ExitGenericError,
+				Timestamp: time.Now(),
+			}
 			return finalize(types.ExitGenericError.Int())
 		}
 		logging.Error("ERROR: %v", err)
+		earlyErrorState = &orchestrator.EarlyErrorState{
+			Phase:     "encryption_setup",
+			Error:     err,
+			ExitCode:  types.ExitConfigError,
+			Timestamp: time.Now(),
+		}
 		return finalize(types.ExitConfigError.Int())
 	}
 
@@ -632,6 +735,12 @@ func run() int {
 	checkerConfig.DryRun = dryRun
 	if err := checkerConfig.Validate(); err != nil {
 		logging.Error("Invalid checker configuration: %v", err)
+		earlyErrorState = &orchestrator.EarlyErrorState{
+			Phase:     "checker_config",
+			Error:     err,
+			ExitCode:  types.ExitConfigError,
+			Timestamp: time.Now(),
+		}
 		return finalize(types.ExitConfigError.Int())
 	}
 	checker := checks.NewChecker(logger, checkerConfig)
@@ -654,11 +763,23 @@ func run() int {
 	localBackend, err := storage.NewLocalStorage(cfg, logger)
 	if err != nil {
 		logging.Error("Failed to initialize local storage: %v", err)
+		earlyErrorState = &orchestrator.EarlyErrorState{
+			Phase:     "storage_init",
+			Error:     err,
+			ExitCode:  types.ExitConfigError,
+			Timestamp: time.Now(),
+		}
 		return finalize(types.ExitConfigError.Int())
 	}
 	localFS, err := detectFilesystemInfo(ctx, localBackend, cfg.BackupPath, logger)
 	if err != nil {
 		logging.Error("Failed to prepare primary storage: %v", err)
+		earlyErrorState = &orchestrator.EarlyErrorState{
+			Phase:     "storage_init",
+			Error:     err,
+			ExitCode:  types.ExitConfigError,
+			Timestamp: time.Now(),
+		}
 		return finalize(types.ExitConfigError.Int())
 	}
 	logging.Info("Path Primary: %s", formatDetailedFilesystemLabel(cfg.BackupPath, localFS))
@@ -828,12 +949,16 @@ func run() int {
 
 	fmt.Println()
 
-	useGoPipeline := cfg.EnableGoBackup
+	useGoPipeline := cfg.EnableGoBackup || args.Support
 
 	// Validate / report hybrid (bash) mode
 	if useGoPipeline {
 		// Go pipeline attiva: gli script bash non sono richiesti
-		logging.Skip("Hybrid mode: disabled")
+		if args.Support {
+			logging.Info("Support mode: forcing Go backup pipeline (hybrid bash mode disabled)")
+		} else {
+			logging.Skip("Hybrid mode: disabled")
+		}
 	} else {
 		if utils.DirExists(bashScriptPath) {
 			logging.Info("Validating bash script environment...")
@@ -904,6 +1029,12 @@ func run() int {
 		if useGoPipeline {
 			if err := orch.RunPreBackupChecks(ctx); err != nil {
 				logging.Error("Pre-backup validation failed: %v", err)
+				earlyErrorState = &orchestrator.EarlyErrorState{
+					Phase:     "pre_backup_checks",
+					Error:     err,
+					ExitCode:  types.ExitBackupError,
+					Timestamp: time.Now(),
+				}
 				return finalize(types.ExitBackupError.Int())
 			}
 			fmt.Println()
@@ -919,6 +1050,10 @@ func run() int {
 				// Check if error is due to cancellation
 				if ctx.Err() == context.Canceled {
 					logging.Warning("Backup was canceled")
+					orch.FinalizeAfterRun(ctx, stats)
+					if stats != nil {
+						pendingSupportStats = stats
+					}
 					return finalize(exitCodeInterrupted) // Standard Unix exit code for SIGINT
 				}
 
@@ -926,11 +1061,19 @@ func run() int {
 				var backupErr *orchestrator.BackupError
 				if errors.As(err, &backupErr) {
 					logging.Error("Backup %s failed: %v", backupErr.Phase, backupErr.Err)
+					orch.FinalizeAfterRun(ctx, stats)
+					if stats != nil {
+						pendingSupportStats = stats
+					}
 					return finalize(backupErr.Code.Int())
 				}
 
 				// Generic backup error
 				logging.Error("Backup orchestration failed: %v", err)
+				orch.FinalizeAfterRun(ctx, stats)
+				if stats != nil {
+					pendingSupportStats = stats
+				}
 				return finalize(types.ExitBackupError.Int())
 			}
 
@@ -992,6 +1135,9 @@ func run() int {
 			statusLabel := strings.ToUpper(status.String())
 			emoji := notify.GetStatusEmoji(status)
 			logging.Info("Exit status: %s %s (code=%d)", emoji, statusLabel, exitCode)
+
+			pendingSupportStats = stats
+
 			finalExitCode = exitCode
 		} else {
 			logging.Info("Starting legacy bash backup orchestration...")
@@ -1067,7 +1213,176 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --restore          - Restore data from a decrypted backup")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
+	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
 	fmt.Println()
+}
+
+func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, proxmoxType types.ProxmoxType, stats *orchestrator.BackupStats, githubUser, issueID string) {
+	if stats == nil {
+		logging.Warning("Support mode: cannot send support email because stats are nil")
+		return
+	}
+
+	subject := "SUPPORT REQUEST"
+	if strings.TrimSpace(githubUser) != "" || strings.TrimSpace(issueID) != "" {
+		subjectParts := []string{"SUPPORT REQUEST"}
+		if strings.TrimSpace(githubUser) != "" {
+			subjectParts = append(subjectParts, fmt.Sprintf("Nickname: %s", strings.TrimSpace(githubUser)))
+		}
+		if strings.TrimSpace(issueID) != "" {
+			subjectParts = append(subjectParts, fmt.Sprintf("Issue: %s", strings.TrimSpace(issueID)))
+		}
+		subject = strings.Join(subjectParts, " - ")
+	}
+
+	if sig := buildSignature(); sig != "" {
+		subject = fmt.Sprintf("%s - Build: %s", subject, sig)
+	}
+
+	emailConfig := notify.EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   notify.EmailDeliverySendmail,
+		FallbackSendmail: false,
+		AttachLogFile:    true,
+		Recipient:        "github-support@tis24.it",
+		From:             cfg.EmailFrom,
+		SubjectOverride:  subject,
+	}
+
+	emailNotifier, err := notify.NewEmailNotifier(emailConfig, proxmoxType, logger)
+	if err != nil {
+		logging.Warning("Support mode: failed to initialize support email notifier: %v", err)
+		return
+	}
+
+	adapter := orchestrator.NewNotificationAdapter(emailNotifier, logger)
+	if err := adapter.Notify(ctx, stats); err != nil {
+		logging.Warning("Support mode: failed to send support email: %v", err)
+		return
+	}
+
+	logging.Info("Support mode: support email sent to github-support@tis24.it")
+}
+
+func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, args *cli.Args) (bool, bool) {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Println()
+	fmt.Println("\033[32m================================================\033[0m")
+	fmt.Println("\033[32m  SUPPORT & ASSISTANCE MODE\033[0m")
+	fmt.Println("\033[32m================================================\033[0m")
+	fmt.Println()
+	fmt.Println("This mode will send the backup log to the developer for debugging.")
+	fmt.Println("\033[33mIf your log contains personal or sensitive information, it will be shared.\033[0m")
+	fmt.Println()
+
+	accepted, err := promptYesNoSupport(reader, "Do you accept and continue? [y/N]: ")
+	if err != nil {
+		if ctx.Err() == context.Canceled {
+			bootstrap.Warning("Support mode interrupted by signal")
+			return false, true
+		}
+		bootstrap.Error("ERROR: %v", err)
+		return false, false
+	}
+	if !accepted {
+		bootstrap.Warning("Support mode aborted by user (consent not granted)")
+		return false, false
+	}
+
+	fmt.Println()
+	fmt.Println("Before proceeding, you must have an open GitHub issue for this problem.")
+	fmt.Println("Emails without a corresponding GitHub issue will not be analyzed.")
+	fmt.Println()
+
+	hasIssue, err := promptYesNoSupport(reader, "Do you confirm that you have already opened a GitHub issue? [y/N]: ")
+	if err != nil {
+		if ctx.Err() == context.Canceled {
+			bootstrap.Warning("Support mode interrupted by signal")
+			return false, true
+		}
+		bootstrap.Error("ERROR: %v", err)
+		return false, false
+	}
+	if !hasIssue {
+		bootstrap.Warning("Support mode aborted: please open a GitHub issue first")
+		return false, false
+	}
+
+	// GitHub nickname
+	for {
+		fmt.Print("Enter your GitHub nickname: ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				bootstrap.Warning("Support mode interrupted by signal")
+				return false, true
+			}
+			bootstrap.Error("ERROR: Failed to read input: %v", err)
+			return false, false
+		}
+		nickname := strings.TrimSpace(line)
+		if nickname == "" {
+			fmt.Println("GitHub nickname cannot be empty. Please try again.")
+			continue
+		}
+		args.SupportGitHubUser = nickname
+		break
+	}
+
+	// GitHub issue number
+	for {
+		fmt.Print("Enter the GitHub issue number in the format #1234: ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				bootstrap.Warning("Support mode interrupted by signal")
+				return false, true
+			}
+			bootstrap.Error("ERROR: Failed to read input: %v", err)
+			return false, false
+		}
+		issue := strings.TrimSpace(line)
+		if issue == "" {
+			fmt.Println("Issue number cannot be empty. Please try again.")
+			continue
+		}
+		if !strings.HasPrefix(issue, "#") || len(issue) < 2 {
+			fmt.Println("Issue must start with '#' and contain a numeric ID, for example: #1234.")
+			continue
+		}
+		if _, err := strconv.Atoi(issue[1:]); err != nil {
+			fmt.Println("Issue must be in the format #1234 with a numeric ID. Please try again.")
+			continue
+		}
+		args.SupportIssueID = issue
+		break
+	}
+
+	fmt.Println()
+	fmt.Println("Support mode confirmed.")
+	fmt.Println("The backup will run in DEBUG mode and a support email with the full log will be sent to github-support@tis24.it at the end.")
+	fmt.Println()
+
+	return true, false
+}
+
+func promptYesNoSupport(reader *bufio.Reader, prompt string) (bool, error) {
+	for {
+		fmt.Print(prompt)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
+		answer := strings.TrimSpace(strings.ToLower(line))
+		if answer == "y" || answer == "yes" {
+			return true, nil
+		}
+		if answer == "" || answer == "n" || answer == "no" {
+			return false, nil
+		}
+		fmt.Println("Please answer with 'y' or 'n'.")
+	}
 }
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).
