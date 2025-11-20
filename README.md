@@ -2040,24 +2040,749 @@ AGE_RECIPIENT="age1..."
 
 ### Restoring Backups
 
+The `--restore` command provides an **interactive, multi-stage selective restoration workflow** with safety features, category-based filtering, and comprehensive logging.
+
+#### Overview
+
 ```bash
 ./build/proxmox-backup --restore
 ```
 
-**Workflow**:
+**Key Features:**
+- **4 Restore Modes**: Full, Storage/Datastore-only, System Base, or Custom selection
+- **Category-Based Filtering**: 15 granular categories (PVE, PBS, Common)
+- **Automatic Safety Backup**: Current config backed up before overwrite
+- **Detailed Logging**: Complete audit trail saved to `/tmp/proxmox-backup/`
+- **System Compatibility Check**: Prevents PVE↔PBS mismatches
+- **ZFS Pool Detection**: Automatic post-restore pool import warnings (PBS)
+- **Directory Recreation**: Auto-creates storage/datastore directories from config files
 
-1. Same discovery as `--decrypt`
-2. Plaintext staging in secure temp directory
-3. **Confirmation**: Type `RESTORE` to proceed (or `0` to abort)
-4. **Extraction**: Applies archive to system root `/`
-5. **Cleanup**: Deletes staged files
+**⚠️ CRITICAL WARNINGS:**
+- Requires **root privileges** (modifies system files in `/`)
+- **Overwrites existing files** at target locations
+- Always create a **VM snapshot** or **PBS backup** before restoring
+- Review the **restore plan** carefully before confirming
+- Keep the **safety backup** until you verify restore success
 
-**⚠️ WARNING**: Restores files **in-place** to `/`. Take system snapshot first!
+---
 
-**Requirements**:
-- Root privileges (overwrites system files)
-- Matching system architecture (Proxmox VE/PBS)
-- Sufficient disk space
+#### Interactive Workflow
+
+**Stage 1: Backup Selection**
+```
+Select the backup source:
+  [1] Local backups (/var/backups/proxmox)
+  [2] Secondary backups (/mnt/secondary-backup)
+  [3] Cloud backups (/mnt/cloud-staging)
+  [0] Exit
+Choice: 1
+
+Available backups:
+  [1] 2024-01-15 14:30:22 • ENCRYPTED • Tool v0.9.0 • PBS v3.1
+  [2] 2024-01-14 12:45:18 • PLAIN • Tool v0.9.0 • PBS v3.1
+  [0] Exit
+Choice: 1
+```
+
+**Stage 2: Decryption (if encrypted)**
+```
+Enter decryption key or passphrase (0 = exit):
+[hidden input]
+✓ Decryption successful
+Staged to: /tmp/proxmox-decrypt-xyz123/
+```
+
+**Stage 3: System Compatibility Validation**
+```
+Detected system type: Proxmox Backup Server (PBS)
+Analyzing backup contents...
+Detected 10 available categories
+```
+
+If mismatch detected:
+```
+⚠ Incompatible backup: this is a PVE backup but you are running PBS.
+Restoring a PVE backup to a PBS system will cause system instability.
+
+Do you want to continue anyway? (yes/no): no
+Restore aborted due to incompatibility
+```
+
+**Stage 4: Restore Mode Selection**
+```
+Select restore mode:
+  [1] FULL restore - Restore everything from backup
+  [2] DATASTORE only - PBS config + datastore definitions + jobs
+  [3] SYSTEM BASE only - Network + SSL + SSH + services
+  [4] CUSTOM selection - Choose specific categories
+  [0] Cancel
+Choice: 2
+```
+
+**Stage 5: Restore Plan Review**
+```
+═══════════════════════════════════════════════════════════════
+RESTORE PLAN
+═══════════════════════════════════════════════════════════════
+
+Restore mode: DATASTORE only (PBS config + datastores + jobs)
+System type:  Proxmox Backup Server (PBS)
+
+Categories to restore:
+  1. PBS Configuration
+     Proxmox Backup Server main configuration
+  2. PBS Datastore Configuration
+     Datastore definitions and settings
+  3. PBS Jobs
+     Sync, verify, and prune job configurations
+  4. ZFS Configuration
+     ZFS pool cache and configuration files
+
+Files/directories that will be restored:
+  • /etc/proxmox-backup/
+  • /etc/proxmox-backup/datastore.cfg
+  • /etc/proxmox-backup/sync.cfg
+  • /etc/proxmox-backup/verification.cfg
+  • /etc/proxmox-backup/prune.cfg
+  • /etc/zfs/
+  • /etc/hostid
+
+⚠ WARNING:
+  • Existing files at these locations will be OVERWRITTEN
+  • A safety backup will be created before restoration
+  • Services may need to be restarted after restoration
+
+═══════════════════════════════════════════════════════════════
+Type 'RESTORE' to proceed or 'cancel' to abort: RESTORE
+```
+
+**Stage 6: Safety Backup Creation**
+```
+Creating safety backup of current configuration...
+Safety backup created: /tmp/proxmox-backup/restore_backup_20240115_143022.tar.gz
+(847 files, 1.23 MB)
+Backup location saved to: /tmp/proxmox-backup/restore_backup_location.txt
+```
+
+**Stage 7: Selective Extraction**
+```
+Detailed restore log: /tmp/proxmox-backup/restore_20240115_143022.log
+Extracting selected categories from archive into /
+Successfully restored all 174 configuration files/directories
+665 additional archive entries (logs, diagnostics) were left unchanged
+```
+
+**Stage 8: Post-Restore Actions**
+```
+Recreating directory structures from configuration...
+Parsed datastore.cfg: created 2 datastore directory structures
+
+Checking ZFS pool status...
+Found 1 ZFS pool(s) configured for automatic import:
+  - backup_ext
+
+⚠ IMPORTANT: ZFS pools may need manual import after restore!
+  Before rebooting, run these commands:
+  1. Check available pools:  zpool import
+  2. Import pool manually:   zpool import backup_ext
+  3. Verify pool status:     zpool status
+```
+
+**Stage 9: Summary**
+```
+Restore completed successfully.
+Detailed restore log: /tmp/proxmox-backup/restore_20240115_143022.log
+Safety backup preserved at: /tmp/proxmox-backup/restore_backup_20240115_143022.tar.gz
+
+IMPORTANT: You may need to restart services for changes to take effect.
+  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup
+```
+
+---
+
+#### Restore Modes
+
+##### Mode 1: FULL Restore
+
+**When to use**: Complete disaster recovery, new server setup, full system migration
+
+**What it restores**: ALL available categories from the backup
+
+**Categories included**:
+- All PVE-specific categories (if PVE backup)
+- All PBS-specific categories (if PBS backup)
+- All common categories (Network, SSL, SSH, Scripts, Cron, Services, ZFS)
+
+**Example**:
+```bash
+./build/proxmox-backup --restore
+# Choose [1] FULL restore
+# Confirms: "Restore mode: FULL restore (all files)"
+# Restores 100% of backup content
+```
+
+**Use cases**:
+- Disaster recovery from complete hardware failure
+- Migrating to new identical hardware
+- Restoring to freshly installed Proxmox system
+
+---
+
+##### Mode 2: STORAGE/DATASTORE Only
+
+**When to use**: Restore storage configuration without touching base system
+
+**PVE - What it restores**:
+- **PVE Cluster Configuration** (`/etc/pve/`, `/var/lib/pve-cluster/`)
+- **PVE Storage Configuration** (`/etc/pve/storage.cfg`, `/etc/vzdump.conf`)
+- **PVE Backup Jobs** (`/etc/pve/jobs.cfg`, `/etc/pve/vzdump.cron`)
+- **ZFS Configuration** (`/etc/zfs/`, `/etc/hostid`)
+
+**PBS - What it restores**:
+- **PBS Configuration** (`/etc/proxmox-backup/`)
+- **PBS Datastore Configuration** (`/etc/proxmox-backup/datastore.cfg`)
+- **PBS Jobs** (sync.cfg, verification.cfg, prune.cfg)
+- **ZFS Configuration** (`/etc/zfs/`, `/etc/hostid`)
+
+**Example**:
+```bash
+./build/proxmox-backup --restore
+# Choose [2] STORAGE/DATASTORE only
+# PVE: Restores cluster + storage + VM backup configs
+# PBS: Restores datastores + sync/verify/prune jobs
+```
+
+**Use cases**:
+- Lost datastore.cfg after manual editing error
+- Restoring storage definitions to new PBS node
+- Recovering cluster configuration after database corruption
+
+**Post-restore actions**:
+- Automatically recreates storage/datastore directories from config
+- Checks ZFS pools and suggests manual import if needed
+- Restart services: `systemctl restart pve-cluster pvedaemon` (PVE) or `systemctl restart proxmox-backup` (PBS)
+
+---
+
+##### Mode 3: SYSTEM BASE Only
+
+**When to use**: Restore fundamental system settings without storage/cluster config
+
+**What it restores** (all systems):
+- **Network Configuration** (`/etc/network/`, `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`)
+- **SSL Certificates** (Root CA, node certificates, private keys)
+- **SSH Configuration** (`/root/.ssh/`, `/etc/ssh/`)
+- **System Services** (`/etc/systemd/system/`, `/etc/default/`)
+
+**Example**:
+```bash
+./build/proxmox-backup --restore
+# Choose [3] SYSTEM BASE only
+# Restores only network, SSL, SSH, services
+```
+
+**Use cases**:
+- Network misconfiguration lockout recovery
+- Lost SSH keys after accidental deletion
+- SSL certificate corruption
+- Service configuration reset after upgrade issues
+
+**What it does NOT restore**:
+- Cluster/datastore definitions
+- Storage configurations
+- Ceph/Corosync settings
+- ZFS pool cache
+
+---
+
+##### Mode 4: CUSTOM Selection
+
+**When to use**: Granular control over exactly what gets restored
+
+**Interactive menu**:
+```
+═══════════════════════════════════════════════════════════════
+CUSTOM CATEGORY SELECTION
+═══════════════════════════════════════════════════════════════
+
+  [1] [X] PBS Configuration
+      Proxmox Backup Server main configuration
+  [2] [ ] PBS Datastore Configuration
+      Datastore definitions and settings
+  [3] [ ] PBS Jobs
+      Sync, verify, and prune job configurations
+  [4] [X] Network Configuration
+      Network interfaces and routing
+  [5] [ ] SSL Certificates
+      SSL/TLS certificates and private keys
+  [6] [X] SSH Configuration
+      SSH keys and authorized_keys
+  [7] [ ] Custom Scripts
+      User scripts and custom tools
+  [8] [ ] Scheduled Tasks
+      Cron jobs and systemd timers
+  [9] [ ] System Services
+      Systemd service configurations
+  [10] [ ] ZFS Configuration
+       ZFS pool cache and configuration files
+
+Commands:
+  1-10   - Toggle category selection
+  a      - Select all
+  n      - Deselect all
+  c      - Continue with selected categories
+  0      - Cancel
+
+Choice: 4
+```
+
+**Selection workflow**:
+1. Numbers `1-10` toggle individual categories (checkbox `[X]` / `[ ]`)
+2. `a` selects all available categories
+3. `n` deselects all categories
+4. `c` proceeds with currently selected categories (requires ≥1)
+5. `0` cancels restore operation
+
+**Example**:
+```bash
+./build/proxmox-backup --restore
+# Choose [4] CUSTOM selection
+# Toggle 1, 4, 6 (PBS config + Network + SSH)
+# Press 'c' to continue
+# Restores only those 3 categories
+```
+
+**Use cases**:
+- Restoring only network config after firewall lockout
+- Recovering just SSH keys without touching other configs
+- Selective restore after testing configuration changes
+- Cherry-picking specific settings during migration
+
+---
+
+#### Category System
+
+**Complete category reference** (15 categories total):
+
+##### PVE-Specific Categories (Proxmox Virtual Environment)
+
+| Category ID | Display Name | Paths | Description |
+|------------|--------------|-------|-------------|
+| `pve_cluster` | PVE Cluster Configuration | `/etc/pve/`<br>`/var/lib/pve-cluster/` | Cluster database, node membership, quorum settings |
+| `storage_pve` | PVE Storage Configuration | `/etc/pve/storage.cfg`<br>`/etc/vzdump.conf` | Storage backends, VM backup destinations |
+| `pve_jobs` | PVE Backup Jobs | `/etc/pve/jobs.cfg`<br>`/etc/pve/vzdump.cron` | Scheduled VM backup jobs |
+| `corosync` | Corosync Configuration | `/etc/corosync/`<br>`/etc/pve/corosync.conf` | Cluster communication and quorum |
+| `ceph` | Ceph Configuration | `/etc/ceph/`<br>`/etc/pve/ceph.conf`<br>`/etc/pve/priv/ceph/` | Ceph storage cluster settings |
+
+##### PBS-Specific Categories (Proxmox Backup Server)
+
+| Category ID | Display Name | Paths | Description |
+|------------|--------------|-------|-------------|
+| `pbs_config` | PBS Configuration | `/etc/proxmox-backup/` | Main PBS configuration directory |
+| `datastore_pbs` | PBS Datastore Configuration | `/etc/proxmox-backup/datastore.cfg` | Datastore definitions and paths |
+| `pbs_jobs` | PBS Jobs | `/etc/proxmox-backup/sync.cfg`<br>`verification.cfg`<br>`prune.cfg` | Scheduled jobs for sync/verify/prune |
+
+##### Common Categories (Both PVE and PBS)
+
+| Category ID | Display Name | Paths | Description |
+|------------|--------------|-------|-------------|
+| `network` | Network Configuration | `/etc/network/`<br>`/etc/hosts`<br>`/etc/hostname`<br>`/etc/resolv.conf` | Network interfaces, routing, DNS |
+| `ssl` | SSL Certificates | `/etc/pve/pve-root-ca.pem`<br>`/etc/pve/priv/pve-root-ca.key`<br>`/etc/pve/nodes/`<br>`/etc/proxmox-backup/proxy.pem` | SSL/TLS certificates and keys |
+| `ssh` | SSH Configuration | `/root/.ssh/`<br>`/etc/ssh/` | SSH keys and authorized_keys |
+| `scripts` | Custom Scripts | `/usr/local/bin/`<br>`/usr/local/sbin/` | User-installed scripts and tools |
+| `crontabs` | Scheduled Tasks | `/etc/cron.d/`<br>`/etc/crontab`<br>`/var/spool/cron/` | Cron jobs and timers |
+| `services` | System Services | `/etc/systemd/system/`<br>`/etc/default/` | Systemd service units |
+| `zfs` | ZFS Configuration | `/etc/zfs/`<br>`/etc/hostid` | ZFS pool cache and host ID |
+
+**Category auto-detection**: During backup analysis, the system scans the TAR archive and automatically detects which categories are present, showing only available categories in selection menus.
+
+---
+
+#### Safety Features
+
+##### Automatic Safety Backup
+
+**Before any file is overwritten**, the system creates a compressed backup of the current state:
+
+```
+Creating safety backup of current configuration...
+Safety backup created: /tmp/proxmox-backup/restore_backup_20240115_143022.tar.gz
+(847 files, 1.23 MB)
+Backup location saved to: /tmp/proxmox-backup/restore_backup_location.txt
+```
+
+**Contents**: All files that will be overwritten by the restore operation
+
+**Location**: `/tmp/proxmox-backup/restore_backup_<timestamp>.tar.gz`
+
+**Quick reference**: `/tmp/proxmox-backup/restore_backup_location.txt` (contains path to latest safety backup)
+
+##### Rollback Procedure
+
+If restore fails or causes issues:
+
+```bash
+# Option 1: Quick rollback from saved location
+tar -xzf $(cat /tmp/proxmox-backup/restore_backup_location.txt) -C /
+
+# Option 2: Explicit rollback
+tar -xzf /tmp/proxmox-backup/restore_backup_20240115_143022.tar.gz -C /
+
+# Option 3: Restore to specific directory for inspection
+tar -xzf /tmp/proxmox-backup/restore_backup_20240115_143022.tar.gz -C /tmp/inspect
+```
+
+**After successful restore**: Clean up safety backups to free disk space:
+```bash
+rm /tmp/proxmox-backup/restore_backup_*.tar.gz
+```
+
+---
+
+#### Detailed Logging
+
+**Restore execution log**: `/tmp/proxmox-backup/restore_<timestamp>.log`
+
+**Contents**:
+```
+=== PROXMOX RESTORE LOG ===
+Date: 2024-01-15 14:30:22
+Mode: DATASTORE only (PBS config + datastores + jobs)
+Selected categories: 4 categories
+  - PBS Configuration (pbs_config)
+  - PBS Datastore Configuration (datastore_pbs)
+  - PBS Jobs (pbs_jobs)
+  - ZFS Configuration (zfs)
+Archive: backup-pbs1.tar.xz
+
+=== FILES RESTORED ===
+RESTORED: ./etc/proxmox-backup/
+RESTORED: ./etc/proxmox-backup/datastore.cfg
+RESTORED: ./etc/proxmox-backup/sync.cfg
+... (174 files)
+
+=== FILES SKIPPED ===
+SKIPPED: ./var/log/proxmox-backup/api/access.log (does not match any selected category)
+SKIPPED: ./var/log/proxmox-backup/tasks/active (does not match any selected category)
+... (665 files)
+
+=== SUMMARY ===
+Total files extracted: 174
+Total files skipped: 665
+Total files in archive: 839
+```
+
+**Use cases**:
+- **Audit**: Review exactly what was restored
+- **Troubleshooting**: Identify why specific files were skipped
+- **Compliance**: Maintain change logs for system modifications
+- **Debugging**: Diagnose selective restore filtering issues
+
+**Location reference**: Path printed at end of restore and in summary output
+
+---
+
+#### Post-Restore Actions
+
+##### Directory Recreation
+
+**Automatic for Storage/Datastore mode**: After restoring config files, the system automatically recreates directory structures.
+
+**PVE**: Parses `/etc/pve/storage.cfg`
+```
+Parsing storage.cfg to recreate storage directories...
+Created storage structure: local (dir) at /var/lib/vz
+  ├── dump/
+  ├── images/
+  ├── template/
+  ├── snippets/
+  └── private/
+Created storage structure: backup-ext (dir) at /mnt/backup-ext
+Recreated 2 storage directory structures
+```
+
+**PBS**: Parses `/etc/proxmox-backup/datastore.cfg`
+```
+Parsing datastore.cfg to recreate datastore directories...
+Created datastore structure: local-disks at /var/lib/proxmox-backup/local-disks
+  ├── .chunks/
+  └── .lock/
+Recreated 1 datastore directory structures
+```
+
+**ZFS mount point detection** (PBS):
+```
+Path /mnt/zfs-pool appears to be a ZFS mount point
+The ZFS pool may need to be imported manually before the datastore works
+To check pools: zpool import
+To import pool: zpool import zfs-pool
+To check status: zpool status
+```
+
+If ZFS detected, directory creation is **skipped** to avoid blocking actual ZFS mount.
+
+##### ZFS Pool Import (PBS Only)
+
+**Automatic check** if `zfs` category was restored:
+
+```
+Checking ZFS pool status...
+Found 1 ZFS pool(s) configured for automatic import:
+  - backup_ext
+
+`zpool import` reports pools waiting to be imported:
+  - backup_ext
+
+⚠ IMPORTANT: ZFS pools may need manual import after restore!
+  Before rebooting, run these commands:
+  1. Check available pools:  zpool import
+  2. Import pool manually:   zpool import backup_ext
+  3. Verify pool status:     zpool status
+
+  If pools fail to import, check:
+  - journalctl -u zfs-import@backup_ext.service
+  - zpool import -d /dev/disk/by-id
+```
+
+**Why manual?** ZFS pools must be imported before systemd attempts automatic import to prevent service failures.
+
+##### Service Restart
+
+**After restore completion**, restart affected services:
+
+**PVE**:
+```bash
+systemctl restart pve-cluster    # Cluster database
+systemctl restart pvedaemon      # API daemon
+systemctl restart pveproxy       # Web interface
+```
+
+**PBS**:
+```bash
+systemctl restart proxmox-backup-proxy  # Web interface
+systemctl restart proxmox-backup        # Backup daemon
+```
+
+**Network changes**: If network config restored, may lose SSH connection:
+```bash
+# Apply network changes
+systemctl restart networking
+
+# Or reboot (recommended)
+reboot
+```
+
+---
+
+#### Advanced Options
+
+##### System Compatibility Check
+
+**Automatic validation** of backup vs. current system:
+
+```
+Detected system type: Proxmox Backup Server (PBS)
+Backup type: Proxmox Virtual Environment (PVE)
+
+⚠ Incompatible backup: this is a PVE backup but you are running PBS.
+Restoring a PVE backup to a PBS system will likely cause system instability.
+
+Do you want to continue anyway? This may cause system instability. (yes/no):
+```
+
+**Validation checks**:
+- `/etc/pve` presence → PVE system
+- `/etc/proxmox-backup` presence → PBS system
+- Manifest `ProxmoxType` field
+- Hostname patterns (`pve` vs `pbs`)
+
+**Override**: Type `yes` to force restore (use only for testing or specific recovery scenarios)
+
+##### Custom Configuration File
+
+Use non-default config:
+```bash
+./build/proxmox-backup --restore -c /path/to/custom.env
+```
+
+##### Debug Mode
+
+Enable detailed logging:
+```bash
+./build/proxmox-backup --restore --log-level debug
+```
+
+---
+
+#### Troubleshooting
+
+##### Issue: "No backups found"
+
+**Symptoms**: Backup discovery shows empty list
+
+**Causes**:
+- No `.bundle.tar` or `.metadata` files in search paths
+- Incorrect `BACKUP_PATH`, `SECONDARY_PATH`, or `CLOUD_STAGING_PATH`
+- Insufficient permissions to read backup directories
+
+**Solutions**:
+```bash
+# Check configured paths
+grep -E "BACKUP_PATH|SECONDARY_PATH|CLOUD_STAGING_PATH" configs/backup.env
+
+# Verify files exist
+ls -lh /var/backups/proxmox/*.bundle.tar
+ls -lh /var/backups/proxmox/*.metadata
+
+# Check permissions
+ls -ld /var/backups/proxmox
+# Should be accessible by root
+```
+
+##### Issue: "Decryption failed: invalid key/passphrase"
+
+**Symptoms**: Cannot decrypt backup with provided credentials
+
+**Causes**:
+- Wrong passphrase entered
+- Wrong private key file
+- Backup encrypted with different recipient
+
+**Solutions**:
+```bash
+# Verify recipient used for this backup
+tar -xOf backup.bundle.tar metadata | grep -A5 AGE_RECIPIENT
+
+# Try with correct passphrase (case-sensitive!)
+# The tool allows multiple retry attempts
+
+# Check if you have the correct private key
+age-keygen -y /path/to/key.txt  # Show public key
+# Compare with recipient in backup metadata
+```
+
+##### Issue: Files still skipped in FULL mode
+
+**Symptoms**: FULL restore reports skipped files
+
+**Causes**: This is **expected behavior** for certain file types:
+- Log files (`/var/log/*`)
+- Diagnostic data
+- Temporary files
+- System-generated defaults
+
+**Why**: Selective restore uses category-based filtering. Files not matching **any** category definition are skipped (intentional design).
+
+**Verify**: Check detailed log to confirm skipped files are non-critical:
+```bash
+grep "^SKIPPED:" /tmp/proxmox-backup/restore_*.log | head -20
+```
+
+**To restore everything** (bypass categories), use legacy extraction:
+```bash
+# Extract backup manually (no filtering)
+tar -xJf backup-archive.tar.xz -C /
+```
+
+##### Issue: "Restore to / requires root privileges"
+
+**Symptoms**: Permission denied errors
+
+**Solution**:
+```bash
+# Run as root
+sudo ./build/proxmox-backup --restore
+
+# Or with sudo elevation
+sudo -i
+cd /opt/proxmox-backup
+./build/proxmox-backup --restore
+```
+
+##### Issue: ZFS pool won't import after restore
+
+**Symptoms**:
+```
+cannot import 'backup_ext': no such pool available
+```
+
+**Causes**:
+- Pool disks not attached
+- Pool was exported on different system
+- Disk IDs changed
+
+**Solutions**:
+```bash
+# Check available pools with detailed info
+zpool import
+
+# Import by pool name
+zpool import backup_ext
+
+# Import specifying disk location
+zpool import -d /dev/disk/by-id backup_ext
+
+# Check systemd service status
+journalctl -u zfs-import@backup_ext.service
+
+# If all else fails, import with force (-f)
+zpool import -f backup_ext
+```
+
+##### Issue: Datastore directories not created
+
+**Symptoms**: PBS shows datastore errors after restore
+
+**Causes**:
+- `datastore_pbs` category not selected
+- ZFS mount point blocking directory creation
+- Permission issues
+
+**Solutions**:
+```bash
+# Manual recreation from datastore.cfg
+mkdir -p /var/lib/proxmox-backup/datastore-name/.chunks
+mkdir -p /var/lib/proxmox-backup/datastore-name/.lock
+chmod 700 /var/lib/proxmox-backup/datastore-name
+chown backup:backup /var/lib/proxmox-backup/datastore-name
+
+# If ZFS pool, import first then PBS will auto-create
+zpool import pool-name
+systemctl restart proxmox-backup
+```
+
+---
+
+#### Best Practices
+
+1. **Always create VM snapshots** before restore (especially on production systems)
+2. **Test restores regularly** on non-production systems to verify backup integrity
+3. **Review the restore plan** carefully before typing `RESTORE`
+4. **Keep safety backups** until you confirm restore success (24-48 hours)
+5. **Document your restore** by saving the detailed log file
+6. **Use CUSTOM mode** for surgical fixes rather than full restore
+7. **Import ZFS pools manually** before rebooting to prevent systemd service failures
+8. **Restart services** after restore to apply configuration changes
+9. **Verify functionality** after restore:
+   - PVE: Check cluster status (`pvecm status`), storage (`pvesm status`)
+   - PBS: Check datastores (`proxmox-backup-manager datastore list`)
+10. **Clean up temp files** after successful restore:
+    ```bash
+    rm /tmp/proxmox-backup/restore_backup_*.tar.gz
+    rm /tmp/proxmox-backup/restore_*.log
+    ```
+
+---
+
+#### Requirements
+
+- **Root privileges**: Required (modifies system files in `/`)
+- **System architecture**: Backup must match current system (PVE/PBS)
+- **Disk space**:
+  - Staging: 2x backup size in `/tmp`
+  - Safety backup: Additional 1x current config size
+- **Network access**: If restoring from cloud (downloads to staging first)
+- **ZFS tools**: `zpool` command required if restoring ZFS config (PBS)
 
 ### Rotating Keys
 
