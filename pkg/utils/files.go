@@ -11,7 +11,7 @@ import (
 // FileExists verifica se un file esiste
 func FileExists(path string) bool {
 	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
+	if err != nil {
 		return false
 	}
 	return !info.IsDir()
@@ -20,7 +20,7 @@ func FileExists(path string) bool {
 // DirExists verifica se una directory esiste
 func DirExists(path string) bool {
 	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
+	if err != nil {
 		return false
 	}
 	return info.IsDir()
