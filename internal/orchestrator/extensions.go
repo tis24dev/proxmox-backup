@@ -48,9 +48,17 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	}
 
 	cfg := o.cfg
+
+	// If email notifications are disabled in configuration, reflect this explicitly
+	// in the aggregated backup stats so that downstream channels (e.g. Telegram)
+	// render the Email status as "disabled" (➖) instead of an optimistic default.
+	if stats != nil && cfg != nil && !cfg.EmailEnabled {
+		stats.EmailStatus = "disabled"
+	}
+
 	entries := []notifierEntry{
-		{name: "Telegram", enabled: cfg != nil && cfg.TelegramEnabled},
 		{name: "Email", enabled: cfg != nil && cfg.EmailEnabled},
+		{name: "Telegram", enabled: cfg != nil && cfg.TelegramEnabled},
 		{name: "Gotify", enabled: cfg != nil && cfg.GotifyEnabled},
 		{name: "Webhook", enabled: cfg != nil && cfg.WebhookEnabled},
 	}

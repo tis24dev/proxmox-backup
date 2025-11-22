@@ -74,6 +74,7 @@ func TestCreateAndLoadManifest(t *testing.T) {
 		Hostname:         "test-host",
 		ScriptVersion:    "0.2.0",
 		EncryptionMode:   "age",
+		ClusterMode:      "cluster",
 	}
 
 	if err := CreateManifest(ctx, logger, manifest, manifestPath); err != nil {
@@ -108,6 +109,9 @@ func TestCreateAndLoadManifest(t *testing.T) {
 	}
 	if loaded.EncryptionMode != manifest.EncryptionMode {
 		t.Errorf("EncryptionMode mismatch: got %s, want %s", loaded.EncryptionMode, manifest.EncryptionMode)
+	}
+	if loaded.ClusterMode != manifest.ClusterMode {
+		t.Errorf("ClusterMode mismatch: got %s, want %s", loaded.ClusterMode, manifest.ClusterMode)
 	}
 	if len(loaded.ProxmoxTargets) != len(manifest.ProxmoxTargets) {
 		t.Errorf("ProxmoxTargets length mismatch: got %d, want %d", len(loaded.ProxmoxTargets), len(manifest.ProxmoxTargets))

@@ -49,6 +49,9 @@ type Collector struct {
 	dryRun     bool
 	rootsMu    sync.RWMutex
 	rootsCache map[string][]string
+
+	// clusteredPVE records whether cluster mode was detected during PVE collection.
+	clusteredPVE bool
 }
 
 func (c *Collector) incFilesProcessed() {
@@ -1000,6 +1003,11 @@ func (c *Collector) GetStats() *CollectionStats {
 	defer c.statsMu.Unlock()
 	snapshot := *c.stats
 	return &snapshot
+}
+
+// IsClusteredPVE returns true if the current PVE collection detected a cluster.
+func (c *Collector) IsClusteredPVE() bool {
+	return c.clusteredPVE
 }
 
 func (c *Collector) writeReportFile(path string, data []byte) error {

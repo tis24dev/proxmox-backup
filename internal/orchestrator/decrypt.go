@@ -661,7 +661,11 @@ func formatTargetSummary(manifest *backup.Manifest) string {
 	if !strings.HasPrefix(strings.ToLower(version), "v") {
 		version = "v" + version
 	}
-	return fmt.Sprintf("%s %s", targets, version)
+	summary := fmt.Sprintf("%s %s", targets, version)
+	if cluster := formatClusterMode(manifest.ClusterMode); cluster != "" {
+		summary = fmt.Sprintf("%s (%s)", summary, cluster)
+	}
+	return summary
 }
 
 func statusFromManifest(manifest *backup.Manifest) string {
@@ -734,5 +738,15 @@ func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, descrip
 		default:
 			fmt.Println("Please enter 1, 2 or 0.")
 		}
+	}
+}
+
+func formatClusterMode(value string) string {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	switch mode {
+	case "cluster", "standalone":
+		return mode
+	default:
+		return ""
 	}
 }

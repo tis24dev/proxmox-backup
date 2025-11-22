@@ -32,6 +32,7 @@ type Manifest struct {
 	Hostname         string    `json:"hostname"`
 	ScriptVersion    string    `json:"script_version,omitempty"`
 	EncryptionMode   string    `json:"encryption_mode,omitempty"`
+	ClusterMode      string    `json:"cluster_mode,omitempty"`
 }
 
 // GenerateChecksum calculates SHA256 checksum of a file

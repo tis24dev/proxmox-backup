@@ -551,3 +551,256 @@ func TestCloudStorageGetStatsSummarizesList(t *testing.T) {
 		t.Fatalf("expected a single lsl call, got %d", len(queue.calls))
 	}
 }
+
+// Test automatic fallback to write test when list check fails with 403
+func TestCloudStorageCheckWithListPermissionDeniedFallbackToWrite(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "r2",
+		CloudWriteHealthCheck:   false, // Auto mode
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// List check fails with 403 Forbidden
+			{name: "rclone", args: []string{"lsf", "r2:", "--max-depth", "1"},
+				err: errors.New("exit status 3"), out: "403 Forbidden"},
+			// Write test succeeds
+			{name: "rclone"}, // touch
+			{name: "rclone"}, // deletefile
+		},
+	}
+	cs.execCommand = queue.exec
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err != nil {
+		t.Fatalf("checkRemoteAccessible() should succeed via fallback, got: %v", err)
+	}
+
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls (lsf + touch + deletefile), got %d", len(queue.calls))
+	}
+}
+
+// Test NO fallback when timeout error occurs
+func TestCloudStorageCheckWithTimeoutNoFallback(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// List check times out (not a permission error) - first attempt
+			{name: "rclone", err: errors.New("context deadline exceeded"), out: "timeout"},
+			// Retry attempt 2
+			{name: "rclone", err: errors.New("context deadline exceeded"), out: "timeout"},
+			// Retry attempt 3
+			{name: "rclone", err: errors.New("context deadline exceeded"), out: "timeout"},
+		},
+	}
+	cs.execCommand = queue.exec
+	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err == nil {
+		t.Fatal("checkRemoteAccessible() should fail with timeout, got nil")
+	}
+
+	// Should try 3 times (with retries), no fallback to write test
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls (3 retries, no fallback), got %d", len(queue.calls))
+	}
+}
+
+// Test NO fallback when network error occurs
+func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// List check fails with network error - attempt 1
+			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
+			// Retry attempt 2
+			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
+			// Retry attempt 3
+			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
+		},
+	}
+	cs.execCommand = queue.exec
+	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err == nil {
+		t.Fatal("checkRemoteAccessible() should fail with network error, got nil")
+	}
+
+	// Should try 3 times (with retries), no fallback to write test
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls (3 retries, no fallback), got %d", len(queue.calls))
+	}
+}
+
+// Test backward compatibility: CLOUD_WRITE_HEALTHCHECK=true skips list check
+func TestCloudStorageCheckWriteHealthCheckTrueSkipsList(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   true, // Force write test mode
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// Should skip list check entirely, go straight to write test
+			{name: "rclone"}, // touch
+			{name: "rclone"}, // deletefile
+		},
+	}
+	cs.execCommand = queue.exec
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err != nil {
+		t.Fatalf("checkRemoteAccessible() error = %v", err)
+	}
+
+	// Should only have 2 calls (touch + deletefile), no lsf
+	if len(queue.calls) != 2 {
+		t.Fatalf("expected 2 rclone calls (touch + deletefile, no lsf), got %d", len(queue.calls))
+	}
+
+	// Verify first call is NOT lsf
+	if len(queue.calls) > 0 && strings.Contains(strings.Join(queue.calls[0].args, " "), "lsf") {
+		t.Fatal("expected to skip lsf when CLOUD_WRITE_HEALTHCHECK=true")
+	}
+}
+
+// Test both list and write fail
+func TestCloudStorageCheckBothListAndWriteFail(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// Attempt 1: List check fails with 401 - triggers fallback
+			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
+			// Fallback write test also fails - triggers retry
+			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
+			// Attempt 2: List check fails again
+			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
+			// Fallback write test fails again
+			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
+			// Attempt 3: List check fails again
+			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
+			// Fallback write test fails again
+			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
+		},
+	}
+	cs.execCommand = queue.exec
+	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err == nil {
+		t.Fatal("checkRemoteAccessible() should fail when both methods fail, got nil")
+	}
+
+	// Should try 3 times with fallback each time: 3x(lsf + touch) = 6 calls
+	if len(queue.calls) != 6 {
+		t.Fatalf("expected 6 rclone calls (3 attempts, each with lsf + touch), got %d", len(queue.calls))
+	}
+}
+
+// Test write succeeds but cleanup fails (should still succeed overall)
+func TestCloudStorageCheckWriteSucceedsButCleanupFails(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// List check fails
+			{name: "rclone", args: []string{"lsf", "remote:", "--max-depth", "1"},
+				err: errors.New("exit 3"), out: "403 Forbidden"},
+			// Write test succeeds
+			{name: "rclone"}, // touch succeeds
+			// Cleanup fails (no delete permission)
+			{name: "rclone", err: errors.New("exit 1"), out: "permission denied"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err != nil {
+		t.Fatalf("checkRemoteAccessible() should succeed even if cleanup fails, got: %v", err)
+	}
+
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls, got %d", len(queue.calls))
+	}
+}
+
+// Test fallback with CLOUD_REMOTE_PATH configured
+func TestCloudStorageCheckFallbackWithRemotePath(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "s3",
+		CloudRemotePath:         "backups",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			// Root check succeeds
+			{name: "rclone", args: []string{"lsf", "s3:", "--max-depth", "1"}},
+			// Path mkdir succeeds
+			{name: "rclone", args: []string{"mkdir", "s3:backups"}},
+			// Path list check fails with 403
+			{name: "rclone", args: []string{"lsf", "s3:backups", "--max-depth", "1"},
+				err: errors.New("exit 3"), out: "403 Forbidden"},
+			// Write test succeeds
+			{name: "rclone"}, // touch
+			{name: "rclone"}, // deletefile
+		},
+	}
+	cs.execCommand = queue.exec
+
+	err := cs.checkRemoteAccessible(context.Background())
+	if err != nil {
+		t.Fatalf("checkRemoteAccessible() should succeed via fallback, got: %v", err)
+	}
+
+	// Should have: lsf (root) + mkdir + lsf (path, fails) + touch + deletefile
+	if len(queue.calls) != 5 {
+		t.Fatalf("expected 5 rclone calls, got %d", len(queue.calls))
+	}
+}

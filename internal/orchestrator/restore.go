@@ -90,6 +90,31 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
 	}
 
+	// Cluster safety prompt: if backup proviene da cluster e vogliamo ripristinare pve_cluster, chiedi come procedere.
+	clusterSafeMode := false
+	if systemType == SystemTypePVE && strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster") && hasCategoryID(selectedCategories, "pve_cluster") {
+		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
+		choice, promptErr := promptClusterRestoreMode(ctx, reader)
+		if promptErr != nil {
+			return promptErr
+		}
+		if choice == 0 {
+			return ErrRestoreAborted
+		}
+		if choice == 1 {
+			clusterSafeMode = true
+			logger.Info("Selected SAFE cluster restore: /var/lib/pve-cluster will be exported only, not written to system")
+		} else {
+			logger.Warning("Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated")
+		}
+	}
+
+	// Split into normal restore categories and export-only categories
+	normalCategories, exportCategories := splitExportCategories(selectedCategories)
+	if clusterSafeMode {
+		normalCategories, exportCategories = redirectClusterCategoryToExport(normalCategories, exportCategories)
+	}
+
 	// Create restore configuration
 	restoreConfig := &SelectiveRestoreConfig{
 		Mode:               mode,
@@ -111,36 +136,120 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		return ErrRestoreAborted
 	}
 
-	// Create safety backup of current configuration
-	logger.Info("")
-	safetyBackup, err := CreateSafetyBackup(logger, selectedCategories, destRoot)
-	if err != nil {
-		logger.Warning("Failed to create safety backup: %v", err)
-		fmt.Println()
-		fmt.Print("Continue without safety backup? (yes/no): ")
-		response, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(response)) != "yes" {
-			return fmt.Errorf("restore aborted: safety backup failed")
+	// Create safety backup of current configuration (only for categories that will write to system paths)
+	var safetyBackup *SafetyBackupResult
+	if len(normalCategories) > 0 {
+		logger.Info("")
+		safetyBackup, err = CreateSafetyBackup(logger, normalCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create safety backup: %v", err)
+			fmt.Println()
+			fmt.Print("Continue without safety backup? (yes/no): ")
+			response, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(response)) != "yes" {
+				return fmt.Errorf("restore aborted: safety backup failed")
+			}
+		} else {
+			logger.Info("Safety backup location: %s", safetyBackup.BackupPath)
+			logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", safetyBackup.BackupPath)
 		}
-	} else {
-		logger.Info("Safety backup location: %s", safetyBackup.BackupPath)
-		logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", safetyBackup.BackupPath)
 	}
 
-	// Perform selective extraction
-	logger.Info("")
-	detailedLogPath, err := extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, selectedCategories, mode, logger)
-	if err != nil {
-		logger.Error("Restore failed: %v", err)
-		if safetyBackup != nil {
-			logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+	// If we are restoring cluster database, stop PVE services and unmount /etc/pve before writing
+	needsClusterRestore := systemType == SystemTypePVE && hasCategoryID(normalCategories, "pve_cluster")
+	clusterServicesStopped := false
+	pbsServicesStopped := false
+	needsPBSServices := systemType == SystemTypePBS && shouldStopPBSServices(normalCategories)
+	if needsClusterRestore {
+		logger.Info("")
+		logger.Info("Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve")
+		if err := stopPVEClusterServices(ctx, logger); err != nil {
+			return err
 		}
-		return err
+		clusterServicesStopped = true
+		defer func() {
+			if err := startPVEClusterServices(ctx, logger); err != nil {
+				logger.Warning("Failed to restart PVE services after restore: %v", err)
+			}
+		}()
+
+		if err := unmountEtcPVE(ctx, logger); err != nil {
+			logger.Warning("Could not unmount /etc/pve: %v", err)
+		}
+	}
+
+	// For PBS restores, stop PBS services before applying configuration/datastore changes if relevant categories are selected
+	if needsPBSServices {
+		logger.Info("")
+		logger.Info("Preparing PBS system for restore: stopping proxmox-backup services")
+		if err := stopPBSServices(ctx, logger); err != nil {
+			logger.Warning("Unable to stop PBS services automatically: %v", err)
+			fmt.Println()
+			cont, promptErr := promptYesNo(ctx, reader, "Continue restore with PBS services still running? (y/N): ")
+			if promptErr != nil {
+				return promptErr
+			}
+			if !cont {
+				return fmt.Errorf("restore aborted: PBS services still running")
+			}
+			logger.Info("Continuing restore without stopping PBS services")
+		} else {
+			pbsServicesStopped = true
+			defer func() {
+				if err := startPBSServices(ctx, logger); err != nil {
+					logger.Warning("Failed to restart PBS services after restore: %v", err)
+				}
+			}()
+		}
+	}
+
+	// Perform selective extraction for normal categories
+	var detailedLogPath string
+	if len(normalCategories) > 0 {
+		logger.Info("")
+		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, normalCategories, mode, logger)
+		if err != nil {
+			logger.Error("Restore failed: %v", err)
+			if safetyBackup != nil {
+				logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+			}
+			return err
+		}
+	} else {
+		logger.Info("")
+		logger.Info("No system-path categories selected for restore (only export categories will be processed).")
+	}
+
+	// Handle export-only categories (/etc/pve) by extracting them to a separate directory
+	exportLogPath := ""
+	exportRoot := ""
+	if len(exportCategories) > 0 {
+		exportRoot = exportDestRoot(cfg.BaseDir)
+		logger.Info("")
+		logger.Info("Exporting /etc/pve contents to: %s", exportRoot)
+		if err := os.MkdirAll(exportRoot, 0o755); err != nil {
+			return fmt.Errorf("failed to create export directory %s: %w", exportRoot, err)
+		}
+
+		if exportLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, exportCategories, RestoreModeCustom, logger); err != nil {
+			logger.Warning("Export of /etc/pve contents completed with errors: %v", err)
+		} else {
+			exportLogPath = exportLog
+		}
+	}
+
+	// SAFE cluster mode: offer applying configs via pvesh without touching config.db
+	if clusterSafeMode {
+		if exportRoot == "" {
+			logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
+		} else if err := runSafeClusterApply(ctx, reader, exportRoot, logger); err != nil {
+			logger.Warning("Cluster SAFE apply completed with errors: %v", err)
+		}
 	}
 
 	// Recreate directory structures from configuration files if relevant categories were restored
 	logger.Info("")
-	if shouldRecreateDirectories(systemType, selectedCategories) {
+	if shouldRecreateDirectories(systemType, normalCategories) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
@@ -156,6 +265,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if detailedLogPath != "" {
 		logger.Info("Detailed restore log: %s", detailedLogPath)
 	}
+	if exportLogPath != "" {
+		logger.Info("Exported /etc/pve files are available at: %s", exportLogPath)
+	}
 
 	if safetyBackup != nil {
 		logger.Info("Safety backup preserved at: %s", safetyBackup.BackupPath)
@@ -165,12 +277,20 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	logger.Info("")
 	logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
 	if systemType == SystemTypePVE {
-		logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
+		if needsClusterRestore && clusterServicesStopped {
+			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
+		} else {
+			logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
+		}
 	} else if systemType == SystemTypePBS {
-		logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
+		if pbsServicesStopped {
+			logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
+		} else {
+			logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
+		}
 
 		// Check ZFS pool status for PBS systems only when ZFS category was restored
-		if hasCategoryID(selectedCategories, "zfs") {
+		if hasCategoryID(normalCategories, "zfs") {
 			logger.Info("")
 			if err := checkZFSPoolsAfterRestore(logger); err != nil {
 				logger.Warning("ZFS pool check: %v", err)
@@ -245,6 +365,112 @@ func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
 	logger.Info("  - zpool import -d /dev/disk/by-id")
 	logger.Info("")
 
+	return nil
+}
+
+func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
+	commands := [][]string{
+		{"systemctl", "stop", "pve-cluster"},
+		{"systemctl", "stop", "pvedaemon"},
+		{"systemctl", "stop", "pveproxy"},
+		{"systemctl", "stop", "pvestatd"},
+	}
+	for _, cmd := range commands {
+		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
+			return fmt.Errorf("failed to stop PVE services (%s %s): %w", cmd[0], strings.Join(cmd[1:], " "), err)
+		}
+	}
+	return nil
+}
+
+func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
+	commands := [][]string{
+		{"systemctl", "start", "pve-cluster"},
+		{"systemctl", "start", "pvedaemon"},
+		{"systemctl", "start", "pveproxy"},
+		{"systemctl", "start", "pvestatd"},
+	}
+	for _, cmd := range commands {
+		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
+			return fmt.Errorf("failed to start PVE services (%s %s): %w", cmd[0], strings.Join(cmd[1:], " "), err)
+		}
+	}
+	return nil
+}
+
+func stopPBSServices(ctx context.Context, logger *logging.Logger) error {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return fmt.Errorf("systemctl not available: %w", err)
+	}
+	commands := [][]string{
+		{"systemctl", "stop", "proxmox-backup-proxy"},
+		{"systemctl", "stop", "proxmox-backup"},
+	}
+	var failures []string
+	for _, cmd := range commands {
+		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
+			failures = append(failures, fmt.Sprintf("%s %s: %v", cmd[0], strings.Join(cmd[1:], " "), err))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func startPBSServices(ctx context.Context, logger *logging.Logger) error {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return fmt.Errorf("systemctl not available: %w", err)
+	}
+	commands := [][]string{
+		{"systemctl", "start", "proxmox-backup"},
+		{"systemctl", "start", "proxmox-backup-proxy"},
+	}
+	var failures []string
+	for _, cmd := range commands {
+		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
+			failures = append(failures, fmt.Sprintf("%s %s: %v", cmd[0], strings.Join(cmd[1:], " "), err))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
+	cmd := exec.CommandContext(ctx, "umount", "/etc/pve")
+	output, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(output))
+	if err != nil {
+		if strings.Contains(msg, "not mounted") {
+			logger.Info("Skipping umount /etc/pve (already unmounted)")
+			return nil
+		}
+		if msg != "" {
+			return fmt.Errorf("umount /etc/pve failed: %s", msg)
+		}
+		return fmt.Errorf("umount /etc/pve failed: %w", err)
+	}
+	if msg != "" {
+		logger.Debug("umount /etc/pve output: %s", msg)
+	}
+	return nil
+}
+
+func runCommand(ctx context.Context, logger *logging.Logger, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	output, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(output))
+	if err != nil {
+		if msg != "" {
+			return fmt.Errorf("%s %s failed: %s", name, strings.Join(args, " "), msg)
+		}
+		return fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
+	}
+	if msg != "" {
+		logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
+	}
 	return nil
 }
 
@@ -379,6 +605,49 @@ func hasCategoryID(categories []Category, id string) bool {
 	return false
 }
 
+// shouldStopPBSServices reports whether any selected categories belong to PBS-specific configuration
+// and therefore require stopping PBS services before restore.
+func shouldStopPBSServices(categories []Category) bool {
+	for _, cat := range categories {
+		if cat.Type == CategoryTypePBS {
+			return true
+		}
+	}
+	return false
+}
+
+func splitExportCategories(categories []Category) (normal []Category, export []Category) {
+	for _, cat := range categories {
+		if cat.ExportOnly {
+			export = append(export, cat)
+			continue
+		}
+		normal = append(normal, cat)
+	}
+	return normal, export
+}
+
+// redirectClusterCategoryToExport removes pve_cluster from normal categories and adds it to export-only list.
+func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Category, []Category) {
+	filtered := make([]Category, 0, len(normal))
+	for _, cat := range normal {
+		if cat.ID == "pve_cluster" {
+			export = append(export, cat)
+			continue
+		}
+		filtered = append(filtered, cat)
+	}
+	return filtered, export
+}
+
+func exportDestRoot(baseDir string) string {
+	base := strings.TrimSpace(baseDir)
+	if base == "" {
+		base = "/opt/proxmox-backup"
+	}
+	return filepath.Join(base, fmt.Sprintf("pve-config-export-%s", time.Now().Format("20060102-150405")))
+}
+
 // runFullRestore performs a full restore without selective options (fallback)
 func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger) error {
 	if err := confirmRestoreAction(ctx, reader, candidate, destRoot); err != nil {
@@ -435,6 +704,334 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 	}
 
 	return nil
+}
+
+// runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
+// It operates on files extracted to exportRoot (e.g. exportDestRoot).
+func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+	if _, err := exec.LookPath("pvesh"); err != nil {
+		logger.Warning("pvesh not found in PATH; skipping SAFE cluster apply")
+		return nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	currentNode, _ := os.Hostname()
+	currentNode = shortHost(currentNode)
+
+	logger.Info("")
+	logger.Info("SAFE cluster restore: applying configs via pvesh (node=%s)", currentNode)
+
+	vmEntries, vmErr := scanVMConfigs(exportRoot, currentNode)
+	if vmErr != nil {
+		logger.Warning("Failed to scan VM configs: %v", vmErr)
+	}
+	if len(vmEntries) > 0 {
+		fmt.Println()
+		fmt.Printf("Found %d VM/CT configs for node %s\n", len(vmEntries), currentNode)
+		applyVMs, err := promptYesNo(ctx, reader, "Apply all VM/CT configs via pvesh?")
+		if err != nil {
+			return err
+		}
+		if applyVMs {
+			applied, failed := applyVMConfigs(ctx, vmEntries, logger)
+			logger.Info("VM/CT apply completed: ok=%d failed=%d", applied, failed)
+		} else {
+			logger.Info("Skipping VM/CT apply")
+		}
+	} else {
+		logger.Info("No VM/CT configs found for node %s in export", currentNode)
+	}
+
+	// Storage configuration
+	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
+	if info, err := os.Stat(storageCfg); err == nil && !info.IsDir() {
+		fmt.Println()
+		fmt.Printf("Storage configuration found: %s\n", storageCfg)
+		applyStorage, err := promptYesNo(ctx, reader, "Apply storage.cfg via pvesh?")
+		if err != nil {
+			return err
+		}
+		if applyStorage {
+			applied, failed, err := applyStorageCfg(ctx, storageCfg, logger)
+			if err != nil {
+				logger.Warning("Storage apply encountered errors: %v", err)
+			}
+			logger.Info("Storage apply completed: ok=%d failed=%d", applied, failed)
+		} else {
+			logger.Info("Skipping storage.cfg apply")
+		}
+	} else {
+		logger.Info("No storage.cfg found in export")
+	}
+
+	// Datacenter configuration
+	dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
+	if info, err := os.Stat(dcCfg); err == nil && !info.IsDir() {
+		fmt.Println()
+		fmt.Printf("Datacenter configuration found: %s\n", dcCfg)
+		applyDC, err := promptYesNo(ctx, reader, "Apply datacenter.cfg via pvesh?")
+		if err != nil {
+			return err
+		}
+		if applyDC {
+			if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
+				logger.Warning("Failed to apply datacenter.cfg: %v", err)
+			} else {
+				logger.Info("datacenter.cfg applied successfully")
+			}
+		} else {
+			logger.Info("Skipping datacenter.cfg apply")
+		}
+	} else {
+		logger.Info("No datacenter.cfg found in export")
+	}
+
+	return nil
+}
+
+type vmEntry struct {
+	VMID string
+	Kind string // qemu | lxc
+	Name string
+	Path string
+}
+
+func scanVMConfigs(exportRoot, node string) ([]vmEntry, error) {
+	var entries []vmEntry
+	base := filepath.Join(exportRoot, "etc/pve/nodes", node)
+
+	type dirSpec struct {
+		kind string
+		path string
+	}
+
+	dirs := []dirSpec{
+		{kind: "qemu", path: filepath.Join(base, "qemu-server")},
+		{kind: "lxc", path: filepath.Join(base, "lxc")},
+	}
+
+	for _, spec := range dirs {
+		infos, err := os.ReadDir(spec.path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range infos {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".conf") {
+				continue
+			}
+			vmid := strings.TrimSuffix(name, ".conf")
+			vmPath := filepath.Join(spec.path, name)
+			vmName := readVMName(vmPath)
+			entries = append(entries, vmEntry{
+				VMID: vmid,
+				Kind: spec.kind,
+				Name: vmName,
+				Path: vmPath,
+			})
+		}
+	}
+
+	return entries, nil
+}
+
+func readVMName(confPath string) string {
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(t, "name:"))
+		}
+		if strings.HasPrefix(t, "hostname:") {
+			return strings.TrimSpace(strings.TrimPrefix(t, "hostname:"))
+		}
+	}
+	return ""
+}
+
+func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logger) (applied, failed int) {
+	for _, vm := range entries {
+		if err := ctx.Err(); err != nil {
+			logger.Warning("VM apply aborted: %v", err)
+			return applied, failed
+		}
+		target := fmt.Sprintf("/nodes/%s/%s/%s/config", detectNodeForVM(vm), vm.Kind, vm.VMID)
+		args := []string{"set", target, "--filename", vm.Path}
+		if err := runPvesh(ctx, logger, args); err != nil {
+			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+			failed++
+		} else {
+			display := vm.VMID
+			if vm.Name != "" {
+				display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
+			}
+			logger.Info("Applied VM/CT config %s", display)
+			applied++
+		}
+	}
+	return applied, failed
+}
+
+func detectNodeForVM(vm vmEntry) string {
+	host, _ := os.Hostname()
+	host = shortHost(host)
+	if host != "" {
+		return host
+	}
+	return "localhost"
+}
+
+type storageBlock struct {
+	ID   string
+	data []string
+}
+
+func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, failed int, err error) {
+	blocks, perr := parseStorageBlocks(cfgPath)
+	if perr != nil {
+		return 0, 0, perr
+	}
+	if len(blocks) == 0 {
+		logger.Info("No storage definitions detected in storage.cfg")
+		return 0, 0, nil
+	}
+
+	for _, blk := range blocks {
+		tmp, tmpErr := os.CreateTemp("", fmt.Sprintf("pve-storage-%s-*.cfg", sanitizeID(blk.ID)))
+		if tmpErr != nil {
+			failed++
+			continue
+		}
+		tmpName := tmp.Name()
+		if _, werr := tmp.WriteString(strings.Join(blk.data, "\n") + "\n"); werr != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			failed++
+			continue
+		}
+		_ = tmp.Close()
+
+		args := []string{"set", fmt.Sprintf("/cluster/storage/%s", blk.ID), "-conf", tmpName}
+		if runErr := runPvesh(ctx, logger, args); runErr != nil {
+			logger.Warning("Failed to apply storage %s: %v", blk.ID, runErr)
+			failed++
+		} else {
+			logger.Info("Applied storage definition %s", blk.ID)
+			applied++
+		}
+
+		_ = os.Remove(tmpName)
+
+		if err := ctx.Err(); err != nil {
+			return applied, failed, err
+		}
+	}
+
+	return applied, failed, nil
+}
+
+func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var blocks []storageBlock
+	var current *storageBlock
+
+	flush := func() {
+		if current != nil {
+			blocks = append(blocks, *current)
+			current = nil
+		}
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(trimmed, "storage:") {
+			flush()
+			id := strings.TrimSpace(strings.TrimPrefix(trimmed, "storage:"))
+			current = &storageBlock{ID: id, data: []string{line}}
+			continue
+		}
+		if current != nil {
+			current.data = append(current.data, line)
+		}
+	}
+	flush()
+
+	return blocks, nil
+}
+
+func runPvesh(ctx context.Context, logger *logging.Logger, args []string) error {
+	cmd := exec.CommandContext(ctx, "pvesh", args...)
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		logger.Debug("pvesh %v output: %s", args, strings.TrimSpace(string(output)))
+	}
+	if err != nil {
+		return fmt.Errorf("pvesh %v failed: %w", args, err)
+	}
+	return nil
+}
+
+func shortHost(host string) string {
+	if idx := strings.Index(host, "."); idx > 0 {
+		return host[:idx]
+	}
+	return host
+}
+
+func sanitizeID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+// promptClusterRestoreMode asks how to handle cluster database restore (safe export vs full recovery).
+func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, error) {
+	fmt.Println()
+	fmt.Println("Cluster backup detected. Choose how to restore the cluster database:")
+	fmt.Println("  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).")
+	fmt.Println("  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.")
+	fmt.Println("  [0] Exit")
+
+	for {
+		fmt.Print("Choice: ")
+		input, err := readLineWithContext(ctx, reader)
+		if err != nil {
+			return 0, err
+		}
+		switch strings.TrimSpace(input) {
+		case "1":
+			return 1, nil
+		case "2":
+			return 2, nil
+		case "0":
+			return 0, nil
+		default:
+			fmt.Println("Please enter 1, 2, or 0.")
+		}
+	}
 }
 
 // extractSelectiveArchive extracts only files matching selected categories
@@ -733,6 +1330,12 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 	if !strings.HasPrefix(target, safePrefix) &&
 		target != cleanDestRoot {
 		return fmt.Errorf("illegal path: %s", header.Name)
+	}
+
+	// Hard guard: never write directly into /etc/pve when restoring to system root
+	if cleanDestRoot == string(os.PathSeparator) && strings.HasPrefix(target, "/etc/pve") {
+		logger.Warning("Skipping restore to %s (writes to /etc/pve are prohibited)", target)
+		return nil
 	}
 
 	// Create parent directories

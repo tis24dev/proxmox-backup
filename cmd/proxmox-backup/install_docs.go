@@ -18,12 +18,11 @@ func installSupportDocs(baseDir string, bootstrap *logging.BootstrapLogger) erro
 		return nil
 	}
 
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
-		return fmt.Errorf("ensure base directory %s: %w", baseDir, err)
-	}
-
 	for _, doc := range docs {
 		target := filepath.Join(baseDir, doc.Name)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("ensure directory for %s: %w", target, err)
+		}
 		if err := os.WriteFile(target, doc.Data, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", target, err)
 		}

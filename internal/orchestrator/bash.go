@@ -262,6 +262,9 @@ type BackupStats struct {
 	ServerID  string
 	ServerMAC string
 
+	// Cluster mode (only meaningful for PVE)
+	ClusterMode string // "cluster" or "standalone"
+
 	// File counts for notifications
 	FilesIncluded int
 	FilesMissing  int
@@ -634,11 +637,12 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		CompressionMode:          o.compressionMode,
 		CompressionThreads:       o.compressionThreads,
 		LocalPath:                o.backupPath,
-		EmailStatus:              "ok",
-		TelegramStatus:           o.describeTelegramConfig(),
-		ServerID:                 o.serverID,
-		ServerMAC:                o.serverMAC,
-		ExitCode:                 types.ExitSuccess.Int(),
+		// Start with unknown email status; updated later by notification adapter after email send.
+		EmailStatus:    "unknown",
+		TelegramStatus: o.describeTelegramConfig(),
+		ServerID:       o.serverID,
+		ServerMAC:      o.serverMAC,
+		ExitCode:       types.ExitSuccess.Int(),
 	}
 	// Get log file path from logger (more reliable than env var)
 	if logFile := o.logger.GetLogFilePath(); logFile != "" {
@@ -826,6 +830,13 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	stats.FilesIncluded = int(collStats.FilesProcessed)
 	stats.FilesMissing = int(collStats.FilesFailed)
 	stats.UncompressedSize = collStats.BytesCollected
+	if pType == types.ProxmoxVE {
+		if collector.IsClusteredPVE() {
+			stats.ClusterMode = "cluster"
+		} else {
+			stats.ClusterMode = "standalone"
+		}
+	}
 
 	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
 		o.logger.Debug("Failed to write backup metadata: %v", err)
@@ -1011,6 +1022,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			Hostname:         stats.Hostname,
 			ScriptVersion:    stats.ScriptVersion,
 			EncryptionMode:   encryptionMode,
+			ClusterMode:      stats.ClusterMode,
 		}
 
 		if err := backup.CreateManifest(ctx, o.logger, manifest, manifestPath); err != nil {
@@ -1479,6 +1491,9 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	builder.WriteString(fmt.Sprintf("BACKUP_TYPE=%s\n", stats.ProxmoxType.String()))
 	builder.WriteString(fmt.Sprintf("TIMESTAMP=%s\n", stats.Timestamp))
 	builder.WriteString(fmt.Sprintf("HOSTNAME=%s\n", stats.Hostname))
+	if stats.ClusterMode != "" {
+		builder.WriteString(fmt.Sprintf("PVE_CLUSTER_MODE=%s\n", stats.ClusterMode))
+	}
 	builder.WriteString("SUPPORTS_SELECTIVE_RESTORE=true\n")
 	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
 

@@ -53,6 +53,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
+	enableEncryption := false
 
 	// Detect legacy Bash-based installation (old backup.env or proxmox-backup.sh)
 	legacyPaths := []string{
@@ -88,46 +89,48 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		fmt.Println()
 	}
 
-	template, err := prepareBaseTemplate(ctx, reader, configPath)
+	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
 		installErr = wrapInstallError(err)
 		return installErr
 	}
 
-	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
-		installErr = wrapInstallError(err)
-		return installErr
-	}
-	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
-		installErr = wrapInstallError(err)
-		return installErr
-	}
-	if template, err = configureNotifications(ctx, reader, template); err != nil {
-		installErr = wrapInstallError(err)
-		return installErr
-	}
-	enableEncryption, err := configureEncryption(ctx, reader, &template)
-	if err != nil {
-		installErr = wrapInstallError(err)
-		return installErr
-	}
+	if !skipConfigWizard {
+		if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
+			installErr = wrapInstallError(err)
+			return installErr
+		}
+		if template, err = configureCloudStorage(ctx, reader, template); err != nil {
+			installErr = wrapInstallError(err)
+			return installErr
+		}
+		if template, err = configureNotifications(ctx, reader, template); err != nil {
+			installErr = wrapInstallError(err)
+			return installErr
+		}
+		enableEncryption, err = configureEncryption(ctx, reader, &template)
+		if err != nil {
+			installErr = wrapInstallError(err)
+			return installErr
+		}
 
-	// Ensure BASE_DIR is explicitly present in the generated env file so that
-	// subsequent runs and encryption setup use the same root directory.
-	template = setEnvValue(template, "BASE_DIR", baseDir)
+		// Ensure BASE_DIR is explicitly present in the generated env file so that
+		// subsequent runs and encryption setup use the same root directory.
+		template = setEnvValue(template, "BASE_DIR", baseDir)
 
-	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
-		installErr = err
-		return installErr
+		if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
+			installErr = err
+			return installErr
+		}
+		bootstrap.Info("✓ Configuration saved at %s", configPath)
 	}
-	bootstrap.Info("✓ Configuration saved at %s", configPath)
 
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
 		installErr = fmt.Errorf("install documentation: %w", err)
 		return installErr
 	}
 
-	if enableEncryption {
+	if !skipConfigWizard && enableEncryption {
 		if err := runInitialEncryptionSetup(ctx, configPath); err != nil {
 			installErr = err
 			return installErr
@@ -235,23 +238,32 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, error) {
-	if _, err := os.Stat(configPath); err == nil {
-		overwrite, err := promptYesNo(ctx, reader, fmt.Sprintf("%s already exists. Overwrite? [y/N]: ", configPath), false)
-		if err != nil {
-			return "", err
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, error) {
+	if info, err := os.Stat(configPath); err == nil {
+		if info.Mode().IsRegular() {
+			overwrite, err := promptYesNo(ctx, reader, fmt.Sprintf("%s already exists. Overwrite? [y/N]: ", configPath), false)
+			if err != nil {
+				return "", false, err
+			}
+			if !overwrite {
+				fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
+				return "", true, nil
+			}
 		}
-		if !overwrite {
-			return "", fmt.Errorf("installation aborted (existing configuration kept)")
-		}
+	} else if !os.IsNotExist(err) {
+		return "", false, fmt.Errorf("failed to access configuration file: %w", err)
 	}
 
-	return config.DefaultEnvTemplate(), nil
+	return config.DefaultEnvTemplate(), false, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
 	fmt.Println("\n--- Secondary storage ---")
-	fmt.Println("Configure an additional local path for redundant copies. (You can change it later)")
+	fmt.Println("Configure an additional local path for redundant copies.")
+	fmt.Println("IMPORTANT: Secondary path must be a filesystem-mounted directory (e.g., /mnt/nas-backup)")
+	fmt.Println("Network shares must be mounted BEFORE running this backup tool.")
+	fmt.Println("For direct network access without mounting, use cloud storage (rclone) instead.")
+	fmt.Println("(You can change these settings later in backup.env)")
 	enableSecondary, err := promptYesNo(ctx, reader, "Enable secondary backup path? [y/N]: ", false)
 	if err != nil {
 		return "", err

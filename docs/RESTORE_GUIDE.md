@@ -1,0 +1,1750 @@
+# Proxmox Backup Go - Restore Guide
+
+Complete guide for restoring Proxmox VE and Proxmox Backup Server configurations using the interactive restore workflow.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Overview](#overview)
+- [Category System](#category-system)
+- [Restore Modes](#restore-modes)
+- [Complete Workflow](#complete-workflow)
+- [Cluster Database Restore](#cluster-database-restore)
+- [Export-Only Categories](#export-only-categories)
+- [Safety Features](#safety-features)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+
+---
+
+## Quick Start
+
+### Basic Restore
+
+```bash
+# Run the interactive restore workflow
+./build/proxmox-backup --restore
+
+# Follow the prompts:
+# 1. Select backup source location
+# 2. Choose specific backup from list
+# 3. Enter decryption passphrase (if encrypted)
+# 4. Select restore mode
+# 5. Review restore plan
+# 6. Type "RESTORE" to confirm
+# 7. Wait for completion
+# 8. Verify services and cluster status
+```
+
+### Requirements
+
+- **Root privileges**: Required for system path restoration
+- **Sufficient disk space**: For decryption and safety backups
+- **Service availability**: Target system services must be accessible
+- **Network isolation**: For cluster restores, node should be isolated
+
+---
+
+## Overview
+
+The `--restore` command provides an **interactive, category-based restoration system** that allows selective or full restoration of Proxmox configuration files from backup archives.
+
+### Key Features
+
+- **Category-based selection**: Granular control over what gets restored
+- **4 restore modes**: Full, Storage, Base, or Custom selection
+- **Safety backups**: Automatic backup before any changes
+- **Encryption support**: AGE encryption with passphrase or key
+- **Cluster-aware**: Special handling for PVE cluster database
+- **Export-only protection**: Critical paths protected from direct writes
+- **Comprehensive logging**: Detailed audit trail of all operations
+
+### What Gets Restored
+
+- System configurations (network, SSH, SSL, services)
+- Proxmox-specific configs (cluster, storage, datastores)
+- Custom scripts and cron jobs
+- ZFS configurations and pool cache
+- Backup jobs and scheduled tasks
+
+### What Does NOT Get Restored
+
+- VM/CT disk images (use Proxmox native tools)
+- Application data (databases, user data)
+- System packages (use apt/dpkg)
+- Active cluster filesystem (`/etc/pve` - export-only)
+
+---
+
+## Category System
+
+Restore operations are organized into **15+ categories** that group related configuration files.
+
+### PVE-Specific Categories (6 categories)
+
+| Category | Name | Description | Paths |
+|----------|------|-------------|-------|
+| `pve_config_export` | PVE Config Export | **Export-only** copy of /etc/pve (never written to system) | `./etc/pve/` |
+| `pve_cluster` | PVE Cluster Configuration | Cluster configuration and database | `./var/lib/pve-cluster/` |
+| `storage_pve` | PVE Storage Configuration | Storage definitions | `./etc/vzdump.conf` |
+| `pve_jobs` | PVE Backup Jobs | Scheduled backup jobs | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
+| `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
+| `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
+
+### PBS-Specific Categories (3 categories)
+
+| Category | Name | Description | Paths |
+|----------|------|-------------|-------|
+| `pbs_config` | PBS Configuration | Main PBS configuration | `./etc/proxmox-backup/` |
+| `datastore_pbs` | PBS Datastore Configuration | Datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
+| `pbs_jobs` | PBS Jobs | Sync, verify, prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
+
+### Common Categories (7 categories)
+
+| Category | Name | Description | Paths |
+|----------|------|-------------|-------|
+| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf` |
+| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/proxmox-backup/proxy.pem` |
+| `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
+| `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
+| `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
+| `services` | System Services | Systemd service configs | `./etc/systemd/system/`<br>`./etc/default/` |
+| `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
+
+### Category Availability
+
+Not all categories are available in every backup. The restore workflow:
+1. Analyzes the backup archive
+2. Detects which categories contain files
+3. Displays only available categories for selection
+
+---
+
+## Restore Modes
+
+Four predefined modes provide common restoration scenarios, plus custom selection for advanced users.
+
+### 1. FULL Restore
+
+**Description**: Restore everything from backup (except export-only categories)
+
+**Use Cases**:
+- Complete disaster recovery
+- Migrating to new hardware
+- Restoring after system failure
+
+**Categories Included**: All available categories except `pve_config_export`
+
+**Command Flow**:
+```
+Select restore mode:
+  [1] FULL restore ← Select this
+```
+
+---
+
+### 2. STORAGE Only
+
+**Description**: Restore cluster/storage configuration and scheduled jobs
+
+**Use Cases**:
+- Recovering storage definitions
+- Restoring backup job schedules
+- Fixing broken cluster database
+
+**PVE Categories**:
+- `pve_cluster` - Cluster configuration
+- `storage_pve` - Storage definitions
+- `pve_jobs` - Backup jobs
+- `zfs` - ZFS configuration
+
+**PBS Categories**:
+- `pbs_config` - PBS configuration
+- `datastore_pbs` - Datastore definitions
+- `pbs_jobs` - Sync/verify/prune jobs
+- `zfs` - ZFS configuration
+
+**Command Flow**:
+```
+Select restore mode:
+  [2] STORAGE only ← Select this
+```
+
+---
+
+### 3. SYSTEM BASE Only
+
+**Description**: Restore core system configurations (network, SSH, SSL, services)
+
+**Use Cases**:
+- Restoring network configuration after manual changes
+- Recovering SSH access
+- Fixing SSL certificate issues
+- Restoring systemd service customizations
+
+**Categories Included**:
+- `network` - Network interfaces, hostname, routing
+- `ssl` - SSL/TLS certificates
+- `ssh` - SSH keys and configuration
+- `services` - Systemd service configs
+
+**Command Flow**:
+```
+Select restore mode:
+  [3] SYSTEM BASE only ← Select this
+```
+
+---
+
+### 4. CUSTOM Selection
+
+**Description**: Choose specific categories interactively
+
+**Use Cases**:
+- Selective restoration of specific components
+- Restoring only network configuration
+- Recovering only backup jobs
+- Including export-only categories
+
+**Interactive Menu**:
+```
+Available categories:
+  [1] [ ] PVE Cluster Configuration
+      Proxmox VE cluster configuration and database
+  [2] [ ] Network Configuration
+      Network interfaces and routing
+  [3] [ ] SSL Certificates
+      SSL/TLS certificates and keys
+  ...
+
+Commands:
+  - Type number to toggle category
+  - Type 'a' to select all
+  - Type 'n' to deselect all
+  - Type 'c' to continue
+  - Type '0' to cancel
+```
+
+**Toggle Selection**:
+```
+Your selection: 1      # Toggle category 1
+Your selection: 2      # Toggle category 2
+Your selection: c      # Continue to restore plan
+```
+
+---
+
+## Complete Workflow
+
+The restore process follows an 11-phase workflow with safety checks at each step.
+
+### Workflow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    RESTORE WORKFLOW                             │
+└─────────────────────────────────────────────────────────────────┘
+
+Phase 1: Backup Selection
+  ├─ Display configured paths (local/secondary/cloud)
+  ├─ User selects search location
+  ├─ Scan for .bundle.tar and raw archives
+  └─ User selects specific backup
+
+Phase 2: Decryption (if needed)
+  ├─ Detect encryption (AGE)
+  ├─ Prompt for key/passphrase
+  ├─ Decrypt to /tmp/proxmox-backup/
+  └─ Generate new SHA256 checksum
+
+Phase 3: Compatibility Check
+  ├─ Detect current system type (PVE/PBS/Unknown)
+  ├─ Read backup type from manifest
+  ├─ Validate compatibility
+  └─ Warn if mismatch, require confirmation
+
+Phase 4: Category Analysis
+  ├─ Open and scan archive
+  ├─ Check each category for file presence
+  └─ Mark categories as available/unavailable
+
+Phase 5: Mode Selection & Category Choice
+  ├─ Display restore mode menu
+  ├─ User selects mode (Full/Storage/Base/Custom)
+  ├─ If Custom: Interactive category selection
+  └─ Build final category list
+
+Phase 6: Restore Plan & Confirmation
+  ├─ Display detailed restore plan
+  ├─ Show categories and file paths
+  ├─ Show warnings
+  └─ User types "RESTORE" to confirm
+
+Phase 7: Safety Backup
+  ├─ Create /tmp backup of files to be overwritten
+  ├─ Preserve permissions, ownership, timestamps
+  └─ Display rollback command
+
+Phase 8: Service Management (Cluster Restore Only)
+  ├─ Detect if pve_cluster category selected
+  ├─ Stop: pve-cluster, pvedaemon, pveproxy, pvestatd
+  ├─ Unmount /etc/pve
+  └─ Defer restart for after restore
+
+Phase 9: File Extraction
+  ├─ Extract normal categories to /
+  ├─ Selective extraction based on category paths
+  ├─ Preserve ownership, permissions, timestamps
+  └─ Log all operations
+
+Phase 10: Export-Only Extraction
+  ├─ Extract export-only categories to timestamped directory
+  ├─ Destination: <BASE_DIR>/pve-config-export-YYYYMMDD-HHMMSS/
+  └─ Separate detailed log
+
+Phase 11: Post-Restore Tasks
+  ├─ Recreate storage/datastore directories
+  ├─ Check ZFS pool status (PBS only)
+  ├─ Restart PVE services (if stopped)
+  └─ Display completion summary
+```
+
+### Phase-by-Phase Details
+
+#### Phase 1: Backup Selection
+
+**Interactive prompts**:
+```
+Select backup source:
+  [1] Primary backup path: /opt/proxmox-backup/backups
+  [2] Secondary backup path: /mnt/secondary/backups
+  [3] Cloud/local path: /mnt/cloud-backups
+  [0] Cancel
+```
+
+**Backup list display**:
+```
+Available backups:
+  [1] backup-pve01-20251120-143052.bundle.tar
+      Created: 2025-11-20 14:30:52
+      Encrypted: Yes (AGE)
+      Tool Version: v1.2.0
+      System: Proxmox Virtual Environment (PVE)
+
+  [2] backup-pve01-20251119-020015.bundle.tar
+      Created: 2025-11-19 02:00:15
+      Encrypted: Yes (AGE)
+      Tool Version: v1.2.0
+      System: Proxmox Virtual Environment (PVE)
+```
+
+#### Phase 2: Decryption
+
+**For AGE-encrypted backups**:
+```
+Backup is encrypted with AGE.
+
+Decryption options:
+  [1] Use AGE passphrase
+  [2] Use AGE identity file (key)
+  [0] Cancel
+
+Enter AGE passphrase: ********
+Decrypting... (this may take several minutes)
+Decryption complete.
+Verifying SHA256 checksum...
+Checksum verified successfully.
+```
+
+#### Phase 3: Compatibility Check
+
+**System detection**:
+```
+Current system type: Proxmox Virtual Environment (PVE)
+Backup system type: Proxmox Virtual Environment (PVE)
+✓ Systems are compatible
+```
+
+**Incompatibility warning**:
+```
+⚠ WARNING: Potential incompatibility detected!
+
+Current system: Proxmox Backup Server (PBS)
+Backup source: Proxmox Virtual Environment (PVE)
+
+This backup may contain PVE-specific configurations that are not
+compatible with PBS. Proceeding may result in system instability.
+
+Type "yes" to continue anyway or "no" to abort:
+```
+
+#### Phase 6: Restore Plan
+
+**Example display**:
+```
+═══════════════════════════════════════════════════════════════
+RESTORE PLAN
+═══════════════════════════════════════════════════════════════
+
+Restore mode: STORAGE only (4 categories)
+System type:  Proxmox Virtual Environment (PVE)
+
+Categories to restore:
+  1. PVE Cluster Configuration
+     Proxmox VE cluster configuration and database
+  2. PVE Storage Configuration
+     Storage definitions and backup jobs
+  3. PVE Backup Jobs
+     Scheduled backup jobs
+  4. ZFS Configuration
+     ZFS pool cache and configs
+
+Files/directories that will be restored:
+  • /var/lib/pve-cluster/
+  • /etc/vzdump.conf
+  • /etc/pve/jobs.cfg
+  • /etc/pve/vzdump.cron
+  • /etc/zfs/
+  • /etc/hostid
+
+⚠ WARNING:
+  • Existing files at these locations will be OVERWRITTEN
+  • A safety backup will be created before restoration
+  • Services may need to be restarted after restoration
+  • PVE cluster services will be stopped during restore
+
+Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort:
+```
+
+#### Phase 7: Safety Backup
+
+```
+Creating safety backup of existing files...
+Safety backup created successfully.
+Safety backup location: /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
+
+You can restore from this backup if needed using:
+  tar -xzf /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz -C /
+```
+
+#### Phase 8: Service Management
+
+**For cluster database restore**:
+```
+Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
+
+Stopping pve-cluster...
+Stopping pvedaemon...
+Stopping pveproxy...
+Stopping pvestatd...
+All PVE services stopped successfully.
+
+Unmounting /etc/pve...
+Successfully unmounted /etc/pve
+```
+
+#### Phase 9 & 10: Extraction
+
+```
+Extracting selected categories from archive into /
+Detailed restore log: /tmp/proxmox-backup/restore_20251120_143052.log
+
+Extracting: /var/lib/pve-cluster/config.db
+Extracting: /var/lib/pve-cluster/.version
+Extracting: /etc/vzdump.conf
+...
+Successfully restored 47 files/directories
+
+Exporting /etc/pve contents to: /opt/proxmox-backup/pve-config-export-20251120-143052
+Exported 23 files/directories
+```
+
+#### Phase 11: Completion
+
+```
+═══════════════════════════════════════════════════════════════
+RESTORE COMPLETED
+═══════════════════════════════════════════════════════════════
+
+Restore completed successfully.
+Temporary decrypted bundle removed.
+Detailed restore log: /tmp/proxmox-backup/restore_20251120_143052.log
+Exported /etc/pve files: /opt/proxmox-backup/pve-config-export-20251120-143052/
+Safety backup preserved at: /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
+
+IMPORTANT: You may need to restart services for changes to take effect.
+  PVE services were stopped/restarted during restore; verify status with: pvecm status
+
+Recreating storage directories from /etc/pve/storage.cfg...
+Created: /mnt/backup/dump/
+Created: /mnt/backup/images/
+Storage directories recreated successfully.
+```
+
+---
+
+## Cluster Database Restore
+
+Restoring the PVE cluster database (`/var/lib/pve-cluster/config.db`) requires special handling due to the cluster filesystem architecture.
+
+### Understanding PVE Cluster Filesystem
+
+**Architecture**:
+```
+pmxcfs (daemon)
+    ↓
+reads/writes config.db (/var/lib/pve-cluster/config.db)
+    ↓
+presents as FUSE mount (/etc/pve)
+    ↓
+syncs via corosync (cluster communication)
+```
+
+**Critical Files**:
+- `/var/lib/pve-cluster/config.db` - SQLite database (actual storage)
+- `/etc/pve/` - FUSE mount (view into database)
+
+**Why Special Handling Needed**:
+- Cannot write to `/etc/pve` directly (it's a FUSE mount)
+- Must stop pmxcfs to safely replace config.db
+- Must ensure cluster synchronization after restore
+
+### Prerequisites
+
+**CRITICAL: Before starting restore**:
+
+1. **Isolate Node** (for multi-node clusters):
+   ```bash
+   # Stop cluster communication
+   systemctl stop corosync
+
+   # Or disconnect from cluster network
+   # ip link set <cluster-interface> down
+   ```
+
+2. **Verify Node Isolation**:
+   ```bash
+   pvecm nodes
+   # Should show only this node or error
+   ```
+
+3. **Document Current State**:
+   ```bash
+   pvecm status > /root/cluster-state-before-restore.txt
+   pvesm status > /root/storage-state-before-restore.txt
+   ```
+
+4. **Backup Current State** (in addition to automatic safety backup):
+   ```bash
+   tar -czf /root/manual-cluster-backup.tar.gz /var/lib/pve-cluster/
+   ```
+
+### Automatic Service Management
+
+When restoring the `pve_cluster` category, the workflow automatically:
+
+**Stops services** (in order):
+```
+1. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
+2. pvedaemon    → Stops API daemon
+3. pveproxy     → Stops web interface
+4. pvestatd     → Stops statistics collection
+```
+
+**Unmounts filesystem**:
+```bash
+umount /etc/pve
+```
+
+**Restores files**:
+- Extracts `/var/lib/pve-cluster/` directory
+- Includes config.db and all related files
+- Preserves permissions and ownership
+
+**Restarts services** (in order):
+```
+1. pve-cluster  → Starts pmxcfs, reads restored config.db, remounts /etc/pve
+2. pvedaemon    → Reads cluster config from /etc/pve
+3. pveproxy     → Connects to pvedaemon
+4. pvestatd     → Resumes statistics
+```
+
+### Service Stop/Restart Flow
+
+```
+┌─────────────────────────────────────────────────┐
+│  CLUSTER DATABASE RESTORE SEQUENCE              │
+└─────────────────────────────────────────────────┘
+
+Before Restore:
+  ┌─────────────┐
+  │ pve-cluster │ ─┐
+  │  (running)  │  │
+  └─────────────┘  │
+  ┌─────────────┐  │  All services
+  │ pvedaemon   │ ─┤  running
+  └─────────────┘  │  /etc/pve mounted
+  ┌─────────────┐  │
+  │ pveproxy    │ ─┤
+  └─────────────┘  │
+  ┌─────────────┐  │
+  │ pvestatd    │ ─┘
+  └─────────────┘
+
+Stop Phase:
+  systemctl stop pve-cluster  ← /etc/pve unmounted
+  systemctl stop pvedaemon
+  systemctl stop pveproxy
+  systemctl stop pvestatd
+  umount /etc/pve (if needed)
+
+Restore Phase:
+  Extract: /var/lib/pve-cluster/config.db
+  Extract: /var/lib/pve-cluster/* (all files)
+
+Restart Phase (deferred):
+  systemctl start pve-cluster ← Reads restored config.db
+                               ← Remounts /etc/pve
+  systemctl start pvedaemon   ← Reads /etc/pve config
+  systemctl start pveproxy
+  systemctl start pvestatd
+
+After Restore:
+  ┌─────────────┐
+  │ pve-cluster │ ─┐
+  │  (running)  │  │
+  └─────────────┘  │
+  ┌─────────────┐  │  All services
+  │ pvedaemon   │ ─┤  restarted
+  └─────────────┘  │  /etc/pve remounted
+  ┌─────────────┐  │  with RESTORED config
+  │ pveproxy    │ ─┤
+  └─────────────┘  │
+  ┌─────────────┐  │
+  │ pvestatd    │ ─┘
+  └─────────────┘
+```
+
+### Post-Restore Verification
+
+**Immediate Checks**:
+
+1. **Verify Services Running**:
+   ```bash
+   systemctl status pve-cluster pvedaemon pveproxy pvestatd
+   ```
+   All should show: `active (running)`
+
+2. **Verify /etc/pve Mounted**:
+   ```bash
+   mount | grep pve
+   # Output: /etc/pve type fuse.pmxcfs (rw,nosuid,nodev,relatime,user_id=0,group_id=0)
+
+   ls -la /etc/pve/
+   # Should show: storage.cfg, datacenter.cfg, user.cfg, etc.
+   ```
+
+3. **Verify Cluster Status**:
+   ```bash
+   pvecm status
+   ```
+   Expected output:
+   ```
+   Cluster information
+   -------------------
+   Name:             pve-cluster
+   Config Version:   X
+   Transport:        knet
+   Secure auth:      on
+
+   Quorum information
+   ------------------
+   Date:             ...
+   Quorum provider:  corosync_votequorum
+   Nodes:            1  # For single-node
+   Expected votes:   1
+   Total votes:      1
+   Quorum:           1
+   Flags:            Quorate
+   ```
+
+4. **Verify API Access**:
+   ```bash
+   pvesh get /version
+   # Should return PVE version info without errors
+
+   pvesh get /cluster/resources
+   # Should list cluster resources
+   ```
+
+5. **Verify Storage Configuration**:
+   ```bash
+   pvesm status
+   # Should list all storage as 'active'
+   ```
+
+6. **Check Logs for Errors**:
+   ```bash
+   journalctl -u pve-cluster --since "5 minutes ago"
+   journalctl -u pvedaemon --since "5 minutes ago"
+   # Should show clean startup, no errors
+   ```
+
+### Multi-Node Cluster Considerations
+
+**IMPORTANT**: Restoring config.db on one node of a multi-node cluster can cause cluster desynchronization.
+
+**Recommended Approaches**:
+
+**Option 1: Standalone Node Restore (Safest)**
+```bash
+# Before restore: Remove node from cluster
+pvecm delnode <this-node-name>
+
+# Perform restore
+./build/proxmox-backup --restore
+
+# After restore: Rejoin cluster (if applicable)
+# Or accept this node as new standalone cluster
+```
+
+**Option 2: Full Cluster Rebuild**
+```bash
+# On ALL nodes: Stop cluster communication
+systemctl stop corosync
+
+# On PRIMARY node: Perform restore
+./build/proxmox-backup --restore
+
+# On PRIMARY node: Restart corosync
+systemctl start corosync
+
+# On OTHER nodes: Remove old cluster data and rejoin
+rm -rf /etc/pve /var/lib/pve-cluster/*
+pvecm add <primary-node-ip>
+```
+
+**Option 3: Isolated Node Recovery**
+```bash
+# Isolate node from cluster network
+# (Disconnect network cable or firewall rules)
+
+# Perform restore on isolated node
+./build/proxmox-backup --restore
+
+# Test recovered configuration
+# Verify all services working
+
+# Decide: Keep standalone OR rejoin cluster
+```
+
+### Common Issues and Solutions
+
+**Issue: Services fail to start after restore**
+
+```bash
+# Check detailed logs
+journalctl -xe -u pve-cluster
+
+# Common causes:
+# - config.db corruption
+# - Hostname mismatch
+# - Certificate issues
+
+# Solution: Restore from safety backup
+tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+systemctl restart pve-cluster pvedaemon pveproxy pvestatd
+```
+
+**Issue: /etc/pve not mounting**
+
+```bash
+# Check if pmxcfs is running
+systemctl status pve-cluster
+
+# Try manual unmount and restart
+umount -f /etc/pve
+systemctl restart pve-cluster
+
+# Check logs
+journalctl -u pve-cluster --since "1 hour ago"
+```
+
+**Issue: Cluster shows wrong nodes**
+
+```bash
+# Edit corosync configuration
+vi /etc/pve/corosync.conf
+# Remove references to dead/wrong nodes
+
+# Update cluster
+pvecm updatecerts
+pvecm delnode <wrong-node-name>
+
+# Restart services
+systemctl restart corosync pve-cluster
+```
+
+**Issue: Hostname changed since backup**
+
+```bash
+# Option 1: Change hostname to match backup
+hostnamectl set-hostname <original-hostname>
+reboot
+
+# Option 2: Update cluster config for new hostname
+# Edit /etc/pve/corosync.conf
+# Change old hostname to new hostname
+# Regenerate certificates
+pvecm updatecerts
+systemctl restart pve-cluster
+```
+
+---
+
+## Export-Only Categories
+
+Certain paths are too sensitive to restore directly and are extracted to a separate location for manual review.
+
+### What is Export-Only?
+
+**Export-only categories** contain files that:
+- Cannot be safely written to their original location
+- Require manual review before use
+- May conflict with running services
+- Are controlled by system daemons
+
+### Export-Only Category: pve_config_export
+
+**Category**: `pve_config_export`
+**Path**: `./etc/pve/`
+**Reason**: `/etc/pve` is a FUSE mount managed by pmxcfs
+
+**Why Export-Only?**:
+```
+/etc/pve (FUSE mount)
+    ↑
+    Managed by pmxcfs daemon
+    ↑
+    Backend: /var/lib/pve-cluster/config.db
+
+Writing directly to /etc/pve:
+  ✗ Bypasses cluster synchronization
+  ✗ Conflicts with FUSE filesystem
+  ✗ May corrupt cluster state
+  ✗ Changes don't persist (only in RAM)
+```
+
+**Code Protection**:
+```
+Hard guard in code prevents ANY write to /etc/pve when restoring to /
+(see internal/orchestrator/restore.go:880-884)
+```
+
+### Export Process
+
+**Two-Pass Extraction**:
+```
+Pass 1: Normal Categories
+  ├─ Destination: / (system root)
+  ├─ Categories: All non-export-only
+  ├─ Safety backup: Created before extraction
+  └─ Log: /tmp/proxmox-backup/restore_TIMESTAMP.log
+
+Pass 2: Export-Only Categories
+  ├─ Destination: <BASE_DIR>/pve-config-export-YYYYMMDD-HHMMSS/
+  ├─ Categories: Only export-only (pve_config_export)
+  ├─ Safety backup: Not created (not overwriting system)
+  └─ Log: Separate section in same log file
+```
+
+**Export Directory Structure**:
+```
+/opt/proxmox-backup/pve-config-export-20251120-143052/
+└── etc/
+    └── pve/
+        ├── datacenter.cfg
+        ├── storage.cfg
+        ├── user.cfg
+        ├── corosync.conf
+        ├── nodes/
+        │   └── pve01/
+        │       ├── pve-ssl.pem
+        │       └── pve-ssl.key
+        ├── qemu-server/
+        │   ├── 100.conf
+        │   └── 101.conf
+        └── lxc/
+            └── 200.conf
+```
+
+### Using Exported Files
+
+**Purpose**: Reference and manual selective restoration
+
+**Recommended Workflow**:
+
+1. **Review Exported Files**:
+   ```bash
+   cd /opt/proxmox-backup/pve-config-export-YYYYMMDD-HHMMSS/etc/pve/
+
+   # Check cluster configuration
+   cat datacenter.cfg
+   cat storage.cfg
+   cat user.cfg
+
+   # List VMs/CTs
+   ls qemu-server/
+   ls lxc/
+   ```
+
+2. **Compare with Current System**:
+   ```bash
+   # Compare storage configuration
+   diff /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg \
+        /etc/pve/storage.cfg
+
+   # Compare user configuration
+   diff /opt/proxmox-backup/pve-config-export-*/etc/pve/user.cfg \
+        /etc/pve/user.cfg
+   ```
+
+3. **Selective Manual Restoration**:
+   ```bash
+   # Example: Restore a specific VM config
+   cp /opt/proxmox-backup/pve-config-export-*/etc/pve/qemu-server/100.conf \
+      /etc/pve/qemu-server/100.conf
+
+   # Example: Restore user configuration
+   cp /opt/proxmox-backup/pve-config-export-*/etc/pve/user.cfg \
+      /etc/pve/user.cfg
+
+   # Note: These writes go through pmxcfs (FUSE), so they're safe
+   ```
+
+4. **Extract Configuration Values**:
+   ```bash
+   # Get specific storage definition
+   grep -A 10 "dir: backup-storage" \
+     /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg
+
+   # Get user list
+   cat /opt/proxmox-backup/pve-config-export-*/etc/pve/user.cfg | grep "user:"
+   ```
+
+### Export-Only in Custom Mode
+
+**Visibility**:
+- Export-only categories **NOT shown** in Full/Storage/Base modes
+- **Only available** in Custom selection mode
+
+**Selection**:
+```
+Available categories:
+  [1] [ ] PVE Config Export
+      Export-only copy of /etc/pve (never written to system paths)
+      ↑ Clear description warns user
+```
+
+**Restore Plan Display**:
+```
+Export-only categories (will be extracted to separate directory):
+  • PVE Config Export
+    Destination: /opt/proxmox-backup/pve-config-export-20251120-143052/
+```
+
+### Integration with Cluster Restore
+
+**Correct Approach**: Use BOTH categories
+
+```
+Custom selection:
+  [X] PVE Cluster Configuration ← Restores /var/lib/pve-cluster/config.db
+  [X] PVE Config Export         ← Exports /etc/pve/ for reference
+
+Result:
+  1. config.db restored → New cluster configuration active
+  2. /etc/pve/ exported → Old configuration available for comparison
+  3. User can review differences and selectively copy needed files
+```
+
+**Why Both?**:
+- `pve_cluster`: Restores the database (actual restore)
+- `pve_config_export`: Provides reference copy of old /etc/pve (for comparison)
+
+---
+
+## Safety Features
+
+Multiple layers of protection prevent data loss and corruption during restore.
+
+### 1. Safety Backup
+
+**Automatic** backup before ANY changes are written.
+
+**Location**: `/tmp/proxmox-backup/restore_backup_YYYYMMDD_HHMMSS.tar.gz`
+
+**Contents**:
+- All files that will be overwritten by restore
+- Full directory structures
+- Preserved permissions, ownership, timestamps
+
+**Rollback Command**:
+```bash
+tar -xzf /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz -C /
+```
+
+**If Safety Backup Fails**:
+```
+Failed to create safety backup: <error>
+
+Continue without safety backup? (yes/no): _
+```
+- User can choose to abort (safe) or continue (risky)
+
+### 2. Interactive Confirmation
+
+**Multiple abort points** throughout workflow:
+
+```
+Abort Points:
+  [0] Cancel backup selection
+  [0] Cancel restore mode selection
+  [0] Cancel category selection
+  [cancel] Cancel at restore plan confirmation
+  [Ctrl+C] Cancel at any time
+```
+
+**Confirmation Requirement**:
+```
+Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
+```
+- Must type exact word "RESTORE"
+- Case-sensitive
+- Prevents accidental restoration
+
+### 3. Compatibility Validation
+
+**System Type Detection**:
+```
+Current system: Proxmox Virtual Environment (PVE)
+Backup source: Proxmox Virtual Environment (PVE)
+✓ Compatible
+```
+
+**Incompatibility Warning**:
+```
+⚠ WARNING: Potential incompatibility detected!
+Type "yes" to continue anyway or "no" to abort: _
+```
+
+### 4. Hard Guards
+
+**Path Traversal Prevention**:
+- All extracted paths validated
+- Paths outside destination root rejected
+- Security: Prevents malicious archive escapes
+
+**`/etc/pve` Write Block**:
+```go
+// Hard guard in code
+if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
+    logger.Warning("Skipping restore to %s (writes to /etc/pve are prohibited)", target)
+    return nil
+}
+```
+- Absolute prevention of `/etc/pve` corruption
+
+### 5. Service Management Fail-Fast
+
+**Service Stop**: If ANY service fails to stop → ABORT entire restore
+
+**Why?**:
+- Prevents partial corruption
+- Better to fail safely than corrupt database
+- User can investigate and retry
+
+### 6. Comprehensive Logging
+
+**Detailed Log**: `/tmp/proxmox-backup/restore_YYYYMMDD_HHMMSS.log`
+
+**Contents**:
+```
+=== RESTORE LOG ===
+Started: 2025-11-20 14:30:52
+
+EXTRACTED FILES:
+  /var/lib/pve-cluster/config.db (ownership: 0:0, mode: 0600)
+  /var/lib/pve-cluster/.version (ownership: 0:0, mode: 0644)
+  /etc/vzdump.conf (ownership: 0:0, mode: 0644)
+  ...
+
+SKIPPED FILES:
+  ./opt/some-file (does not match any selected category)
+  ...
+
+SUMMARY:
+  Files extracted: 47
+  Files skipped: 1203
+  Files failed: 0
+  Duration: 12.3 seconds
+```
+
+**Usage**:
+```bash
+# Review what was restored
+cat /tmp/proxmox-backup/restore_20251120_143052.log
+
+# Search for specific file
+grep "storage.cfg" /tmp/proxmox-backup/restore_20251120_143052.log
+
+# Check for failures
+grep "FAILED" /tmp/proxmox-backup/restore_20251120_143052.log
+```
+
+### 7. Checksum Verification
+
+**SHA256 Verification**:
+- Backup checksum verified after decryption
+- Ensures backup integrity
+- Detects corruption or tampering
+
+**Behavior**:
+```
+Verifying SHA256 checksum...
+Expected: a1b2c3...
+Actual:   a1b2c3...
+✓ Checksum verified successfully.
+```
+
+### 8. Deferred Service Restart
+
+**Go defer pattern** ensures services restart even if restore fails:
+
+```
+Services stopped → Defer restart scheduled → Restore → (Failure) → Deferred restart executes
+```
+
+**Prevents**: System left with services stopped after failed restore
+
+---
+
+## Troubleshooting
+
+### General Issues
+
+**Issue: "restore: permission denied"**
+
+**Cause**: Not running as root
+
+**Solution**:
+```bash
+sudo ./build/proxmox-backup --restore
+# Or
+su -
+./build/proxmox-backup --restore
+```
+
+---
+
+**Issue: "Failed to create safety backup"**
+
+**Cause**: Insufficient disk space in `/tmp`
+
+**Solution**:
+```bash
+# Check available space
+df -h /tmp
+
+# Clean up temporary files
+rm -rf /tmp/proxmox-backup/proxmox-decrypt-*
+rm -f /tmp/proxmox-backup/restore_backup_*.tar.gz
+
+# Or expand /tmp (if tmpfs)
+mount -o remount,size=10G /tmp
+```
+
+---
+
+**Issue: "Backup not found in selected location"**
+
+**Cause**: Incorrect backup path or file naming
+
+**Solution**:
+```bash
+# Verify backup location
+ls -la /opt/proxmox-backup/backups/
+
+# Check for .bundle.tar files
+find /opt/proxmox-backup/ -name "*.bundle.tar"
+
+# Update backup.env if needed
+vi /opt/proxmox-backup-go/configs/backup.env
+# Set correct BACKUP_PATH
+```
+
+---
+
+### Decryption Issues
+
+**Issue: "Decryption failed: incorrect passphrase"**
+
+**Cause**: Wrong AGE passphrase entered
+
+**Solution**:
+```bash
+# Retry with correct passphrase
+# Or use AGE identity file instead
+./build/proxmox-backup --restore
+# Select option [2] Use AGE identity file
+```
+
+---
+
+**Issue: "AGE identity file not found"**
+
+**Cause**: Default key file missing
+
+**Solution**:
+```bash
+# Check for key file
+ls -la /opt/proxmox-backup/age/recipients
+
+# If missing, use passphrase instead
+# Or specify correct key file path when prompted
+```
+
+---
+
+### Service Issues
+
+**Issue: "Failed to stop pve-cluster: Unit not found"**
+
+**Cause**: Not a PVE system or service not installed
+
+**Solution**:
+```bash
+# This is normal on PBS systems
+# Or check if PVE installed
+dpkg -l | grep proxmox-ve
+
+# If truly PVE but service missing, repair
+apt install --reinstall pve-cluster
+```
+
+---
+
+**Issue: "Services failed to restart after restore"**
+
+**Cause**: config.db corruption or configuration error
+
+**Solution**:
+```bash
+# Check service status
+systemctl status pve-cluster
+journalctl -xe -u pve-cluster
+
+# Restore from safety backup
+tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+
+# Restart services
+systemctl restart pve-cluster pvedaemon pveproxy pvestatd
+
+# If still failing, check logs
+journalctl -u pve-cluster --since "10 minutes ago"
+```
+
+---
+
+**Issue: "/etc/pve not mounting after restore"**
+
+**Cause**: pmxcfs unable to mount FUSE filesystem
+
+**Solution**:
+```bash
+# Check if already mounted
+mount | grep pve
+
+# Force unmount
+umount -f /etc/pve
+
+# Restart pve-cluster
+systemctl restart pve-cluster
+
+# Check logs
+journalctl -u pve-cluster | tail -50
+
+# If config.db corrupted, restore safety backup
+tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+systemctl restart pve-cluster
+```
+
+---
+
+### Cluster Issues
+
+**Issue: "Cluster shows wrong nodes after restore"**
+
+**Cause**: Restored old cluster configuration
+
+**Solution**:
+```bash
+# Option 1: Remove wrong nodes
+pvecm delnode <wrong-node-name>
+
+# Option 2: Edit corosync.conf
+vi /etc/pve/corosync.conf
+# Remove references to dead nodes
+# Update node list
+
+pvecm updatecerts
+systemctl restart corosync pve-cluster
+```
+
+---
+
+**Issue: "Lost quorum after restore"**
+
+**Cause**: Single-node cluster with wrong expected votes
+
+**Solution**:
+```bash
+# Set expected votes to 1
+pvecm expected 1
+
+# Verify quorum
+pvecm status
+
+# Make permanent (edit corosync.conf)
+vi /etc/pve/corosync.conf
+# Update expected_votes in quorum section
+```
+
+---
+
+**Issue: "Hostname mismatch in cluster config"**
+
+**Cause**: Restored backup from different hostname
+
+**Solution**:
+```bash
+# Option 1: Change hostname to match
+hostnamectl set-hostname <original-hostname>
+reboot
+
+# Option 2: Update cluster config
+vi /etc/pve/corosync.conf
+# Change old hostname to new hostname
+pvecm updatecerts
+systemctl restart corosync pve-cluster
+```
+
+---
+
+### Storage Issues
+
+**Issue: "Storage not accessible after restore"**
+
+**Cause**: Storage directories missing or permissions wrong
+
+**Solution**:
+```bash
+# Check storage status
+pvesm status
+
+# Manually recreate storage directories
+mkdir -p /mnt/backup/{dump,images,template}
+chown root:root /mnt/backup -R
+
+# Or run directory recreation manually
+# (restore workflow does this automatically)
+```
+
+---
+
+**Issue: "ZFS pools not importing after restore"**
+
+**Cause**: ZFS pools not imported after config restore
+
+**Solution**:
+```bash
+# List available pools
+zpool import
+
+# Import pool
+zpool import <pool-name>
+
+# Verify status
+zpool status
+
+# Enable auto-import
+systemctl enable zfs-import@<pool-name>.service
+```
+
+---
+
+### PBS-Specific Issues
+
+**Issue: "Datastore not accessible"**
+
+**Cause**: ZFS pool not mounted or directory missing
+
+**Solution**:
+```bash
+# Check datastore configuration
+cat /etc/proxmox-backup/datastore.cfg
+
+# Check if ZFS pool mounted
+zpool status
+zfs list
+
+# If ZFS, import pool
+zpool import <pool-name>
+
+# If directory, create it
+mkdir -p /mnt/datastore/{.chunks,.lock}
+chown backup:backup /mnt/datastore -R
+```
+
+---
+
+## FAQ
+
+### General Questions
+
+**Q: Can I restore PVE backup to PBS system (or vice versa)?**
+
+A: Not recommended. The restore workflow will warn about incompatibility. PVE and PBS have different configurations that are not interchangeable. However, **common categories** (network, SSH, SSL) can be safely restored cross-platform using Custom mode.
+
+---
+
+**Q: Can I automate restore operations?**
+
+A: No. The restore workflow is intentionally interactive to prevent accidental data loss. All selections require user input and confirmation.
+
+---
+
+**Q: How long does a restore take?**
+
+A: Depends on:
+- Backup size (typically 10-500 MB)
+- Encryption (decryption adds 1-5 minutes)
+- Number of files (typically 1-10 minutes extraction)
+- Storage speed
+
+Typical full restore: **5-15 minutes**
+
+---
+
+**Q: Can I restore to a different server?**
+
+A: Yes, with considerations:
+- **Same system type** (PVE to PVE, PBS to PBS) recommended
+- **Hostname** should match or be updated manually
+- **Network configuration** may need adjustment
+- **Storage paths** may need adjustment
+- **Cluster membership** must be handled manually
+
+---
+
+**Q: What if I cancel during restore?**
+
+A: Depends on when:
+- **Before extraction**: No changes made, completely safe
+- **During extraction**: Partial restore, use safety backup to rollback
+- **After extraction**: Restore completed, services may be in mixed state
+
+Use Ctrl+C carefully - wait for current file to finish.
+
+---
+
+### Safety & Recovery
+
+**Q: How do I rollback a failed restore?**
+
+A: Use the safety backup:
+```bash
+# Stop services (if cluster restore)
+systemctl stop pve-cluster pvedaemon pveproxy pvestatd
+
+# Extract safety backup
+tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+
+# Restart services
+systemctl restart pve-cluster pvedaemon pveproxy pvestatd
+
+# Verify
+pvecm status
+pvesm status
+```
+
+---
+
+**Q: Can I test restore without affecting production?**
+
+A: Yes, two approaches:
+
+**Approach 1: Test on separate system**
+```bash
+# Copy backup to test system
+# Run restore on test system
+# Validate configuration
+# Apply learnings to production restore
+```
+
+**Approach 2: Decrypt-only mode**
+```bash
+# Decrypt without restoring
+./build/proxmox-backup --decrypt
+
+# Manually inspect decrypted files
+tar -tzf /path/to/decrypted.tar.gz | less
+
+# Review specific files
+tar -xzf /path/to/decrypted.tar.gz ./etc/pve/storage.cfg -O | less
+```
+
+---
+
+**Q: What happens to VMs/CTs during cluster restore?**
+
+A: **VMs/CTs themselves are NOT affected**:
+- Their disk images remain untouched
+- They continue running (unless services stopped on host)
+- Only their **configuration** is restored
+- VM configs in `/etc/pve/qemu-server/` exported (not directly restored)
+
+**Recommended**: Stop all VMs/CTs before cluster restore for safety.
+
+---
+
+### Cluster-Specific
+
+**Q: Can I restore cluster database on a multi-node cluster?**
+
+A: **Risky and NOT recommended** without precautions:
+
+**Safe approach**:
+1. Isolate node from cluster
+2. Restore on isolated node
+3. Verify configuration
+4. Decide: Keep standalone OR rejoin cluster
+
+**Unsafe**: Restoring on active cluster node can cause split-brain.
+
+---
+
+**Q: How do I restore cluster database on new hardware?**
+
+A: Full procedure:
+
+```bash
+# 1. Install Proxmox VE on new hardware
+# 2. Configure same hostname as backup
+hostnamectl set-hostname <original-hostname>
+
+# 3. Run restore
+./build/proxmox-backup --restore
+# Select: STORAGE mode or Custom (include pve_cluster)
+
+# 4. Verify services
+systemctl status pve-cluster pvedaemon pveproxy
+pvecm status
+
+# 5. Verify storage
+pvesm status
+
+# 6. Manually recreate any missing storage paths
+# 7. Import ZFS pools if needed
+zpool import <pool-name>
+
+# 8. Access web interface and verify
+https://<server-ip>:8006
+```
+
+---
+
+**Q: What if backup hostname doesn't match current hostname?**
+
+A: Two options:
+
+**Option 1: Change hostname to match (easiest)**
+```bash
+hostnamectl set-hostname <backup-hostname>
+reboot
+# Then run restore
+```
+
+**Option 2: Update cluster config after restore**
+```bash
+# Restore as normal (hostname will mismatch)
+./build/proxmox-backup --restore
+
+# Update corosync configuration
+vi /etc/pve/corosync.conf
+# Change old hostname to new hostname
+
+# Regenerate certificates
+pvecm updatecerts
+
+# Restart services
+systemctl restart corosync pve-cluster pvedaemon pveproxy
+```
+
+---
+
+### Export-Only
+
+**Q: Why can't I restore /etc/pve directly?**
+
+A: `/etc/pve` is a **FUSE mount** managed by pmxcfs daemon:
+- Writing directly bypasses cluster synchronization
+- Changes don't persist (only in RAM)
+- Can corrupt cluster state
+
+**Correct approach**: Restore `/var/lib/pve-cluster/config.db` (the database backend)
+
+---
+
+**Q: How do I use exported /etc/pve files?**
+
+A: For reference and selective manual restoration:
+
+```bash
+# Review exported files
+ls /opt/proxmox-backup/pve-config-export-*/etc/pve/
+
+# Compare with current
+diff /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg \
+     /etc/pve/storage.cfg
+
+# Selectively copy needed files
+cp /opt/proxmox-backup/pve-config-export-*/etc/pve/qemu-server/100.conf \
+   /etc/pve/qemu-server/100.conf
+```
+
+---
+
+### Technical
+
+**Q: Can I restore only specific files from a category?**
+
+A: Not directly. Categories are the smallest granularity.
+
+**Workaround**:
+```bash
+# Use --decrypt to create plaintext archive
+./build/proxmox-backup --decrypt
+
+# Manually extract specific files
+tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
+```
+
+---
+
+**Q: Does restore preserve file permissions and ownership?**
+
+A: Yes, completely:
+- **Ownership**: UID/GID preserved
+- **Permissions**: Mode bits preserved
+- **Timestamps**: mtime and atime preserved
+- **ctime**: Cannot be set (kernel-managed)
+
+---
+
+**Q: What compression formats are supported?**
+
+A: All standard formats:
+- `.tar.gz`, `.tgz` - gzip (native Go)
+- `.tar.xz` - xz (external command)
+- `.tar.zst`, `.tar.zstd` - zstd (external command)
+- `.tar.bz2` - bzip2 (external command)
+- `.tar.lzma` - lzma (external command)
+- `.tar` - uncompressed
+
+---
+
+**Q: Can I restore from cloud backup?**
+
+A: Yes, if cloud remote is a local mount:
+
+```bash
+# Mount cloud storage locally
+rclone mount remote:bucket /mnt/cloud &
+
+# Configure in backup.env
+CLOUD_ENABLED=true
+CLOUD_REMOTE=/mnt/cloud/proxmox-backups
+
+# Run restore
+./build/proxmox-backup --restore
+# Select option [3] Cloud/local path
+```
+
+---
+
+**Q: What encryption is supported?**
+
+A: AGE encryption only:
+- **Passphrase-based**: Scrypt derivation (N=32768, r=8, p=1)
+- **Key-based**: X25519 identity files
+
+---
+
+**Q: Where are temporary files stored?**
+
+A: All in `/tmp/proxmox-backup/`:
+- `proxmox-decrypt-*/` - Decryption workspace (deleted after restore)
+- `restore_TIMESTAMP.log` - Detailed restore log (preserved)
+- `restore_backup_TIMESTAMP.tar.gz` - Safety backup (preserved)
+
+**Cleanup**:
+```bash
+# Remove safety backup after successful restore
+rm /tmp/proxmox-backup/restore_backup_*.tar.gz
+
+# Remove old logs
+find /tmp/proxmox-backup/ -name "restore_*.log" -mtime +7 -delete
+```
+
+---
+
+## Additional Resources
+
+**Related Documentation**:
+- [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md) - Technical architecture and internals
+- [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md) - Visual workflow diagrams
+- [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md) - Advanced cluster disaster recovery
+- [README.md](../README.md) - Main project documentation
+
+**Proxmox Documentation**:
+- [Proxmox VE Cluster Manager](https://pve.proxmox.com/wiki/Cluster_Manager)
+- [Proxmox Backup Server Documentation](https://pbs.proxmox.com/docs/)
+
+**Support**:
+- Project Issues: [GitHub Issues](https://github.com/your-repo/proxmox-backup-go/issues)
+- Proxmox Forum: [forum.proxmox.com](https://forum.proxmox.com/)
+
+---
+
+## Summary
+
+The restore workflow provides a **safe, interactive, and flexible** system for recovering Proxmox configurations:
+
+✅ **Category-based** granular control
+✅ **4 restore modes** for common scenarios
+✅ **Safety backups** before any changes
+✅ **Cluster-aware** service management
+✅ **Export-only protection** for sensitive paths
+✅ **Comprehensive logging** for audit trails
+✅ **Multiple abort points** for user control
+
+**Remember**:
+- Always verify backups before disaster strikes
+- Test restore procedures on non-production systems
+- Isolate cluster nodes before cluster database restore
+- Keep safety backups until restore is fully verified
+- Review exported /etc/pve files manually
+
+**Most Important**: Read and understand this guide BEFORE you need to restore!

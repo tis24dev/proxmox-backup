@@ -853,28 +853,6 @@ func run() int {
 	// Initialize notification channels
 	logging.Step("Initializing notification channels")
 
-	// Telegram notifications
-	if cfg.TelegramEnabled {
-		telegramConfig := notify.TelegramConfig{
-			Enabled:       true,
-			Mode:          notify.TelegramMode(cfg.TelegramBotType),
-			BotToken:      cfg.TelegramBotToken,
-			ChatID:        cfg.TelegramChatID,
-			ServerAPIHost: cfg.TelegramServerAPIHost,
-			ServerID:      cfg.ServerID,
-		}
-		telegramNotifier, err := notify.NewTelegramNotifier(telegramConfig, logger)
-		if err != nil {
-			logging.Warning("Failed to initialize Telegram notifier: %v", err)
-		} else {
-			telegramAdapter := orchestrator.NewNotificationAdapter(telegramNotifier, logger)
-			orch.RegisterNotificationChannel(telegramAdapter)
-			logging.Info("✓ Telegram initialized (mode: %s)", cfg.TelegramBotType)
-		}
-	} else {
-		logging.Skip("Telegram: disabled")
-	}
-
 	// Email notifications
 	if cfg.EmailEnabled {
 		emailConfig := notify.EmailConfig{
@@ -902,6 +880,28 @@ func run() int {
 		}
 	} else {
 		logging.Skip("Email: disabled")
+	}
+
+	// Telegram notifications
+	if cfg.TelegramEnabled {
+		telegramConfig := notify.TelegramConfig{
+			Enabled:       true,
+			Mode:          notify.TelegramMode(cfg.TelegramBotType),
+			BotToken:      cfg.TelegramBotToken,
+			ChatID:        cfg.TelegramChatID,
+			ServerAPIHost: cfg.TelegramServerAPIHost,
+			ServerID:      cfg.ServerID,
+		}
+		telegramNotifier, err := notify.NewTelegramNotifier(telegramConfig, logger)
+		if err != nil {
+			logging.Warning("Failed to initialize Telegram notifier: %v", err)
+		} else {
+			telegramAdapter := orchestrator.NewNotificationAdapter(telegramNotifier, logger)
+			orch.RegisterNotificationChannel(telegramAdapter)
+			logging.Info("✓ Telegram initialized (mode: %s)", cfg.TelegramBotType)
+		}
+	} else {
+		logging.Skip("Telegram: disabled")
 	}
 
 	// Gotify notifications
@@ -1257,7 +1257,8 @@ func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.L
 
 	adapter := orchestrator.NewNotificationAdapter(emailNotifier, logger)
 	if err := adapter.Notify(ctx, stats); err != nil {
-		logging.Warning("Support mode: failed to send support email: %v", err)
+		logging.Critical("Support mode: FAILED to send support email: %v", err)
+		fmt.Println("\033[33m⚠️  CRITICAL: Support email failed to send!\033[0m")
 		return
 	}
 

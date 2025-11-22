@@ -21,20 +21,27 @@ parse_args() {
             --verbose)
                 VERBOSE_MODE=true
                 ;;
+            main|dev)
+                INSTALL_BRANCH="$arg"
+                ;;
             *)
-                if [[ "$arg" == "old" ]]; then
-                    INSTALL_BRANCH="old"
-                else
-                    echo -e "\033[0;31m[ERROR]\033[0m This installer is deprecated and only supports the 'old' branch."
-                    echo "Please use the new installer and follow the instructions at:"
-                    echo "  https://github.com/tis24dev/proxmox-backup"
-                    exit 1
+                if [[ -z "$INSTALL_BRANCH" && "$arg" != "--verbose" ]]; then
+                    INSTALL_BRANCH="$arg"
                 fi
                 ;;
         esac
     done
 
-    INSTALL_BRANCH="${INSTALL_BRANCH:-old}"
+    INSTALL_BRANCH="${INSTALL_BRANCH:-main}"
+
+    case "$INSTALL_BRANCH" in
+        main|dev)
+            ;;
+        *)
+            echo -e "\033[0;31m[ERROR]\033[0m Invalid branch: '$INSTALL_BRANCH'. Allowed values: main, dev"
+            exit 1
+            ;;
+    esac
 }
 
 init_constants() {
@@ -71,8 +78,8 @@ print_header() {
     echo -e "${BOLD}${CYAN}============================================${RESET}"
     echo
     echo -e "${BOLD}${BLUE}Selected branch: ${INSTALL_BRANCH}${RESET}"
-    if [[ "$INSTALL_BRANCH" == "old" ]]; then
-        echo -e "${BOLD}${YELLOW}WARNING: Legacy branch selected (no longer maintained)${RESET}"
+    if [[ "$INSTALL_BRANCH" == "dev" ]]; then
+        echo -e "${BOLD}${YELLOW}WARNING: Development branch selected${RESET}"
     fi
     if [[ "$VERBOSE_MODE" == "true" ]]; then
         echo -e "${BOLD}${YELLOW}Verbose mode enabled${RESET}"
@@ -91,23 +98,6 @@ check_root() {
         print_error "This script must be run as root (use sudo)"
         exit 1
     fi
-}
-
-confirm_legacy_install() {
-    echo
-    print_warning "You are about to install a LEGACY version of Proxmox Backup System."
-    print_warning "This version is no longer maintained and should not be used for new installations."
-    echo
-    print_status "For the new installer and up-to-date documentation, please visit:"
-    echo "  https://github.com/tis24dev/proxmox-backup"
-    echo
-    read -p "Continue anyway with the legacy installer? (y/N): " -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_error "Installation cancelled by user (legacy installer)."
-        exit 0
-    fi
-    print_success "User confirmed legacy installation"
 }
 
 check_remote_branch() {
@@ -1668,7 +1658,6 @@ main() {
     trap 'error_handler "${BASH_COMMAND}"' ERR
 
     check_root
-    confirm_legacy_install
 
     if ! cd "$(dirname "$INSTALL_DIR")" 2>/dev/null; then
         cd /
@@ -1681,6 +1670,7 @@ main() {
     if ! check_remote_branch "$INSTALL_BRANCH"; then
         exit 1
     fi
+    confirm_dev_branch
 
     local state action
     state=$(detect_install_state)

@@ -21,6 +21,7 @@ type Category struct {
 	Type        CategoryType // PVE, PBS, or Common
 	Paths       []string     // File/directory paths in the archive
 	IsAvailable bool         // Whether this category is present in the backup
+	ExportOnly  bool         // If true, never restored directly to system paths
 }
 
 // RestoreMode represents the pre-defined restore modes
@@ -36,6 +37,18 @@ const (
 // GetAllCategories returns all available categories
 func GetAllCategories() []Category {
 	return []Category{
+		{
+			ID:          "pve_config_export",
+			Name:        "PVE Config Export",
+			Description: "Export-only copy of /etc/pve (never written to system paths)",
+			Type:        CategoryTypePVE,
+			Paths: []string{
+				"./etc/pve/",
+				"./etc/pve/jobs.cfg",
+				"./etc/pve/vzdump.cron",
+			},
+			ExportOnly: true,
+		},
 		// PVE Categories
 		{
 			ID:          "pve_cluster",
@@ -43,7 +56,6 @@ func GetAllCategories() []Category {
 			Description: "Proxmox VE cluster configuration and database",
 			Type:        CategoryTypePVE,
 			Paths: []string{
-				"./etc/pve/",
 				"./var/lib/pve-cluster/",
 			},
 		},
@@ -53,7 +65,6 @@ func GetAllCategories() []Category {
 			Description: "Storage definitions and backup job configurations",
 			Type:        CategoryTypePVE,
 			Paths: []string{
-				"./etc/pve/storage.cfg",
 				"./etc/vzdump.conf",
 			},
 		},
@@ -62,10 +73,7 @@ func GetAllCategories() []Category {
 			Name:        "PVE Backup Jobs",
 			Description: "Scheduled backup job definitions",
 			Type:        CategoryTypePVE,
-			Paths: []string{
-				"./etc/pve/jobs.cfg",
-				"./etc/pve/vzdump.cron",
-			},
+			Paths:       []string{},
 		},
 		{
 			ID:          "corosync",
@@ -74,7 +82,6 @@ func GetAllCategories() []Category {
 			Type:        CategoryTypePVE,
 			Paths: []string{
 				"./etc/corosync/",
-				"./etc/pve/corosync.conf",
 			},
 		},
 		{
@@ -84,8 +91,6 @@ func GetAllCategories() []Category {
 			Type:        CategoryTypePVE,
 			Paths: []string{
 				"./etc/ceph/",
-				"./etc/pve/ceph.conf",
-				"./etc/pve/priv/ceph/",
 			},
 		},
 
@@ -139,9 +144,6 @@ func GetAllCategories() []Category {
 			Description: "SSL/TLS certificates and private keys",
 			Type:        CategoryTypeCommon,
 			Paths: []string{
-				"./etc/pve/pve-root-ca.pem",
-				"./etc/pve/priv/pve-root-ca.key",
-				"./etc/pve/nodes/",
 				"./etc/proxmox-backup/proxy.pem",
 			},
 		},

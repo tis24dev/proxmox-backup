@@ -716,6 +716,11 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			name := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
 			if !c.isSafeBracketProcess(name) {
+				if intPID, err := strconv.Atoi(strings.TrimSpace(pid)); err == nil {
+					if isHeuristicallySafeKernelProcess(intPID, name, c.cfg.SafeBracketProcesses) {
+						continue
+					}
+				}
 				c.addWarning("Suspicious kernel-style process: %s (PID %s, user %s)", name, pid, user)
 			}
 		}
@@ -857,6 +862,38 @@ func parsePSLine(line string) (string, string, string, string, string) {
 	return matches[1], matches[2], matches[3], matches[4], matches[5]
 }
 
+func matchesSafeProcessPattern(pattern, name string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+
+	// Regex support (case-insensitive by default)
+	if strings.HasPrefix(strings.ToLower(pattern), "regex:") {
+		regexPattern := strings.TrimSpace(pattern[6:])
+		if regexPattern == "" {
+			return false
+		}
+		if !strings.HasPrefix(regexPattern, "(?i)") {
+			regexPattern = "(?i)" + regexPattern
+		}
+		re, err := regexp.Compile(regexPattern)
+		if err != nil {
+			return false
+		}
+		return re.MatchString(name)
+	}
+
+	// Exact or prefix match (case-insensitive)
+	lower := strings.ToLower(name)
+	pattern = strings.ToLower(pattern)
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(lower, prefix)
+	}
+	return lower == pattern
+}
+
 func isLegitimateKernelProcess(name string) bool {
 	lower := strings.ToLower(name)
 	for _, prefix := range kernelProcessPrefixes {
@@ -874,18 +911,8 @@ func (c *Checker) isSafeBracketProcess(name string) bool {
 	if c.isSafeKernelProcess(name) {
 		return true
 	}
-	lower := strings.ToLower(name)
 	for _, pattern := range c.cfg.SafeBracketProcesses {
-		pattern = strings.ToLower(strings.TrimSpace(pattern))
-		if pattern == "" {
-			continue
-		}
-		if strings.HasSuffix(pattern, "*") {
-			prefix := strings.TrimSuffix(pattern, "*")
-			if strings.HasPrefix(lower, prefix) {
-				return true
-			}
-		} else if lower == pattern {
+		if matchesSafeProcessPattern(pattern, name) {
 			return true
 		}
 	}
@@ -893,18 +920,8 @@ func (c *Checker) isSafeBracketProcess(name string) bool {
 }
 
 func (c *Checker) isSafeKernelProcess(name string) bool {
-	lower := strings.ToLower(name)
 	for _, pattern := range c.cfg.SafeKernelProcesses {
-		pattern = strings.ToLower(strings.TrimSpace(pattern))
-		if pattern == "" {
-			continue
-		}
-		if strings.HasSuffix(pattern, "*") {
-			prefix := strings.TrimSuffix(pattern, "*")
-			if strings.HasPrefix(lower, prefix) {
-				return true
-			}
-		} else if lower == pattern {
+		if matchesSafeProcessPattern(pattern, name) {
 			return true
 		}
 	}

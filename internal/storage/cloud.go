@@ -337,6 +337,46 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 		}
 	}
 
+	remoteBase := c.remoteBase()
+
+	// If user explicitly enabled write healthcheck, skip list check entirely
+	if c.config.CloudWriteHealthCheck {
+		c.logger.Debug("CLOUD_WRITE_HEALTHCHECK=true, using write test only")
+		return c.tryWriteTest(ctx)
+	}
+
+	// PHASE 1: Try list-based check (default, faster)
+	listErr := c.tryListCheck(ctx, remoteRoot, remoteBase)
+	if listErr == nil {
+		return nil // Success via list check
+	}
+
+	// PHASE 2: Analyze error to determine if fallback is appropriate
+	var rcErr *remoteCheckError
+	if !errors.As(listErr, &rcErr) {
+		return listErr // Unknown error type, can't fallback
+	}
+
+	if !c.shouldFallbackToWriteTest(rcErr, ctx) {
+		return listErr // Error type doesn't benefit from fallback
+	}
+
+	// PHASE 3: Attempt write test fallback
+	c.logger.Debug("List check failed with permission issue, attempting write test fallback...")
+	writeErr := c.tryWriteTest(ctx)
+	if writeErr == nil {
+		c.logger.Warning("Cloud remote accessible via write test (list permissions unavailable)")
+		c.logger.Debug("HINT: Consider setting CLOUD_WRITE_HEALTHCHECK=true for faster connectivity checks")
+		return nil // Success via fallback
+	}
+
+	// PHASE 4: Both methods failed - return original list error
+	c.logger.Debug("Write test fallback also failed: %v", writeErr)
+	return listErr
+}
+
+// tryListCheck performs list-based connectivity check using rclone lsf
+func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase string) error {
 	// Step 1: check remote root (remote:)
 	argsRoot := c.buildRcloneArgs("lsf")
 	argsRoot = append(argsRoot, remoteRoot, "--max-depth", "1")
@@ -348,7 +388,6 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 	}
 
 	// Step 2: check specific path (remote:path) if configured
-	remoteBase := c.remoteBase()
 	if remoteBase != remoteRoot {
 		// Ensure backup path exists (mkdir is idempotent)
 		argsMkdir := c.buildRcloneArgs("mkdir")
@@ -371,31 +410,59 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 		}
 	}
 
-	// Optional: test write access with a temporary object
-	if c.config.CloudWriteHealthCheck {
-		testName := fmt.Sprintf(".pbs-backup-healthcheck-%d", time.Now().UnixNano())
-		testRemote := c.remotePathFor(testName)
+	return nil
+}
 
-		// Try to create the test file
-		argsTouch := c.buildRcloneArgs("touch")
-		argsTouch = append(argsTouch, testRemote)
-		c.logger.Debug("Running (remote write test): %s", strings.Join(argsTouch, " "))
-		output, err = c.exec(ctx, argsTouch[0], argsTouch[1:]...)
-		if err != nil {
-			return classifyRemoteError("write", testRemote, err, output)
-		}
+// tryWriteTest performs write-based connectivity check using rclone touch/deletefile
+func (c *CloudStorage) tryWriteTest(ctx context.Context) error {
+	testName := fmt.Sprintf(".pbs-backup-healthcheck-%d", time.Now().UnixNano())
+	testRemote := c.remotePathFor(testName)
 
-		// Try to delete the test file (cleanup)
-		argsDelete := c.buildRcloneArgs("deletefile")
-		argsDelete = append(argsDelete, testRemote)
-		c.logger.Debug("Running (remote write cleanup): %s", strings.Join(argsDelete, " "))
-		output, err = c.exec(ctx, argsDelete[0], argsDelete[1:]...)
-		if err != nil {
-			return classifyRemoteError("cleanup", testRemote, err, output)
-		}
+	// Try to create the test file
+	argsTouch := c.buildRcloneArgs("touch")
+	argsTouch = append(argsTouch, testRemote)
+	c.logger.Debug("Running (remote write test): %s", strings.Join(argsTouch, " "))
+	output, err := c.exec(ctx, argsTouch[0], argsTouch[1:]...)
+	if err != nil {
+		return classifyRemoteError("write", testRemote, err, output)
+	}
+
+	// Try to delete the test file (cleanup)
+	// Don't fail the check if cleanup fails - write succeeded which is what matters
+	argsDelete := c.buildRcloneArgs("deletefile")
+	argsDelete = append(argsDelete, testRemote)
+	c.logger.Debug("Running (remote write cleanup): %s", strings.Join(argsDelete, " "))
+	output, err = c.exec(ctx, argsDelete[0], argsDelete[1:]...)
+	if err != nil {
+		c.logger.Debug("Warning: write test file cleanup failed (may lack delete permissions): %v", err)
+		// Don't return error - write succeeded which confirms write access
 	}
 
 	return nil
+}
+
+// shouldFallbackToWriteTest determines if automatic fallback to write test is appropriate
+func (c *CloudStorage) shouldFallbackToWriteTest(err *remoteCheckError, ctx context.Context) bool {
+	// Only fallback for authentication/permission errors
+	if err.kind != remoteErrorAuth {
+		return false
+	}
+
+	// Don't fallback if the error is from write test itself (prevent infinite loop)
+	if strings.Contains(err.msg, "write check") || strings.Contains(err.msg, "cleanup check") {
+		return false
+	}
+
+	// Check if there's enough time left in the context for fallback
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < 5*time.Second {
+			c.logger.Debug("Skipping fallback: insufficient time remaining (%v)", remaining)
+			return false
+		}
+	}
+
+	return true
 }
 
 func classifyRemoteError(stage, target string, err error, output []byte) error {
@@ -1230,6 +1297,11 @@ func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 			toDelete = append(toDelete, backup)
 		}
 	}
+
+	// Ensure deterministic deletion order (sorted by filename)
+	sort.Slice(toDelete, func(i, j int) bool {
+		return toDelete[i].BackupFile < toDelete[j].BackupFile
+	})
 
 	// Delete in batches to avoid API rate limits
 	return c.deleteBatched(ctx, toDelete, len(backups))

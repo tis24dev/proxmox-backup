@@ -267,13 +267,215 @@ func (e *EmailNotifier) sendViaRelay(ctx context.Context, recipient, subject, ht
 	return sendViaCloudRelay(ctx, e.config.CloudRelayConfig, payload, e.logger)
 }
 
+// isMTAServiceActive checks if a Mail Transfer Agent service is running
+func (e *EmailNotifier) isMTAServiceActive(ctx context.Context) (bool, string) {
+	services := []string{"postfix", "sendmail", "exim4"}
+
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false, "systemctl not available"
+	}
+
+	for _, service := range services {
+		cmd := exec.CommandContext(ctx, "systemctl", "is-active", service)
+		if err := cmd.Run(); err == nil {
+			e.logger.Debug("MTA service %s is active", service)
+			return true, service
+		}
+	}
+
+	return false, "no MTA service active"
+}
+
+// checkMTAConfiguration checks if MTA configuration files exist
+func (e *EmailNotifier) checkMTAConfiguration() (bool, string) {
+	configFiles := []struct {
+		path string
+		mta  string
+	}{
+		{"/etc/postfix/main.cf", "Postfix"},
+		{"/etc/mail/sendmail.cf", "Sendmail"},
+		{"/etc/exim4/exim4.conf", "Exim4"},
+	}
+
+	for _, cf := range configFiles {
+		if info, err := os.Stat(cf.path); err == nil && !info.IsDir() {
+			e.logger.Debug("Found %s configuration at %s", cf.mta, cf.path)
+			return true, cf.mta
+		}
+	}
+
+	return false, "no MTA configuration found"
+}
+
+// checkRelayHostConfigured checks if Postfix relay host is configured
+func (e *EmailNotifier) checkRelayHostConfigured(ctx context.Context) (bool, string) {
+	configPath := "/etc/postfix/main.cf"
+	if _, err := os.Stat(configPath); err != nil {
+		return false, "main.cf not found"
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		e.logger.Debug("Failed to read postfix config: %v", err)
+		return false, "cannot read config"
+	}
+
+	// Look for relayhost setting
+	re := regexp.MustCompile(`(?m)^relayhost\s*=\s*(.+)$`)
+	matches := re.FindStringSubmatch(string(content))
+
+	if len(matches) > 1 {
+		relayhost := strings.TrimSpace(matches[1])
+		if relayhost != "" && relayhost != "[]" {
+			e.logger.Debug("Relay host configured: %s", relayhost)
+			return true, relayhost
+		}
+	}
+
+	e.logger.Debug("No relay host configured in Postfix")
+	return false, "no relay host"
+}
+
+// checkMailQueue checks the mail queue status
+func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
+	// Try mailq command (works for both Postfix and Sendmail)
+	mailqPath := "/usr/bin/mailq"
+	if _, err := exec.LookPath("mailq"); err != nil {
+		if _, err := exec.LookPath(mailqPath); err != nil {
+			return 0, fmt.Errorf("mailq command not found")
+		}
+	} else {
+		mailqPath = "mailq"
+	}
+
+	cmd := exec.CommandContext(ctx, mailqPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("mailq failed: %w", err)
+	}
+
+	// Parse output to count queued messages
+	outputStr := string(output)
+	if strings.Contains(outputStr, "Mail queue is empty") {
+		e.logger.Debug("Mail queue is empty")
+		return 0, nil
+	}
+
+	// Count lines that look like queue entries
+	lines := strings.Split(outputStr, "\n")
+	queueCount := 0
+	for _, line := range lines {
+		// Basic heuristic: lines with queue IDs (hex strings) and @ symbols
+		if len(line) > 10 && strings.Contains(line, "@") {
+			// Skip header and footer lines
+			if !strings.Contains(line, "Mail queue") && !strings.Contains(line, "Total requests") {
+				queueCount++
+			}
+		}
+	}
+
+	if queueCount > 0 {
+		e.logger.Debug("Found %d message(s) in mail queue", queueCount)
+	}
+
+	return queueCount, nil
+}
+
+// checkRecentMailLogs checks recent mail log entries for errors
+func (e *EmailNotifier) checkRecentMailLogs() []string {
+	logFiles := []string{
+		"/var/log/mail.log",
+		"/var/log/maillog",
+		"/var/log/mail.err",
+	}
+
+	var errors []string
+
+	for _, logFile := range logFiles {
+		if _, err := os.Stat(logFile); err != nil {
+			continue
+		}
+
+		// Read last 50 lines
+		cmd := exec.Command("tail", "-n", "50", logFile)
+		output, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			lower := strings.ToLower(line)
+			// Look for common error patterns
+			if strings.Contains(lower, "error") ||
+				strings.Contains(lower, "failed") ||
+				strings.Contains(lower, "rejected") ||
+				strings.Contains(lower, "deferred") ||
+				strings.Contains(lower, "connection refused") ||
+				strings.Contains(lower, "timeout") {
+				errors = append(errors, strings.TrimSpace(line))
+			}
+		}
+
+		// Only check first available log file
+		if len(errors) > 0 {
+			break
+		}
+	}
+
+	return errors
+}
+
 // sendViaSendmail sends email via local sendmail command
 func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) error {
+	e.logger.Debug("sendViaSendmail() starting for recipient: %s", recipient)
+
+	// ========================================================================
+	// PRE-FLIGHT MTA DIAGNOSTIC CHECKS
+	// ========================================================================
+	e.logger.Debug("=== Pre-flight MTA diagnostic checks ===")
+
 	// Check if sendmail exists
 	sendmailPath := "/usr/sbin/sendmail"
 	if _, err := exec.LookPath(sendmailPath); err != nil {
 		return fmt.Errorf("sendmail not found at %s - please install postfix or configure email relay", sendmailPath)
 	}
+	e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
+
+	// Check MTA service status
+	if active, service := e.isMTAServiceActive(ctx); active {
+		e.logger.Debug("✓ MTA service '%s' is active", service)
+	} else {
+		e.logger.Warning("⚠ No MTA service appears to be running (checked: postfix, sendmail, exim4)")
+		e.logger.Warning("  Emails may be accepted but not delivered. Consider using EMAIL_DELIVERY_METHOD=relay")
+	}
+
+	// Check MTA configuration
+	if hasConfig, mtaType := e.checkMTAConfiguration(); hasConfig {
+		e.logger.Debug("✓ %s configuration found", mtaType)
+
+		// For Postfix, check relay configuration
+		if mtaType == "Postfix" {
+			if hasRelay, relayHost := e.checkRelayHostConfigured(ctx); hasRelay {
+				e.logger.Debug("✓ SMTP relay configured: %s", relayHost)
+			} else {
+				e.logger.Debug("ℹ No relay host configured (using direct delivery)")
+			}
+		}
+	} else {
+		e.logger.Warning("⚠ No MTA configuration file found")
+		e.logger.Warning("  Sendmail may queue emails but not deliver them")
+	}
+
+	// Check current mail queue
+	if queueCount, err := e.checkMailQueue(ctx); err == nil && queueCount > 0 {
+		e.logger.Warning("⚠ %d message(s) currently in mail queue (previous emails may be stuck)", queueCount)
+		if queueCount > 10 {
+			e.logger.Warning("  Large queue detected - check mail server configuration with 'mailq' and /var/log/mail.log")
+		}
+	}
+
+	e.logger.Debug("=== Building email message ===")
 
 	// Encode subject in Base64 for proper UTF-8 handling
 	encodedSubject := base64.StdEncoding.EncodeToString([]byte(subject))
@@ -378,15 +580,101 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
 	}
 
+	e.logger.Debug("Email message built (%d bytes)", email.Len())
+
+	// ========================================================================
+	// SEND EMAIL WITH VERBOSE OUTPUT
+	// ========================================================================
+	e.logger.Debug("=== Sending email via sendmail ===")
+
+	// Build sendmail arguments
+	args := []string{"-t", "-oi"}
+
+	// Add verbose flag if debug logging is enabled
+	if e.logger.GetLevel() <= types.LogLevelDebug {
+		args = append(args, "-v")
+		e.logger.Debug("Verbose mode enabled (-v flag)")
+	}
+
 	// Create sendmail command
-	cmd := exec.CommandContext(ctx, sendmailPath, "-t", "-oi")
+	cmd := exec.CommandContext(ctx, sendmailPath, args...)
 	cmd.Stdin = strings.NewReader(email.String())
 
+	// Capture stdout and stderr separately
+	var stdoutBuf, stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
 	// Execute
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("sendmail failed: %w (output: %s)", err, string(output))
+	startTime := time.Now()
+	err := cmd.Run()
+	duration := time.Since(startTime)
+
+	e.logger.Debug("Sendmail command completed in %v", duration)
+
+	// Log stdout if available
+	if stdoutBuf.Len() > 0 {
+		e.logger.Debug("Sendmail stdout: %s", strings.TrimSpace(stdoutBuf.String()))
 	}
+
+	// Log stderr (check for warnings)
+	if stderrBuf.Len() > 0 {
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		if strings.Contains(strings.ToLower(stderrStr), "warning") {
+			e.logger.Warning("Sendmail warning: %s", stderrStr)
+		} else {
+			e.logger.Debug("Sendmail stderr: %s", stderrStr)
+		}
+	}
+
+	if err != nil {
+		e.logger.Error("❌ Sendmail command failed: %v", err)
+		return fmt.Errorf("sendmail failed: %w (stderr: %s)", err, stderrBuf.String())
+	}
+
+	// ========================================================================
+	// POST-SEND VERIFICATION
+	// ========================================================================
+	e.logger.Debug("=== Post-send verification ===")
+
+	// Brief pause to let sendmail process the message
+	time.Sleep(500 * time.Millisecond)
+
+	// Check queue again to see if message is stuck
+	if queueCount, err := e.checkMailQueue(ctx); err == nil {
+		if queueCount > 0 {
+			e.logger.Debug("ℹ Mail queue size: %d (message may be queued for delivery)", queueCount)
+		} else {
+			e.logger.Debug("✓ Mail queue is empty (message likely processed)")
+		}
+	}
+
+	// Check recent mail logs for errors (only in debug mode)
+	if e.logger.GetLevel() <= types.LogLevelDebug {
+		recentErrors := e.checkRecentMailLogs()
+		if len(recentErrors) > 0 && len(recentErrors) <= 5 {
+			e.logger.Debug("Recent mail log entries (%d found):", len(recentErrors))
+			for _, errLine := range recentErrors {
+				if len(errLine) > 200 {
+					errLine = errLine[:200] + "..."
+				}
+				e.logger.Debug("  %s", errLine)
+			}
+		} else if len(recentErrors) > 5 {
+			e.logger.Debug("Recent mail log entries (%d found, showing first 5):", len(recentErrors))
+			for i := 0; i < 5; i++ {
+				errLine := recentErrors[i]
+				if len(errLine) > 200 {
+					errLine = errLine[:200] + "..."
+				}
+				e.logger.Debug("  %s", errLine)
+			}
+		}
+	}
+
+	e.logger.Debug("✅ Email handed off to sendmail successfully")
+	e.logger.Info("NOTE: Sendmail exit code 0 means email accepted to queue, not necessarily delivered")
+	e.logger.Info("  To verify actual delivery, check: mailq and /var/log/mail.log")
 
 	return nil
 }

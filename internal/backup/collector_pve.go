@@ -67,6 +67,7 @@ func (c *Collector) CollectPVEConfigs(ctx context.Context) error {
 		clustered = isClustered
 		c.logger.Debug("Cluster detection completed: clustered=%v", clustered)
 	}
+	c.clusteredPVE = clustered
 
 	// Collect PVE directories
 	c.logger.Debug("Collecting PVE directories (clustered=%v)", clustered)
@@ -177,6 +178,14 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 			c.targetPathFor(corosyncPath),
 			"Corosync configuration"); err != nil {
 			c.logger.Warning("Failed to copy corosync.conf: %v", err)
+		}
+
+		authkeySrc := "/etc/corosync/authkey"
+		if err := c.safeCopyFile(ctx,
+			authkeySrc,
+			c.targetPathFor(authkeySrc),
+			"Corosync authkey"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.logger.Warning("Failed to copy Corosync authkey: %v", err)
 		}
 
 		// Cluster directory
@@ -938,7 +947,7 @@ func (c *Collector) newPatternWriters(storage pveStorageEntry, analysisDir strin
 			continue
 		}
 		seen[pattern] = struct{}{}
-		pw, err := newPatternWriter(storage.Name, storage.Path, analysisDir, pattern)
+		pw, err := newPatternWriter(storage.Name, storage.Path, analysisDir, pattern, c.dryRun)
 		if err != nil {
 			c.logger.Warning("Failed to prepare writer for pattern %s: %v", pattern, err)
 			continue
@@ -960,10 +969,23 @@ type patternWriter struct {
 	errorCount  int64
 }
 
-func newPatternWriter(storageName, storagePath, analysisDir, pattern string) (*patternWriter, error) {
+func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dryRun bool) (*patternWriter, error) {
 	clean := cleanPatternName(pattern)
 	filename := fmt.Sprintf("%s_%s_list.txt", storageName, clean)
 	filePath := filepath.Join(analysisDir, filename)
+
+	// In dry-run mode, create a writer without an actual file
+	if dryRun {
+		return &patternWriter{
+			pattern:     pattern,
+			storageName: storageName,
+			storagePath: storagePath,
+			filePath:    filePath,
+			file:        nil,
+			writer:      nil,
+		}, nil
+	}
+
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
 	if err != nil {
 		return nil, err
@@ -990,10 +1012,13 @@ func newPatternWriter(storageName, storagePath, analysisDir, pattern string) (*p
 }
 
 func (pw *patternWriter) Write(path string, info os.FileInfo) error {
+	// In dry-run mode, writer will be nil - just count without writing
 	if pw.writer == nil {
-		pw.errorCount++
-		return fmt.Errorf("writer closed")
+		pw.count++
+		pw.totalSize += info.Size()
+		return nil
 	}
+
 	rel, err := filepath.Rel(pw.storagePath, path)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		rel = path
@@ -1033,6 +1058,7 @@ func (pw *patternWriter) Close() error {
 func cleanPatternName(pattern string) string {
 	clean := strings.ReplaceAll(pattern, "*", "")
 	clean = strings.ReplaceAll(clean, ".", "_")
+	clean = strings.ReplaceAll(clean, "/", "_")
 	if clean == "" {
 		return "all"
 	}
@@ -1065,6 +1091,12 @@ func (c *Collector) copyBackupSample(ctx context.Context, src, destDir, descript
 }
 
 func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir string, writers []*patternWriter, totalFiles, totalSize int64) error {
+	// Skip file creation in dry-run mode
+	if c.dryRun {
+		c.logger.Debug("[DRY RUN] Would write backup summary for datastore: %s", storage.Name)
+		return nil
+	}
+
 	summaryPath := filepath.Join(analysisDir, fmt.Sprintf("%s_backup_summary.txt", storage.Name))
 	file, err := os.OpenFile(summaryPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
 	if err != nil {

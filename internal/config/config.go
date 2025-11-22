@@ -407,23 +407,34 @@ func (c *Config) parse() error {
 	c.CheckOpenPorts = c.getBool("CHECK_OPEN_PORTS", false)
 	c.SuspiciousPorts = c.getIntList("SUSPICIOUS_PORTS", []int{6666, 6665, 1337, 31337, 4444, 5555, 4242, 6324, 8888, 2222, 3389, 5900})
 	c.PortWhitelist = c.getStringSlice("PORT_WHITELIST", nil)
-	c.SuspiciousProcesses = c.getStringSlice("SUSPICIOUS_PROCESSES", []string{
+	defaultSuspicious := []string{
 		"ncat", "cryptominer", "xmrig", "kdevtmpfsi", "kinsing", "minerd", "mr.sh",
-	})
-	c.SafeBracketProcesses = c.getStringSlice("SAFE_BRACKET_PROCESSES", []string{
+	}
+	userSuspicious := c.getStringSlice("SUSPICIOUS_PROCESSES", nil)
+	c.SuspiciousProcesses = mergeStringSlices(defaultSuspicious, userSuspicious)
+
+	defaultSafeBracket := []string{
 		"sshd:", "systemd", "cron", "rsyslogd", "dbus-daemon",
 		"zvol_tq*", "arc_*", "dbu_*", "dbuf_*", "l2arc_feed", "lockd", "nfsd*", "nfsv4 callback*",
-	})
-	c.SafeKernelProcesses = c.getStringSlice("SAFE_KERNEL_PROCESSES", []string{
-		"ksgxd",
-		"hwrng",
-		"usb-storage",
-		"vdev_autotrim",
-		"card1-crtc0",
-		"card1-crtc1",
-		"card1-crtc2",
-		"kvm-pit*",
-	})
+	}
+	userSafeBracket := c.getStringSlice("SAFE_BRACKET_PROCESSES", nil)
+	c.SafeBracketProcesses = mergeStringSlices(defaultSafeBracket, userSafeBracket)
+
+		defaultSafeKernel := []string{
+			"ksgxd",
+			"hwrng",
+			"usb-storage",
+			"vdev_autotrim",
+			"card1-crtc0",
+			"card1-crtc1",
+			"card1-crtc2",
+			"kvm-pit*",
+			"psimon",
+			"regex:^kvm-pit/[0-9]+$",
+			"regex:^worker/.+-drbd_as_pm-.*",
+		}
+	userSafeKernel := c.getStringSlice("SAFE_KERNEL_PROCESSES", nil)
+	c.SafeKernelProcesses = mergeStringSlices(defaultSafeKernel, userSafeKernel)
 
 	c.BackupUser = strings.TrimSpace(c.getString("BACKUP_USER", ""))
 	c.BackupGroup = strings.TrimSpace(c.getString("BACKUP_GROUP", ""))
@@ -765,7 +776,7 @@ func (c *Config) getStringSlice(key string, defaultValue []string) []string {
 
 	parts := strings.FieldsFunc(val, func(r rune) bool {
 		switch r {
-		case ',', ';', ':', '|', '\n':
+		case ',', ';', '|', '\n':
 			return true
 		default:
 			return false
@@ -784,6 +795,33 @@ func (c *Config) getStringSlice(key string, defaultValue []string) []string {
 		return []string{}
 	}
 	return result
+}
+
+func mergeStringSlices(base, extra []string) []string {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+
+	for _, v := range base {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	for _, v := range extra {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	return out
 }
 
 // Helper methods with fallback support (try multiple keys)

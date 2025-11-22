@@ -285,17 +285,17 @@ func GetCategoriesForMode(mode RestoreMode, systemType SystemType, availableCate
 	switch mode {
 	case RestoreModeFull:
 		// Return all available categories
-		return availableCategories
+		return filterOutExportOnly(availableCategories)
 
 	case RestoreModeStorage:
 		// Return storage/datastore categories
 		storageCats := GetStorageModeCategories(string(systemType))
-		return filterAvailable(storageCats, availableCategories)
+		return filterOutExportOnly(filterAvailable(storageCats, availableCategories))
 
 	case RestoreModeBase:
 		// Return system base categories
 		baseCats := GetBaseModeCategories()
-		return filterAvailable(baseCats, availableCategories)
+		return filterOutExportOnly(filterAvailable(baseCats, availableCategories))
 
 	default:
 		// Custom mode - should not be called for this, but return empty
@@ -317,6 +317,20 @@ func filterAvailable(requested []Category, available []Category) []Category {
 	}
 
 	return result
+}
+
+func filterOutExportOnly(categories []Category) []Category {
+	if len(categories) == 0 {
+		return categories
+	}
+	out := make([]Category, 0, len(categories))
+	for _, cat := range categories {
+		if cat.ExportOnly {
+			continue
+		}
+		out = append(out, cat)
+	}
+	return out
 }
 
 // ShowRestorePlan displays a detailed plan of what will be restored
