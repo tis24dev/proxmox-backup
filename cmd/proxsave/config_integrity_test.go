@@ -1,0 +1,176 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
+)
+
+// renderIntegrityBlock drives the real renderer through the real bootstrap logger at
+// DEBUG, so the assertions below see the block exactly as it lands in the run log.
+func renderIntegrityBlock(t *testing.T, report *config.ConfigIntegrityReport) string {
+	t.Helper()
+	boot := logging.NewBootstrapLogger()
+	boot.SetConsoleQuiet(true)
+	buf := &bytes.Buffer{}
+	mirror := logging.New(types.LogLevelDebug, false)
+	mirror.SetOutput(buf)
+	boot.SetMirrorLogger(mirror)
+	renderConfigIntegrityReport(boot, report, 3100*time.Microsecond)
+	return buf.String()
+}
+
+func integrityReportWithFindings() *config.ConfigIntegrityReport {
+	return &config.ConfigIntegrityReport{
+		Path:              "/opt/proxsave/configs/backup.env",
+		Lines:             461,
+		Assignments:       182,
+		Distinct:          181,
+		TemplateVariables: 182,
+		SkippedMultiValue: []string{"AGE_RECIPIENT", "BACKUP_BLACKLIST", "BACKUP_EXCLUDE_PATTERNS", "CUSTOM_BACKUP_PATHS"},
+		Duplicated:        []config.DuplicatedVariable{{Name: "PERSONAL_SCRIPT_PRE_RUN", Lines: []int{120, 455}, WinningLine: 455}},
+		Absent:            []string{"HEALTHCHECK_UPDATES_ID", "SCHEDULER_TIME"},
+		Unknown:           []string{"PERSONAL_SCRIPTS_PRERUN"},
+	}
+}
+
+// The levels ARE the design: a discarded value and a variable the merge never added
+// are WARNINGs because something the operator wrote is not in effect, while a variable
+// the binary does not read is INFO because nothing was lost by the loader.
+func TestIntegrityFindingsCarryTheAgreedLevels(t *testing.T) {
+	logged := renderIntegrityBlock(t, integrityReportWithFindings())
+	for _, want := range []string{
+		"WARNING    PERSONAL_SCRIPT_PRE_RUN is set twice; line 455 wins and the value on line 120 is discarded",
+		"WARNING    HEALTHCHECK_UPDATES_ID is absent and falls back to its default",
+		"WARNING    SCHEDULER_TIME is absent and falls back to its default",
+		"INFO       PERSONAL_SCRIPTS_PRERUN is not a known variable and is ignored",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("missing line %q in:\n%s", want, logged)
+		}
+	}
+}
+
+// The raw counters exist so the operator can reconstruct the verdict, and they are
+// emitted BEFORE it: the audit knows the numbers before it renders them.
+func TestIntegrityDebugCountsPrecedeTheVerdict(t *testing.T) {
+	logged := renderIntegrityBlock(t, integrityReportWithFindings())
+	counts := strings.Index(logged, "Configuration integrity: 1 duplicated, 2 absent, 1 unknown (duration=")
+	verdict := strings.Index(logged, "⚠ Configuration file: 1 duplicated, 2 absent, 1 unknown")
+	if counts < 0 || verdict < 0 {
+		t.Fatalf("expected both the DEBUG counts and the verdict:\n%s", logged)
+	}
+	if counts > verdict {
+		t.Fatalf("the DEBUG counts must precede the verdict:\n%s", logged)
+	}
+	if !strings.Contains(logged, "WARNING  ⚠ Configuration file:") {
+		t.Fatalf("the verdict must be a WARNING when a value is discarded or missing:\n%s", logged)
+	}
+}
+
+// Every DEBUG detail line carries the subsystem prefix, like the other DEBUG blocks in
+// the run log: at DEBUG the subsystems interleave and a bare variable name has no owner.
+func TestIntegrityDebugLinesAllNameTheirSubsystem(t *testing.T) {
+	logged := renderIntegrityBlock(t, integrityReportWithFindings())
+	for _, line := range strings.Split(logged, "\n") {
+		if !strings.Contains(line, "DEBUG") {
+			continue
+		}
+		message := line[strings.Index(line, "DEBUG")+len("DEBUG"):]
+		if !strings.Contains(message, "Configuration integrity:") {
+			t.Fatalf("DEBUG line without the subsystem prefix: %q", line)
+		}
+	}
+}
+
+// A run whose configuration is intact must not spend a WARNING on saying so, or the
+// block would promote every clean backup to a non-zero exit.
+func TestCleanConfigurationKeepsTheVerdictAtInfo(t *testing.T) {
+	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
+		Path: "/opt/proxsave/configs/backup.env", Lines: 461, Assignments: 182, Distinct: 182, TemplateVariables: 182,
+		SkippedMultiValue: []string{"AGE_RECIPIENT"},
+	})
+	if !strings.Contains(logged, "INFO     ✓ Configuration file ok") {
+		t.Fatalf("expected the clean verdict at INFO:\n%s", logged)
+	}
+	if strings.Contains(logged, "WARNING") {
+		t.Fatalf("a clean configuration must emit no WARNING at all:\n%s", logged)
+	}
+}
+
+// An unknown variable is reported but is NOT an issue: nothing the operator wrote is
+// being discarded, so the verdict stays green and the run's exit code is untouched.
+func TestAnUnknownVariableAloneDoesNotTurnTheVerdictRed(t *testing.T) {
+	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
+		Path: "/opt/proxsave/configs/backup.env", Lines: 462, Assignments: 183, Distinct: 183, TemplateVariables: 182,
+		Unknown: []string{"PERSONAL_SCRIPTS_PRERUN"},
+	})
+	if !strings.Contains(logged, "INFO     ✓ Configuration file ok (1 unknown)") {
+		t.Fatalf("expected a green verdict naming the unknown count:\n%s", logged)
+	}
+	if strings.Contains(logged, "WARNING") {
+		t.Fatalf("an unknown variable must not raise a WARNING:\n%s", logged)
+	}
+}
+
+// More than two assignments must not read as "set twice".
+func TestThreeAssignmentsNameEveryDiscardedLine(t *testing.T) {
+	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
+		Path: "/opt/proxsave/configs/backup.env",
+		Duplicated: []config.DuplicatedVariable{
+			{Name: "PERSONAL_SCRIPT_PRE_RUN", Lines: []int{10, 20, 30}, WinningLine: 30},
+		},
+	})
+	want := "PERSONAL_SCRIPT_PRE_RUN is set 3 times; line 30 wins and the values on lines 10, 20 are discarded"
+	if !strings.Contains(logged, want) {
+		t.Fatalf("expected %q in:\n%s", want, logged)
+	}
+}
+
+// A duplicated secret must never put its value in the log.
+func TestTheBlockNeverPrintsAValue(t *testing.T) {
+	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
+		Path: "/opt/proxsave/configs/backup.env",
+		Duplicated: []config.DuplicatedVariable{
+			{Name: "TELEGRAM_BOT_TOKEN", Lines: []int{40, 50}, WinningLine: 50},
+		},
+	})
+	if !strings.Contains(logged, "TELEGRAM_BOT_TOKEN is set twice; line 50 wins and the value on line 40 is discarded") {
+		t.Fatalf("expected the finding without its value:\n%s", logged)
+	}
+}
+
+// The block is worth nothing if it is not wired into the run, and no unit test of the
+// renderer can see that. Its position is the design: BEFORE printDryRunBootstrapStatus,
+// which closes the configuration section with a blank line, so the findings sit with the
+// file they describe and ahead of the effective-settings recap.
+func TestTheIntegrityBlockIsWiredAheadOfTheConfigurationSectionEnd(t *testing.T) {
+	source, err := os.ReadFile("main_runtime.go")
+	if err != nil {
+		t.Fatalf("read main_runtime.go: %v", err)
+	}
+	body := string(source)
+	start := strings.Index(body, "func validateRunConfig(")
+	if start < 0 {
+		t.Fatalf("validateRunConfig not found")
+	}
+	end := strings.Index(body[start:], "\n}\n")
+	if end < 0 {
+		t.Fatalf("end of validateRunConfig not found")
+	}
+	fn := body[start : start+end]
+	audit := strings.Index(fn, "auditRunConfigFile(rt)")
+	dryRun := strings.Index(fn, "printDryRunBootstrapStatus(rt)")
+	if audit < 0 {
+		t.Fatalf("validateRunConfig no longer runs the integrity block:\n%s", fn)
+	}
+	if dryRun < 0 || audit > dryRun {
+		t.Fatalf("the integrity block must run before printDryRunBootstrapStatus:\n%s", fn)
+	}
+}

@@ -1,0 +1,197 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/tis24dev/proxsave/pkg/utils"
+)
+
+func writeEnvFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "backup.env")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+// The shape reported in issue #306: the operator adds their own line ABOVE the
+// template's empty one, parseEnvFile's last-wins rule keeps the empty value, and
+// nothing anywhere says so. The same file with the two lines swapped works, which
+// is why two machines out of four behaved differently.
+func TestAuditFindsTheDuplicateThatSilentlyDiscardsAnOperatorValue(t *testing.T) {
+	path := writeEnvFile(t, "PERSONAL_SCRIPT_PRE_RUN=/home/howard/dd/mount-pbs\nPERSONAL_SCRIPT_PRE_RUN=\n")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.PersonalScriptPreRun != "" {
+		t.Fatalf("precondition: expected the loader to discard the operator value, got %q", cfg.PersonalScriptPreRun)
+	}
+
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if len(report.Duplicated) != 1 {
+		t.Fatalf("expected exactly one duplicated variable, got %+v", report.Duplicated)
+	}
+	got := report.Duplicated[0]
+	if got.Name != "PERSONAL_SCRIPT_PRE_RUN" {
+		t.Fatalf("expected PERSONAL_SCRIPT_PRE_RUN, got %q", got.Name)
+	}
+	if len(got.Lines) != 2 || got.Lines[0] != 1 || got.Lines[1] != 2 {
+		t.Fatalf("expected assignments on lines 1 and 2, got %v", got.Lines)
+	}
+	if got.WinningLine != 2 {
+		t.Fatalf("expected the LAST assignment to win, got line %d", got.WinningLine)
+	}
+	if !report.HasIssues() || report.Clean() {
+		t.Fatalf("a discarded operator value must count as an issue: %+v", report)
+	}
+}
+
+// The post-run script is not special-cased anywhere: the audit iterates over the
+// file, so both operator scripts are covered by the same code path.
+func TestAuditCoversBothPersonalScriptsIdentically(t *testing.T) {
+	path := writeEnvFile(t, strings.Join([]string{
+		"PERSONAL_SCRIPT_PRE_RUN=/home/howard/dd/mount-pbs",
+		"PERSONAL_SCRIPT_POST_RUN=/home/howard/dd/umount-pbs",
+		"PERSONAL_SCRIPT_PRE_RUN=",
+		"PERSONAL_SCRIPT_POST_RUN=",
+	}, "\n")+"\n")
+
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	found := map[string]bool{}
+	for _, duplicated := range report.Duplicated {
+		found[duplicated.Name] = true
+	}
+	for _, name := range []string{"PERSONAL_SCRIPT_PRE_RUN", "PERSONAL_SCRIPT_POST_RUN"} {
+		if !found[name] {
+			t.Fatalf("expected %s among the duplicates, got %+v", name, report.Duplicated)
+		}
+	}
+}
+
+// The audit re-reads the file instead of changing parseEnvFile, whose upstream blast
+// radius is the whole install/upgrade surface. This is the guard against the two
+// readers drifting apart: whatever the audit calls the winning line must hold the
+// value the loader actually kept.
+func TestAuditAndLoaderAgreeOnTheWinningLine(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want string
+	}{
+		"template line after the operator line": {"PERSONAL_SCRIPT_PRE_RUN=/first\nPERSONAL_SCRIPT_PRE_RUN=\n", ""},
+		"operator line after the template line": {"PERSONAL_SCRIPT_PRE_RUN=\nPERSONAL_SCRIPT_PRE_RUN=/second\n", "/second"},
+		"three assignments":                     {"PERSONAL_SCRIPT_PRE_RUN=/a\nPERSONAL_SCRIPT_PRE_RUN=/b\nPERSONAL_SCRIPT_PRE_RUN=/c\n", "/c"},
+		"export prefix wins":                    {"PERSONAL_SCRIPT_PRE_RUN=/a\nexport PERSONAL_SCRIPT_PRE_RUN=/b\n", "/b"},
+		"lower case key wins":                   {"PERSONAL_SCRIPT_PRE_RUN=/a\npersonal_script_pre_run=/b\n", "/b"},
+		"inline comment on the winner":          {"PERSONAL_SCRIPT_PRE_RUN=/a\nPERSONAL_SCRIPT_PRE_RUN=/b   # note\n", "/b"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeEnvFile(t, tc.body)
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.PersonalScriptPreRun != tc.want {
+				t.Fatalf("loader kept %q, expected %q", cfg.PersonalScriptPreRun, tc.want)
+			}
+			report, err := AuditConfigFile(path)
+			if err != nil {
+				t.Fatalf("audit: %v", err)
+			}
+			if len(report.Duplicated) != 1 {
+				t.Fatalf("expected one duplicate, got %+v", report.Duplicated)
+			}
+			lines := strings.Split(strings.TrimRight(tc.body, "\n"), "\n")
+			winning := lines[report.Duplicated[0].WinningLine-1]
+			_, value, ok := utils.SplitKeyValue(winning)
+			if !ok || value != tc.want {
+				t.Fatalf("the audit's winning line %d holds %q, the loader kept %q",
+					report.Duplicated[0].WinningLine, value, tc.want)
+			}
+		})
+	}
+}
+
+// A variable that CONCATENATES instead of overwriting loses nothing when it is
+// repeated, so reporting it would be a false positive on a perfectly normal file.
+func TestAuditIgnoresVariablesThatConcatenateInsteadOfOverwriting(t *testing.T) {
+	path := writeEnvFile(t, "BACKUP_EXCLUDE_PATTERNS=*.tmp\nBACKUP_EXCLUDE_PATTERNS=*.log\nAGE_RECIPIENT=age1aaa\nAGE_RECIPIENT=age1bbb\n")
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if len(report.Duplicated) != 0 {
+		t.Fatalf("multi-value variables must not be reported as duplicates: %+v", report.Duplicated)
+	}
+	for _, name := range []string{"AGE_RECIPIENT", "BACKUP_BLACKLIST", "BACKUP_EXCLUDE_PATTERNS", "CUSTOM_BACKUP_PATHS"} {
+		if !containsString(report.SkippedMultiValue, name) {
+			t.Fatalf("expected %s among the skipped variables, got %v", name, report.SkippedMultiValue)
+		}
+	}
+}
+
+// The template ships with the binary, so "absent" can only mean a new binary whose
+// configuration merge never ran. An operator who has not upgraded carries an older
+// template and sees nothing here.
+func TestAuditReportsAbsentAndUnknownAgainstTheEmbeddedTemplate(t *testing.T) {
+	var kept []string
+	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "SCHEDULER_TIME=") || strings.HasPrefix(trimmed, "HEALTHCHECK_UPDATES_ID=") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	kept = append(kept, "PERSONAL_SCRIPTS_PRERUN=/home/howard/dd/typo")
+
+	report, err := AuditConfigFile(writeEnvFile(t, strings.Join(kept, "\n")))
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if len(report.Absent) != 2 || !containsString(report.Absent, "SCHEDULER_TIME") || !containsString(report.Absent, "HEALTHCHECK_UPDATES_ID") {
+		t.Fatalf("expected exactly the two removed variables as absent, got %v", report.Absent)
+	}
+	if len(report.Unknown) != 1 || report.Unknown[0] != "PERSONAL_SCRIPTS_PRERUN" {
+		t.Fatalf("expected only the misspelled variable as unknown, got %v", report.Unknown)
+	}
+	if report.HasIssues() != true {
+		t.Fatalf("absent variables must count as issues")
+	}
+}
+
+// The shipped template is the baseline every operator starts from: it must audit clean,
+// or the block would cry wolf on a fresh install.
+func TestTheEmbeddedTemplateAuditsClean(t *testing.T) {
+	report, err := AuditConfigFile(writeEnvFile(t, DefaultEnvTemplate()))
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if !report.Clean() {
+		t.Fatalf("the shipped template must audit clean: duplicated=%+v absent=%v unknown=%v",
+			report.Duplicated, report.Absent, report.Unknown)
+	}
+	if report.TemplateVariables == 0 || report.Distinct != report.TemplateVariables {
+		t.Fatalf("template variables=%d distinct=%d", report.TemplateVariables, report.Distinct)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
