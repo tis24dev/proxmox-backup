@@ -53,18 +53,28 @@ Service state (systemctl is-active): <active|inactive|...>
 Running version: <version> (<commit>)
 Binary alignment: aligned | BEHIND (restart needed) | unknown
 Personal pre-run script:
-  Running daemon: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
-  Current configuration: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED | UNKNOWN
+  Daemon now: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED | UNAVAILABLE
+  Configuration: NOT CONFIGURED (<why>) | READY | READY WITH WARNING | REFUSED | UNKNOWN
   Synchronization: NOT APPLICABLE | IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
 Personal post-run script:
-  Running daemon: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
-  Current configuration: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED | UNKNOWN
+  Daemon now: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED | UNAVAILABLE
+  Configuration: NOT CONFIGURED (<why>) | READY | READY WITH WARNING | REFUSED | UNKNOWN
   Synchronization: NOT APPLICABLE | IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
 ```
 
-`Running version:` and `Binary alignment:` appear only when their daemon evidence is available. The two personal-script sections always appear. `Running daemon` is the state captured and applied at daemon startup; `Current configuration` is what a restart would load and how that path looks now. `NOT CONFIGURED` means the setting was empty, `READY` means the path passed without an advisory, `READY WITH WARNING` means it remains enabled under an explicit administrator trust decision, and `REFUSED` includes the exact refusal reason. If a live daemon has not published matching runtime state, the command says `RUNNING DAEMON STATE UNAVAILABLE`; it never turns missing runtime evidence into a false `NOT CONFIGURED` verdict.
+`Running version:` and `Binary alignment:` appear only when their daemon evidence is available. The two personal-script sections always appear. `Daemon now` is the state captured and applied at daemon startup; `Configuration` is what a restart would load and how that path looks now. `NOT CONFIGURED` means the setting was empty, `READY` means the path passed without an advisory, `READY WITH WARNING` means it remains enabled under an explicit administrator trust decision, and `REFUSED` includes the exact refusal reason. If a live daemon has not published matching runtime state, the command says `RUNNING DAEMON STATE UNAVAILABLE`; it never turns missing runtime evidence into a false `NOT CONFIGURED` verdict.
 
-`UNKNOWN` on `Current configuration` means the configuration file itself could not be read, so there is no current verdict to state: it is not `NOT CONFIGURED`, which asserts both settings were empty. The synchronization line then reads `UNKNOWN` as well, and in particular does not ask for a daemon restart on evidence it does not have. Both carry the loader's own error, so the line names the file and the reason it could not be read. `proxsave --daemon-status` exits earlier when the config is unreadable, so this pair is what the dashboard's daemon-status screen shows.
+On the `Configuration` line only, `NOT CONFIGURED` also says what the file being read right now actually contains, because the verdict alone cannot tell three different files apart:
+
+```text
+  Configuration: NOT CONFIGURED (PERSONAL_SCRIPT_PRE_RUN is not in the file)
+  Configuration: NOT CONFIGURED (PERSONAL_SCRIPT_PRE_RUN is on line 456 & is empty)
+  Configuration: NOT CONFIGURED (PERSONAL_SCRIPT_PRE_RUN is on lines 120 and 456 & line 456 wins and is empty)
+```
+
+The third is the last-wins rule described in [CONFIGURATION.md](CONFIGURATION.md#configuration-integrity-check): a value you wrote is being discarded by a later assignment. The `Daemon now` line never carries this note. That daemon read its own copy of the file when it started, so describing today's file as if it explained the daemon's verdict would be a guess.
+
+`UNKNOWN` on `Configuration` means the configuration file itself could not be read, so there is no current verdict to state: it is not `NOT CONFIGURED`, which asserts both settings were empty. The synchronization line then reads `UNKNOWN` as well, and in particular does not ask for a daemon restart on evidence it does not have. Both carry the loader's own error, so the line names the file and the reason it could not be read. `proxsave --daemon-status` exits earlier when the config is unreadable, so this pair is what the dashboard's daemon-status screen shows.
 
 With debug logging, the block also shows the UID used for each decision and every inspected path component's owner and mode. It reads the effective UID from the live daemon's `/proc/<pid>/status` when possible and explicitly reports a fallback to the status command's UID when it cannot. The synchronization verdict distinguishes a changed config source or script path (`OUT OF SYNC`, restart required) from changed ownership, mode, or policy evidence at the same path (`PATH STATE CHANGED SINCE STARTUP`).
 

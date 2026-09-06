@@ -5,6 +5,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 ## Table of Contents
 
 - [Configuration File Location](#configuration-file-location)
+- [Configuration integrity check](#configuration-integrity-check)
 - [General Settings](#general-settings)
 - [Scheduler engine](#scheduler-engine)
 - [Personal scripts (daemon)](#personal-scripts-daemon)
@@ -40,6 +41,70 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 # Use custom config file
 proxsave --config /path/to/my-backup.env
 ```
+
+---
+
+## Configuration integrity check
+
+Every run audits `backup.env` against the template embedded in the binary, right after loading
+it and before the effective settings are printed:
+
+```text
+INFO     Configuration integrity check:
+DEBUG    Configuration integrity: file=/opt/proxsave/configs/backup.env lines=442 assignments=182 distinct=182 template=182
+DEBUG    Configuration integrity: multi-value variables skipped: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS
+DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown (duration=2.4ms)
+INFO     ✓ Configuration file ok
+```
+
+It reports three things, one line each, and their levels differ because the facts differ:
+
+| Finding | Level | Meaning |
+|---------|-------|---------|
+| duplicated | `WARNING` | the variable is assigned more than once, so a value you wrote is discarded |
+| absent | `WARNING` | the binary carries the variable in its embedded template, the file does not |
+| unknown | `INFO` | the file assigns a variable the binary does not read: a misspelling, or a [legacy name](#legacy-key-names) |
+
+```text
+WARNING    PERSONAL_SCRIPT_PRE_RUN is set twice; line 456 wins and the value on line 120 is discarded
+WARNING    HEALTHCHECK_UPDATES_ID is absent and falls back to its default
+INFO       PERSONAL_SCRIPTS_PRERUN is not a known variable and is ignored
+WARNING  ⚠ Configuration file: 1 duplicated, 1 absent, 1 unknown
+```
+
+### Duplicated: the one that loses data
+
+A repeated variable is resolved **last-wins**. The last assignment in the file is kept and every
+earlier one is discarded, silently, whatever it held. Thirty-six of the template's 182 variables
+ship as an empty line, the personal scripts among them, so adding your own line **above** one of
+them loses it, while the same file with the two lines swapped works:
+
+```bash
+PERSONAL_SCRIPT_PRE_RUN=/home/me/mount-pbs   # discarded: an assignment below wins
+...
+PERSONAL_SCRIPT_PRE_RUN=                     # the template line, empty, and it wins
+```
+
+Four variables are exempt, because repeating them **concatenates** instead of overwriting and
+nothing is lost: `AGE_RECIPIENT`, `BACKUP_BLACKLIST`, `BACKUP_EXCLUDE_PATTERNS` and
+`CUSTOM_BACKUP_PATHS`.
+
+### Absent: the merge never ran
+
+The template is compiled into the binary, so a host that has not upgraded carries an older
+binary with an older template and never sees this finding. Seeing it means the binary is new and
+`backup.env` was not merged. `--upgrade-config` adds the missing variables and
+`--upgrade-config-dry-run` shows what it would add; a missing variable falls back to its default in
+the meantime, it does not fail the run.
+
+### What the block does not do
+
+Values are never printed, not even at debug level: a duplicated `TELEGRAM_BOT_TOKEN` would put a
+secret in the log, and the line number locates it just as well. Nothing is rewritten and the
+last-wins rule is unchanged; the audit only stops it from being silent.
+
+The `WARNING` lines count towards the run's warning total and its exit code, like every other
+warning. The same block runs under `proxsave --daemon-status`.
 
 ---
 
@@ -418,7 +483,7 @@ Seven keys have a legacy alias from the Bash-era configuration, and **the legacy
 
 These seven are the ones where the legacy name is checked first. Other pairs, such as `MAX_LOCAL_BACKUPS` / `LOCAL_RETENTION_DAYS` or `AGE_RECIPIENT` / `AGE_RECIPIENTS`, list the canonical name first and are harmless.
 
-This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. Two more cloud pairs are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md), where the canonical name wins instead, so check that table rather than assuming.
+This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across, or read them off the [configuration integrity check](#configuration-integrity-check): a legacy name is not in the embedded template, so every run lists it as an unknown variable. Two more cloud pairs are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md), where the canonical name wins instead, so check that table rather than assuming.
 
 ---
 
