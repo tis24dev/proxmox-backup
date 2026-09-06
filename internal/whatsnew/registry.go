@@ -155,6 +155,18 @@ var notes = []Note{
 			"Remove --dry-run from any script that runs proxsave --upgrade: the combination is now refused instead of upgrading",
 		},
 	},
+	{
+		Version: "0.37.0",
+		Lines: []string{
+			"Every run checks backup.env and reports a variable that is set twice, absent, or not read by ProxSave",
+			"A value you wrote is no longer discarded in silence when the same variable is set again further down the file",
+			"Daemon status says why a personal script reads as not configured: absent from backup.env, empty, or overwritten",
+		},
+		Actions: []string{
+			"If a run reports a variable set twice, delete the line you do not want: the last one in the file is the one that wins",
+			"If a run reports absent variables, merge them from the dashboard: Maintenance > Upgrade > Check config",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
