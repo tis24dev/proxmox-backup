@@ -89,11 +89,11 @@ func TestDaemonDiagnosticsRenderersNameTheUnknownCurrentState(t *testing.T) {
 	logDaemonDiagnostics(logger, diagnostics)
 	out := buf.String()
 
-	if strings.Contains(out, "Current configuration: NOT CONFIGURED") {
+	if strings.Contains(out, "Configuration: NOT CONFIGURED") {
 		t.Fatalf("the CLI still claims the settings were empty:\n%s", out)
 	}
 	for _, want := range []string{
-		"Current configuration: UNKNOWN: " + personalScriptConfigUnreadable,
+		"Configuration: UNKNOWN: " + personalScriptConfigUnreadable,
 		"Synchronization: UNKNOWN (" + personalScriptConfigUnreadable + ")",
 	} {
 		if !strings.Contains(out, want) {

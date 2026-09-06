@@ -23,6 +23,16 @@ type DuplicatedVariable struct {
 	WinningLine int
 }
 
+// VariableAssignment describes HOW one variable is assigned in the audited file:
+// every line that assigns it, the one parseEnvFile's last-wins rule keeps, and
+// whether that one carries an empty value. The value itself is never recorded, so a
+// duplicated TELEGRAM_BOT_TOKEN cannot reach a log through here either.
+type VariableAssignment struct {
+	Lines        []int
+	WinningLine  int
+	WinningEmpty bool
+}
+
 // ConfigIntegrityReport is the verdict of one audit of a backup.env against the
 // embedded template. It carries the raw counters the DEBUG lines print and the
 // three finding sets the operator-facing lines print, so every surface renders
@@ -37,6 +47,22 @@ type ConfigIntegrityReport struct {
 	Duplicated        []DuplicatedVariable
 	Absent            []string
 	Unknown           []string
+
+	// assignments answers "how is this variable written in the file" for callers that
+	// need to explain ONE variable rather than list the file's findings, e.g. the
+	// daemon diagnostics saying why a personal script reads as NOT CONFIGURED.
+	assignments map[string]VariableAssignment
+}
+
+// Assignment reports how a variable is assigned in the audited file. The second
+// return is false when the variable is not assigned at all, which is a different
+// fact from being assigned with an empty value and has to stay distinguishable.
+func (r *ConfigIntegrityReport) Assignment(name string) (VariableAssignment, bool) {
+	if r == nil || r.assignments == nil {
+		return VariableAssignment{}, false
+	}
+	assignment, ok := r.assignments[strings.ToUpper(strings.TrimSpace(name))]
+	return assignment, ok
 }
 
 // Clean reports whether the audit found nothing at all.
@@ -90,15 +116,25 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 		Distinct:          len(fileScan.order),
 		TemplateVariables: len(templateScan.order),
 		SkippedMultiValue: skippedMultiValueVariables(),
+		assignments:       make(map[string]VariableAssignment, len(fileScan.order)),
 	}
 
 	for _, name := range fileScan.order {
 		at := fileScan.assignedAt[name]
+		lines := make([]int, 0, len(at))
+		for _, entry := range at {
+			lines = append(lines, entry.line)
+		}
+		report.assignments[name] = VariableAssignment{
+			Lines:        lines,
+			WinningLine:  at[len(at)-1].line,
+			WinningEmpty: at[len(at)-1].empty,
+		}
 		if len(at) > 1 && !skipsUniquenessCheck(name) {
 			report.Duplicated = append(report.Duplicated, DuplicatedVariable{
 				Name:        name,
-				Lines:       at,
-				WinningLine: at[len(at)-1],
+				Lines:       lines,
+				WinningLine: at[len(at)-1].line,
 			})
 		}
 		if _, ok := templateScan.assignedAt[name]; !ok {
@@ -113,11 +149,18 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 	return report, nil
 }
 
+// envAssignment is one KEY=VALUE line: where it is, and whether its value is empty.
+// The value is deliberately not kept.
+type envAssignment struct {
+	line  int
+	empty bool
+}
+
 // envScan is one pass over an env file: which variables are assigned, on which
 // lines, and how many lines and assignments the file has.
 type envScan struct {
 	order       []string
-	assignedAt  map[string][]int
+	assignedAt  map[string][]envAssignment
 	lines       int
 	assignments int
 }
@@ -125,7 +168,7 @@ type envScan struct {
 // scanEnvAssignments mirrors parseEnvFile's loop exactly, including the multi-line
 // block form, so a line the loader ignores is a line the audit ignores.
 func scanEnvAssignments(scanner *bufio.Scanner) (envScan, error) {
-	scan := envScan{assignedAt: make(map[string][]int)}
+	scan := envScan{assignedAt: make(map[string][]envAssignment)}
 	for scanner.Scan() {
 		scan.lines++
 		line := strings.TrimRight(scanner.Text(), "\r")
@@ -133,7 +176,7 @@ func scanEnvAssignments(scanner *bufio.Scanner) (envScan, error) {
 		if utils.IsComment(trimmed) {
 			continue
 		}
-		key, _, ok := utils.SplitKeyValue(line)
+		key, value, ok := utils.SplitKeyValue(line)
 		if !ok {
 			continue
 		}
@@ -144,7 +187,10 @@ func scanEnvAssignments(scanner *bufio.Scanner) (envScan, error) {
 		if _, seen := scan.assignedAt[upperKey]; !seen {
 			scan.order = append(scan.order, upperKey)
 		}
-		scan.assignedAt[upperKey] = append(scan.assignedAt[upperKey], scan.lines)
+		scan.assignedAt[upperKey] = append(scan.assignedAt[upperKey], envAssignment{
+			line:  scan.lines,
+			empty: strings.TrimSpace(value) == "",
+		})
 		scan.assignments++
 
 		// A block value swallows its own lines in the loader, so the audit has to

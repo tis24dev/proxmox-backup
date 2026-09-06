@@ -378,15 +378,15 @@ func TestBuildDaemonStatusPromptAndCLIAgreeOnRuntimeAndSynchronization(t *testin
 		wantRunning  string
 		wantSync     string
 	}{
-		{"in sync", daemonRuntimeAvailable, personalScriptInSync, "Running daemon: REFUSED", "Synchronization: IN SYNC"},
-		{"configuration drift", daemonRuntimeAvailable, personalScriptConfigurationDrift, "Running daemon: REFUSED", "Synchronization: OUT OF SYNC"},
-		{"path changed", daemonRuntimeAvailable, personalScriptPathStateChanged, "Running daemon: REFUSED", "Synchronization: PATH STATE CHANGED SINCE STARTUP"},
-		{"missing", daemonRuntimeMissing, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
-		{"stale", daemonRuntimeStale, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
-		{"invalid", daemonRuntimeInvalid, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
-		{"unsupported", daemonRuntimeUnsupported, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
-		{"not running", daemonRuntimeNotApplicable, personalScriptSyncNotApplicable, "Running daemon: NOT RUNNING", "Synchronization: NOT APPLICABLE"},
-		{"unknown sync", daemonRuntimeAvailable, "", "Running daemon: REFUSED", "Synchronization: UNKNOWN"},
+		{"in sync", daemonRuntimeAvailable, personalScriptInSync, "Daemon now: REFUSED", "Synchronization: IN SYNC"},
+		{"configuration drift", daemonRuntimeAvailable, personalScriptConfigurationDrift, "Daemon now: REFUSED", "Synchronization: OUT OF SYNC"},
+		{"path changed", daemonRuntimeAvailable, personalScriptPathStateChanged, "Daemon now: REFUSED", "Synchronization: PATH STATE CHANGED SINCE STARTUP"},
+		{"missing", daemonRuntimeMissing, personalScriptRuntimeUnavailable, "Daemon now: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"stale", daemonRuntimeStale, personalScriptRuntimeUnavailable, "Daemon now: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"invalid", daemonRuntimeInvalid, personalScriptRuntimeUnavailable, "Daemon now: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"unsupported", daemonRuntimeUnsupported, personalScriptRuntimeUnavailable, "Daemon now: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"not running", daemonRuntimeNotApplicable, personalScriptSyncNotApplicable, "Daemon now: NOT RUNNING", "Synchronization: NOT APPLICABLE"},
+		{"unknown sync", daemonRuntimeAvailable, "", "Daemon now: REFUSED", "Synchronization: UNKNOWN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			comparison := personalScriptComparison{
@@ -405,12 +405,12 @@ func TestBuildDaemonStatusPromptAndCLIAgreeOnRuntimeAndSynchronization(t *testin
 			logDaemonDiagnostics(logger, diagnostics)
 			for name, out := range map[string]string{"cli": buf.String(), "dashboard": ansi.Strip(buildDaemonStatusPrompt(diagnostics))} {
 				assertNoRawInjection(t, out)
-				for _, want := range []string{tc.wantRunning, tc.wantSync, "Current configuration: READY (/current.sh)"} {
+				for _, want := range []string{tc.wantRunning, tc.wantSync, "Configuration: READY (/current.sh)"} {
 					if !strings.Contains(out, want) {
 						t.Errorf("%s missing %q:\n%s", name, want, out)
 					}
 				}
-				for _, forbidden := range []string{"payload", "Running daemon: NOT CONFIGURED"} {
+				for _, forbidden := range []string{"payload", "Daemon now: NOT CONFIGURED"} {
 					if strings.Contains(out, forbidden) {
 						t.Errorf("%s retained %q:\n%s", name, forbidden, out)
 					}

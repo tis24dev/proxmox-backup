@@ -143,6 +143,7 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr er
 	if cfg != nil {
 		currentConfigPath = cfg.ConfigPath
 	}
+	annotatePersonalScriptAssignments(&currentScripts, currentConfigPath)
 	scripts := personalScriptComparisons{
 		Pre: comparePersonalScript(
 			runtimeDiagnostic, currentConfigPath, runningScripts.Pre, currentScripts.Pre,
@@ -407,13 +408,13 @@ func logPersonalScriptComparison(logger *logging.Logger, label string, runtime d
 	logger.Info("%s:", label)
 	switch runtime.Availability {
 	case daemonRuntimeAvailable:
-		logPersonalScriptDiagnostic(logger, "  Running daemon", comparison.Running)
+		logPersonalScriptDiagnostic(logger, "  Daemon now", comparison.Running)
 	case daemonRuntimeNotApplicable:
-		logger.Info("  Running daemon: NOT RUNNING")
+		logger.Info("  Daemon now: NOT RUNNING")
 	default:
-		logger.Warning("  Running daemon state: UNAVAILABLE (%s)", daemonDiagnosticText(runtime.Reason))
+		logger.Warning("  Daemon now: UNAVAILABLE (%s)", daemonDiagnosticText(runtime.Reason))
 	}
-	logPersonalScriptDiagnostic(logger, "  Current configuration", comparison.Current)
+	logPersonalScriptDiagnostic(logger, "  Configuration", comparison.Current)
 	logPersonalScriptSynchronization(logger, comparison)
 }
 
@@ -452,6 +453,10 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 	case personalScriptUnknown:
 		logger.Warning("%s: UNKNOWN: %s", label, reason)
 	default:
+		if assignment := daemonDiagnosticText(diagnostic.Assignment); assignment != "" {
+			logger.Info("%s: NOT CONFIGURED (%s)", label, assignment)
+			return
+		}
 		logger.Info("%s: NOT CONFIGURED", label)
 	}
 }

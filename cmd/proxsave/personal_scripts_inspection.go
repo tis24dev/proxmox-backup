@@ -46,11 +46,20 @@ type personalScriptPathComponent struct {
 }
 
 type personalScriptDiagnostic struct {
-	Key        string
-	Path       string
-	State      personalScriptState
-	Reason     string
-	DaemonUID  int
+	Key       string
+	Path      string
+	State     personalScriptState
+	Reason    string
+	DaemonUID int
+	// Assignment explains a NOT CONFIGURED verdict by naming how the variable is
+	// written in the file being read RIGHT NOW: absent, empty, or overwritten by a
+	// later line. It belongs to the current-configuration side only, because the
+	// running daemon read its own copy of the file when it started.
+	//
+	// It is deliberately NOT part of the Reason field: comparePersonalScript compares
+	// Reason between the two sides, so a note that only one side can ever carry would
+	// turn every IN SYNC into PATH STATE CHANGED.
+	Assignment string
 	Components []personalScriptPathComponent
 }
 

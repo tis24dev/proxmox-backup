@@ -145,3 +145,70 @@ func joinLineNumbers(lines []int) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+var personalScriptAuditor = config.AuditConfigFile
+
+// annotatePersonalScriptAssignments explains a NOT CONFIGURED verdict with what the
+// configuration file actually says about the variable, which is the one thing the
+// verdict alone cannot tell apart: a variable that is not in the file at all, one
+// assigned with an empty value, and one whose value is overwritten by a later line.
+//
+// Issue #306 is the third case seen from the outside: two of the reporter's machines
+// showed NOT CONFIGURED on both sides while he was looking at a file that carries the
+// path, with nothing anywhere to close the gap.
+//
+// Only the CURRENT side is annotated. The running daemon read its own copy of the file
+// when it started, so describing today's file as if it explained the daemon's verdict
+// would be a guess dressed as evidence.
+func annotatePersonalScriptAssignments(scripts *personalScriptsDiagnostics, configPath string) {
+	if scripts == nil || strings.TrimSpace(configPath) == "" {
+		return
+	}
+	if scripts.Pre.State != personalScriptNotConfigured && scripts.Post.State != personalScriptNotConfigured {
+		return
+	}
+	report, err := personalScriptAuditor(configPath)
+	if err != nil {
+		// The verdict stands on its own; it just stays unexplained. Reporting the read
+		// failure here would put a second, louder error on a screen whose subject is
+		// the script, not the file.
+		return
+	}
+	annotatePersonalScriptAssignment(&scripts.Pre, report)
+	annotatePersonalScriptAssignment(&scripts.Post, report)
+}
+
+func annotatePersonalScriptAssignment(diagnostic *personalScriptDiagnostic, report *config.ConfigIntegrityReport) {
+	if diagnostic == nil || diagnostic.State != personalScriptNotConfigured {
+		return
+	}
+	assignment, ok := report.Assignment(diagnostic.Key)
+	if !ok {
+		diagnostic.Assignment = fmt.Sprintf("%s is not in the file", diagnostic.Key)
+		return
+	}
+	if !assignment.WinningEmpty {
+		// Assigned and not empty, yet the verdict is NOT CONFIGURED: the file does not
+		// explain this one, so say nothing rather than contradict the verdict.
+		return
+	}
+	if len(assignment.Lines) == 1 {
+		diagnostic.Assignment = fmt.Sprintf("%s is on line %d & is empty", diagnostic.Key, assignment.WinningLine)
+		return
+	}
+	diagnostic.Assignment = fmt.Sprintf("%s is on lines %s & line %d wins and is empty",
+		diagnostic.Key, joinLineNumbersWithAnd(assignment.Lines), assignment.WinningLine)
+}
+
+// joinLineNumbersWithAnd reads as a sentence, not as a list: "120 and 456", and
+// "120, 300 and 456" once there are more than two.
+func joinLineNumbersWithAnd(lines []int) string {
+	switch len(lines) {
+	case 0:
+		return ""
+	case 1:
+		return strconv.Itoa(lines[0])
+	}
+	head := joinLineNumbers(lines[:len(lines)-1])
+	return head + " and " + strconv.Itoa(lines[len(lines)-1])
+}

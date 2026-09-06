@@ -1057,18 +1057,18 @@ func buildDashboardPersonalScriptComparison(label string, runtime daemonRuntimeD
 	b.WriteString("\n")
 	switch runtime.Availability {
 	case daemonRuntimeAvailable:
-		b.WriteString(buildDashboardPersonalScriptLine("  Running daemon", comparison.Running))
+		b.WriteString(buildDashboardPersonalScriptLine("  Daemon now", comparison.Running))
 	case daemonRuntimeNotApplicable:
-		b.WriteString(theme.Subtle.Render("  Running daemon: NOT RUNNING"))
+		b.WriteString(theme.Subtle.Render("  Daemon now: NOT RUNNING"))
 	default:
 		reason := components.SanitizeText(runtime.Reason)
-		b.WriteString(theme.WarningText.Render("  Running daemon state: UNAVAILABLE"))
+		b.WriteString(theme.WarningText.Render("  Daemon now: UNAVAILABLE"))
 		if reason != "" {
 			b.WriteString(theme.Subtle.Render(" (" + reason + ")"))
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(buildDashboardPersonalScriptLine("  Current configuration", comparison.Current))
+	b.WriteString(buildDashboardPersonalScriptLine("  Configuration", comparison.Current))
 	b.WriteString("\n")
 	b.WriteString(buildDashboardPersonalScriptSynchronization(comparison))
 	return b.String()
@@ -1126,6 +1126,9 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		}
 	default:
 		line += theme.Subtle.Render("NOT CONFIGURED")
+		if assignment := components.SanitizeText(diagnostic.Assignment); assignment != "" {
+			line += theme.Subtle.Render(" (" + assignment + ")")
+		}
 	}
 	return line
 }
