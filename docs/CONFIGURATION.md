@@ -1023,7 +1023,7 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 
 If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EMAIL_ENABLE` is still accepted during migration and runtime loading.
 
-**Which delivery method should I choose?**
+**Which delivery mode should I choose?**
 
 | Method | Best when | Where SMTP is configured |
 | --- | --- | --- |

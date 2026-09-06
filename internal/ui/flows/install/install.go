@@ -160,7 +160,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		}
 	}
 	method := &components.FormField{
-		Label:       "Email delivery method",
+		Label:       "Email delivery mode",
 		Description: "Choose pmf only when Proxmox Notifications is configured.",
 		Kind:        components.FieldSelect,
 		Options:     methodOptions,

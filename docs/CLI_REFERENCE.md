@@ -154,7 +154,7 @@ proxsave --install --cli
 2. Optionally configures secondary storage (`SECONDARY_PATH` required if enabled; `SECONDARY_LOG_PATH` optional; invalid secondary paths are re-prompted/rejected; disabling secondary storage clears both saved secondary paths)
 3. Optionally configures cloud storage (rclone)
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
-5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery method and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
+5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery mode and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
 6. Optionally configures encryption (AGE setup)
 7. Optionally selects a daily run time (HH:MM, default `02:00`). On fresh installs the scheduler defaults to the resident daemon; cron is offered as the alternative engine (see [INSTALL.md](INSTALL.md) and [DAEMON.md](DAEMON.md))
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)

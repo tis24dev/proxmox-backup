@@ -273,7 +273,7 @@ link).
 
 ## Email
 
-Email supports three delivery methods, chosen by `EMAIL_DELIVERY_METHOD`:
+Email supports three delivery modes, chosen by `EMAIL_DELIVERY_METHOD`:
 
 | Method | How | Fallback |
 |--------|-----|----------|

@@ -1073,12 +1073,12 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 		defaultMethod = "relay"
 	}
 
-	fmt.Println("Email delivery methods:")
+	fmt.Println("Email delivery modes:")
 	fmt.Println("  relay    ProxSave Cloud Relay over outbound HTTPS (default)")
 	fmt.Println("  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)")
 	fmt.Println("  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)")
 	for {
-		resp, err := promptOptional(ctx, reader, fmt.Sprintf("Email delivery method [%s]: ", defaultMethod))
+		resp, err := promptOptional(ctx, reader, fmt.Sprintf("Email delivery mode [%s]: ", defaultMethod))
 		if err != nil {
 			return "", err
 		}

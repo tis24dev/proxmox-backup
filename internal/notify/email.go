@@ -116,7 +116,7 @@ func NewEmailNotifier(config EmailConfig, proxmoxType types.ProxmoxType, logger 
 
 	// Validate delivery method
 	if config.DeliveryMethod != EmailDeliveryRelay && config.DeliveryMethod != EmailDeliverySendmail && config.DeliveryMethod != EmailDeliveryPMF {
-		return nil, fmt.Errorf("invalid email delivery method: %s (must be 'relay', 'sendmail', or 'pmf')", config.DeliveryMethod)
+		return nil, fmt.Errorf("invalid email delivery mode: %s (must be 'relay', 'sendmail', or 'pmf')", config.DeliveryMethod)
 	}
 
 	// Validate from address
@@ -165,24 +165,24 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	switch e.config.DeliveryMethod {
 	case EmailDeliveryRelay:
 		if e.config.FallbackSendmail {
-			e.logger.Info("Email delivery method: relay (fallback: sendmail enabled)")
+			e.logger.Info("Email delivery mode: relay (fallback: sendmail enabled)")
 			e.logger.Debug("Email delivery plan: primary=relay fallback=sendmail relay_requires_recipient=true sendmail_requires_recipient=true")
 		} else {
-			e.logger.Info("Email delivery method: relay (fallback: disabled)")
+			e.logger.Info("Email delivery mode: relay (fallback: disabled)")
 			e.logger.Debug("Email delivery plan: primary=relay fallback=disabled relay_requires_recipient=true")
 		}
 	case EmailDeliverySendmail:
-		e.logger.Info("Email delivery method: sendmail (/usr/sbin/sendmail)")
+		e.logger.Info("Email delivery mode: sendmail (/usr/sbin/sendmail)")
 		e.logger.Debug("Email delivery plan: primary=sendmail fallback=disabled relay_requires_recipient=true")
 	case EmailDeliveryPMF:
-		e.logger.Info("Email delivery method: pmf (proxmox-mail-forward)")
+		e.logger.Info("Email delivery mode: pmf (proxmox-mail-forward)")
 		if e.config.FallbackSendmail {
 			e.logger.Debug("Email delivery plan: primary=pmf fallback=relay,sendmail recipient_optional=true relay_requires_recipient=true sendmail_requires_recipient=true")
 		} else {
 			e.logger.Debug("Email delivery plan: primary=pmf fallback=relay recipient_optional=true relay_requires_recipient=true")
 		}
 	default:
-		e.logger.Info("Email delivery method: %s", e.config.DeliveryMethod)
+		e.logger.Info("Email delivery mode: %s", e.config.DeliveryMethod)
 	}
 
 	// Resolve recipient

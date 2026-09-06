@@ -710,7 +710,7 @@ The warning is gone and the run reports `Simple retention -> current: N, limit: 
 
 #### Symptom: No email notifications received
 
-First, confirm which delivery method you are using:
+First, confirm which delivery mode you are using:
 
 ```bash
 # configs/backup.env
