@@ -103,12 +103,12 @@ func readProtectedHardlinks() (int, error) {
 func personalScriptHardlinkAdvisory() string {
 	value, err := personalScriptHardlinkProtection()
 	if err != nil {
-		return fmt.Sprintf("%s could not be read (%v), so it is unknown whether that owner can hard-link a root-owned executable into place", protectedHardlinksPath, err)
+		return fmt.Sprintf("fs.protected_hardlinks unreadable: %v", err)
 	}
 	if value == 0 {
-		return "fs.protected_hardlinks is 0, so that owner CAN hard-link a root-owned executable into place and the ownership check above stops nothing; set it to 1"
+		return "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1"
 	}
-	return fmt.Sprintf("fs.protected_hardlinks is %d, so that owner cannot hard-link a root-owned executable into place", value)
+	return fmt.Sprintf("fs.protected_hardlinks=%d blocks hard-linking root-owned executables", value)
 }
 
 // inspectPersonalScripts returns both configured-script verdicts without
@@ -198,7 +198,7 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 		return refuse(fmt.Errorf("%s is writable by group or others (mode %04o)", clean, info.Mode().Perm()))
 	}
 
-	var advisories []string
+	var foreign []personalScriptForeignAncestor
 	for dir := filepath.Dir(clean); ; dir = filepath.Dir(dir) {
 		dirInfo, err := personalScriptStat(dir)
 		if err != nil {
@@ -212,24 +212,20 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 			return refuse(err)
 		}
 		if uid != 0 && int(uid) != daemonUID {
-			advisories = append(advisories, fmt.Sprintf(
-				"%s is owned by uid %d; that owner can replace descendants executed as daemon uid %d",
-				dir, uid, daemonUID,
-			))
+			foreign = append(foreign, personalScriptForeignAncestor{Path: dir, UID: int(uid)})
 		}
 		if dirInfo.Mode().Perm()&0o022 != 0 && dirInfo.Mode()&os.ModeSticky == 0 {
 			return refuse(fmt.Errorf("directory %s is writable by group or others without the sticky bit (mode %04o)", dir, dirInfo.Mode().Perm()))
 		}
 		if dir == "/" {
 			diagnostic.Path = clean
-			if len(advisories) > 0 {
+			if len(foreign) > 0 {
 				// The mitigation the accepted ancestor rests on is named alongside
-				// the advisory, never separately: an operator reading "that owner can
+				// the advisory, never separately: an operator reading "owner can
 				// replace descendants" needs to know in the same breath whether
 				// anything is stopping them.
-				advisories = append(advisories, personalScriptHardlinkAdvisory())
 				diagnostic.State = personalScriptReadyWithWarning
-				diagnostic.Reason = strings.Join(advisories, "; ")
+				diagnostic.Reason = personalScriptForeignAncestorReason(foreign, daemonUID)
 			} else {
 				diagnostic.State = personalScriptReady
 			}
@@ -268,4 +264,37 @@ func personalScriptOwnerError(path string, info os.FileInfo, daemonUID int) erro
 		return fmt.Errorf("%s is owned by uid %d; accepted owners are root or daemon uid %d. Keep the user home ownership unchanged and move the script to a root-owned path such as /usr/local/bin", path, uid, daemonUID)
 	}
 	return nil
+}
+
+// personalScriptForeignAncestor is one directory on the path that belongs to neither
+// root nor the daemon, so its owner can replace what sits below it.
+type personalScriptForeignAncestor struct {
+	Path string
+	UID  int
+}
+
+// personalScriptForeignAncestorReason states the trust decision once per owner rather
+// than once per directory. A script under /home/<user>/<dir> has two foreign ancestors
+// with the same uid, and repeating the same clause twice made the line longer without
+// telling the operator anything the first clause had not.
+//
+// The walk collects deepest-first; the sentence reads shallowest-first, the order the
+// path itself is written in.
+func personalScriptForeignAncestorReason(foreign []personalScriptForeignAncestor, daemonUID int) string {
+	order := make([]int, 0, len(foreign))
+	paths := make(map[int][]string, len(foreign))
+	for i := len(foreign) - 1; i >= 0; i-- {
+		entry := foreign[i]
+		if _, seen := paths[entry.UID]; !seen {
+			order = append(order, entry.UID)
+		}
+		paths[entry.UID] = append(paths[entry.UID], entry.Path)
+	}
+	clauses := make([]string, 0, len(order)+1)
+	for _, uid := range order {
+		clauses = append(clauses, fmt.Sprintf("%s: UID %d-owned; owner can replace descendants run as UID %d",
+			strings.Join(paths[uid], ", "), uid, daemonUID))
+	}
+	clauses = append(clauses, personalScriptHardlinkAdvisory())
+	return strings.Join(clauses, "; ")
 }
