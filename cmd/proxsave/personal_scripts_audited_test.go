@@ -143,6 +143,9 @@ func TestPersonalScriptBudgetsAreTheShippedOnes(t *testing.T) {
 	if personalScriptReapSlack != 15*time.Second {
 		t.Errorf("personalScriptReapSlack = %s, want 15s (daemonReapSlack's own margin)", personalScriptReapSlack)
 	}
+	if personalScriptOpenTimeout != 5*time.Second {
+		t.Errorf("personalScriptOpenTimeout = %s, want 5s (cronProbeTimeout's value and reasoning)", personalScriptOpenTimeout)
+	}
 }
 
 // TestPersonalScriptSurvivesAGrandchildHoldingItsOutput is the behavioural half of the test
@@ -647,5 +650,60 @@ func TestTheDaemonRunsTheTrustedPathGate(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "validatePersonalScripts(d.cfg)") {
 		t.Fatal("daemon.go no longer runs validatePersonalScripts at startup: the gate is dead code")
+	}
+}
+
+// fifoParentScript returns a path whose PARENT DIRECTORY component is a FIFO. Opening it is
+// what os.OpenRoot does first, and open(2) on a FIFO with no writer blocks in the kernel, so
+// this is the cheapest faithful stand-in for the ancestor the execution-time gate exists to
+// defend against - and for the dead NFS/CIFS mount personalScriptReapSlack's comment names.
+func fifoParentScript(t *testing.T) string {
+	t.Helper()
+	orig := personalScriptOpenTimeout
+	t.Cleanup(func() { personalScriptOpenTimeout = orig })
+	personalScriptOpenTimeout = 200 * time.Millisecond
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "dd")
+	if err := syscall.Mkfifo(fifo, 0o755); err != nil {
+		t.Skipf("mkfifo is unavailable here: %v", err)
+	}
+	return filepath.Join(fifo, "pre.sh")
+}
+
+// The gate that opens the script runs on the caller's goroutine BEFORE the timeout context and
+// the stop channel are ever consulted, so an unbounded open there is an unbounded wait on the
+// daemon's scheduler goroutine: scheduleLoop never returns, run() never reaches wg.Wait(), and
+// SIGTERM cannot stop the daemon while the heartbeat keeps reporting the host green. That is
+// the harm superviseChild's own comment describes, and this path sits outside it.
+//
+// The stop channel is closed BEFORE the call, so nothing but a bound on the open can make this
+// return.
+func TestOpeningTheScriptCannotParkTheSchedulerGoroutine(t *testing.T) {
+	script := fifoParentScript(t)
+	stop := make(chan struct{})
+	close(stop)
+
+	done := make(chan struct{})
+	go func() { runPersonalScript(script, stop); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("runPersonalScript never returned: the open of the parent directory is unbounded")
+	}
+}
+
+// The detached starter carries the same open, and it runs from a defer on the shutdown path,
+// so a park there wedges the way OUT of the daemon rather than the schedule.
+func TestStartingTheDetachedScriptCannotParkTheShutdown(t *testing.T) {
+	script := fifoParentScript(t)
+
+	done := make(chan struct{})
+	go func() { startPersonalScriptDetached(script); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("startPersonalScriptDetached never returned: the open of the parent directory is unbounded")
 	}
 }
