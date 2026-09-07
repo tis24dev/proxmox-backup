@@ -104,7 +104,7 @@ func TestCancelledStorageArmPropagatesInsteadOfCounting(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	applied, failed, err := applyStorageCfg(ctx, "/stage/etc/pve/storage.cfg", logging.New(types.LogLevelError, false))
+	applied, _, failed, err := applyStorageCfg(ctx, "/stage/etc/pve/storage.cfg", logging.New(types.LogLevelError, false))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}

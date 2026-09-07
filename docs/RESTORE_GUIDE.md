@@ -725,7 +725,7 @@ VM/CT apply completed: ok=2 failed=0
 Storage configuration found: .../etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 Applied storage definition local
-Storage apply completed: ok=1 failed=0
+Storage apply completed: ok=1 unknown=0 failed=0
 ```
 
 See [pvesh SAFE Apply](#pvesh-safe-apply-cluster-safe-mode) for detailed explanation.
@@ -1505,7 +1505,7 @@ Storage configuration found: .../etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 Applied storage definition local
 Applied storage definition backup-nfs
-Storage apply completed: ok=2 failed=0
+Storage apply completed: ok=2 unknown=0 failed=0
 
 Datacenter configuration found: .../etc/pve/datacenter.cfg
 Apply datacenter.cfg? (y/N): n

@@ -553,7 +553,7 @@ func TestStorageApplyNamesTheKeysThatWereRefused(t *testing.T) {
 		},
 		"every key refused": {
 			refuse:   []string{"server", "export", "content"},
-			wantLine: "Applied nothing for storage nfs-backup: the update schema refuses every staged key (server, export, content)",
+			wantLine: "Applied nothing for storage nfs-backup: every staged key refused, not comparable (server, export, content)",
 		},
 	}
 	for name, tc := range cases {
@@ -576,7 +576,7 @@ func TestStorageApplyNamesTheKeysThatWereRefused(t *testing.T) {
 			logger := logging.New(types.LogLevelDebug, false)
 			logger.SetOutput(buf)
 
-			if _, _, err := applyStorageCfg(context.Background(), cfg, logger); err != nil {
+			if _, _, _, err := applyStorageCfg(context.Background(), cfg, logger); err != nil {
 				t.Fatalf("applyStorageCfg: %v", err)
 			}
 			if !strings.Contains(buf.String(), tc.wantLine) {
@@ -631,32 +631,32 @@ func TestAnAbortedRegistrationNamesTheVMIDItMayHaveLeftBehind(t *testing.T) {
 // whether anything was lost: the refused key may already hold the staged value, in
 // which case there was nothing to do, or it may differ, in which case the restore
 // could not put it back. Counting it either way is a guess. Reading the live
-// definition and comparing the refused keys turns it into an answer, and a value
-// that cannot be compared safely keeps the conservative one.
+// definition and comparing the refused keys turns it into an answer - and where it
+// cannot, the third count says so instead of picking one of the other two.
 func TestAnAllRefusedStorageIsJudgedAgainstTheLiveDefinition(t *testing.T) {
 	cases := map[string]struct {
 		live        string
 		wantApplied int
+		wantUnknown int
 		wantFailed  int
 		wantLine    string
 	}{
 		"the refused key already holds the staged value": {
 			live:        `{"storage":"nfs-backup","type":"nfs","server":"1.2.3.4"}`,
 			wantApplied: 1,
-			wantFailed:  0,
 			wantLine:    "Storage definition nfs-backup already matches every staged key the update schema refuses",
 		},
 		"the refused key differs and cannot be set": {
-			live:        `{"storage":"nfs-backup","type":"nfs","server":"9.9.9.9"}`,
-			wantApplied: 0,
-			wantFailed:  1,
-			wantLine:    "Failed to apply storage nfs-backup: the update schema refuses server and the live definition does not match the staged value",
+			live:       `{"storage":"nfs-backup","type":"nfs","server":"9.9.9.9"}`,
+			wantFailed: 1,
+			wantLine:   "Failed to apply storage nfs-backup: the update schema refuses server and the live definition does not match the staged value",
 		},
+		// This row used to want applied=1. Nothing here was applied and nothing was
+		// shown to be wrong; the honest count is neither of those two.
 		"the live definition cannot be read": {
 			live:        "",
-			wantApplied: 1,
-			wantFailed:  0,
-			wantLine:    "Applied nothing for storage nfs-backup: the update schema refuses every staged key (server) and the live definition could not be compared",
+			wantUnknown: 1,
+			wantLine:    "Applied nothing for storage nfs-backup: every staged key refused, not comparable (server)",
 		},
 	}
 	for name, tc := range cases {
@@ -673,12 +673,13 @@ func TestAnAllRefusedStorageIsJudgedAgainstTheLiveDefinition(t *testing.T) {
 			logger := logging.New(types.LogLevelDebug, false)
 			logger.SetOutput(buf)
 
-			applied, failed, err := applyStorageCfg(context.Background(), cfg, logger)
+			applied, unknown, failed, err := applyStorageCfg(context.Background(), cfg, logger)
 			if err != nil {
 				t.Fatalf("applyStorageCfg: %v", err)
 			}
-			if applied != tc.wantApplied || failed != tc.wantFailed {
-				t.Fatalf("applied=%d failed=%d, want %d/%d", applied, failed, tc.wantApplied, tc.wantFailed)
+			if applied != tc.wantApplied || unknown != tc.wantUnknown || failed != tc.wantFailed {
+				t.Fatalf("applied=%d unknown=%d failed=%d, want %d/%d/%d",
+					applied, unknown, failed, tc.wantApplied, tc.wantUnknown, tc.wantFailed)
 			}
 			if !strings.Contains(buf.String(), tc.wantLine) {
 				t.Fatalf("missing %q in:\n%s", tc.wantLine, buf.String())

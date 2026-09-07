@@ -45,31 +45,36 @@ func TestSetFallbackSendsNothingWhenNoKeyIsSettable(t *testing.T) {
 
 // Two shapes reach the caller with a successful fallback that sent nothing, and
 // announcing either as "Updated existing storage definition" claims a write that
-// never happened. They are NOT the same fact, though, and they no longer render as
-// one line: a block with no settable key really does already match everything this
-// restore could change, while a block whose every key came back refused does not -
-// nothing could be sent, and the staged values are not in effect.
+// never happened. They are NOT the same fact, though, and they render neither as one
+// line nor in one count: a block with no settable key really does already match
+// everything this restore could change, and that is an apply; a block whose every key
+// came back refused, on a node whose live definition cannot answer, is neither applied
+// nor failed and is counted as unknown.
 func TestApplyStorageCfgDoesNotClaimAnUpdateItNeverSent(t *testing.T) {
 	tests := []struct {
-		name     string
-		cfg      string
-		id       string
-		wantSets int
-		wantLine string
+		name        string
+		cfg         string
+		id          string
+		wantSets    int
+		wantApplied int
+		wantUnknown int
+		wantLine    string
 	}{
 		{
-			name:     "no settable key",
-			cfg:      "dir: local\n",
-			id:       "local",
-			wantSets: 0,
-			wantLine: "Storage definition local already matches every settable key",
+			name:        "no settable key",
+			cfg:         "dir: local\n",
+			id:          "local",
+			wantSets:    0,
+			wantApplied: 1,
+			wantLine:    "Storage definition local already matches every settable key",
 		},
 		{
-			name:     "every key refused as create-only",
-			cfg:      "dir: onlypath\n\tpath /var/lib/vz\n",
-			id:       "onlypath",
-			wantSets: 1,
-			wantLine: "Applied nothing for storage onlypath: the update schema refuses every staged key (path)",
+			name:        "every key refused as create-only",
+			cfg:         "dir: onlypath\n\tpath /var/lib/vz\n",
+			id:          "onlypath",
+			wantSets:    1,
+			wantUnknown: 1,
+			wantLine:    "Applied nothing for storage onlypath: every staged key refused, not comparable (path)",
 		},
 	}
 
@@ -88,12 +93,13 @@ func TestApplyStorageCfgDoesNotClaimAnUpdateItNeverSent(t *testing.T) {
 			}
 			logger, buf := nothingSettableLogger(t)
 
-			applied, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
+			applied, unknown, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
 			if err != nil {
 				t.Fatalf("applyStorageCfg: %v", err)
 			}
-			if applied != 1 || failed != 0 {
-				t.Fatalf("applied=%d failed=%d, want 1/0: an already-matching definition is not a failure", applied, failed)
+			if applied != tc.wantApplied || unknown != tc.wantUnknown || failed != 0 {
+				t.Fatalf("applied=%d unknown=%d failed=%d, want %d/%d/0: nothing here was established as a failure",
+					applied, unknown, failed, tc.wantApplied, tc.wantUnknown)
 			}
 
 			sets := strings.Count(strings.Join(pvesh.calls, "\n"), "set /storage/"+tc.id)

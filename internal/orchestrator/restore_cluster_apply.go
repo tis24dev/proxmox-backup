@@ -336,26 +336,32 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 	return applied, failed
 }
 
-// refusedKeysThatDiffer reads the LIVE storage definition and reports which of the
-// refused keys hold a value other than the staged one, and whether the comparison
-// could be made at all.
+// refusedKeysThatDiffer reads the LIVE storage definition and sorts the refused keys
+// into the two that matter: the ones proven to hold something other than the staged
+// value, and the ones it could not judge at all. A key in neither list was compared
+// and matched.
 //
-// comparable is false when the read fails or when not one refused key could be
-// compared safely, and the caller must keep its conservative answer there: a wrong
-// "differs" turns a clean restore into a failure, which is worse than the silence it
-// replaces.
+// It reports COVERAGE rather than a single "comparable" flag, because one flag cannot
+// carry the answer. It used to be raised by the FIRST comparable key, so a definition
+// with one key compared and one key missing from the live object came back as
+// differing=nil, comparable=true, and the caller announced that every refused key
+// already matched - a check it had made on half of them.
 //
 // A value is compared only when both sides are plain scalars. `pvesh get
 // /storage/<id> --output-format=json` returns a flat object, but two of its shapes
 // cannot be compared as text: a content list is comma-joined in an order PVE does not
 // promise, and a boolean comes back as 1/0 against a cfg that may spell it either
-// way. Both are treated as not comparable rather than guessed.
-func refusedKeysThatDiffer(ctx context.Context, logger *logging.Logger, id string, dropped, args []string) (differing []string, comparable bool) {
+// way. Both are left uncompared rather than guessed, because a wrong "differs" turns
+// a clean restore into a failure.
+func refusedKeysThatDiffer(ctx context.Context, logger *logging.Logger, id string, dropped, args []string) (differing, uncompared []string) {
 	live, err := liveStorageDefinition(ctx, id)
 	if err != nil {
-		logger.Debug("storage %s: the live definition could not be read, so the refused keys cannot be judged: %v", id, err)
-		return nil, false
+		logger.Debug("storage %s: the live definition could not be read, so not one of the %d refused key(s) (%s) can be judged: %v",
+			id, len(dropped), strings.Join(dropped, ", "), err)
+		return nil, append([]string(nil), dropped...)
 	}
+	logger.Debug("storage %s: the live definition answered with %d comparable value(s); judging %d refused key(s) against it",
+		id, len(live), len(dropped))
 	staged := make(map[string]string, len(args))
 	for _, arg := range args {
 		key, value, ok := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
@@ -363,22 +369,36 @@ func refusedKeysThatDiffer(ctx context.Context, logger *logging.Logger, id strin
 			staged[key] = value
 		}
 	}
+	matched := 0
 	for _, key := range dropped {
 		want, haveStaged := staged[key]
 		got, haveLive := live[key]
 		if !haveStaged || !haveLive {
-			logger.Debug("storage %s: refused key %s has no comparable pair (staged=%v live=%v)", id, key, haveStaged, haveLive)
+			logger.Debug("storage %s: refused key %s has no comparable pair (staged=%v live=%v), so whether its staged value is in effect stays unknown",
+				id, key, haveStaged, haveLive)
+			uncompared = append(uncompared, key)
 			continue
 		}
-		comparable = true
 		if strings.TrimSpace(got) != strings.TrimSpace(want) {
 			logger.Debug("storage %s: refused key %s differs (live=%q staged=%q)", id, key, got, want)
 			differing = append(differing, key)
 			continue
 		}
+		matched++
 		logger.Debug("storage %s: refused key %s already holds the staged value", id, key)
 	}
-	return differing, comparable
+	logger.Debug("storage %s: refused keys judged - %d already correct, %d differ%s, %d not comparable%s",
+		id, matched, len(differing), namedKeys(differing), len(uncompared), namedKeys(uncompared))
+	return differing, uncompared
+}
+
+// namedKeys renders a key list as a parenthetical, and renders nothing at all when
+// the list is empty, so a summary line does not carry "0 differ ()".
+func namedKeys(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(keys, ", ") + ")"
 }
 
 // liveStorageDefinition returns the current values of a storage definition, keeping
@@ -697,14 +717,19 @@ func parseColonConfigLine(line string) (key, value string, ok bool) {
 	return key, value, true
 }
 
-func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, failed int, err error) {
+// applyStorageCfg returns three counts, not two. unknown is the outcome the two-bucket
+// shape had nowhere to put: nothing reached the node AND the restore could not
+// establish whether the staged values are already in effect. Calling that applied said
+// something it did not know, and calling it failed would abort a restore over something
+// never shown to be wrong.
+func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, unknown, failed int, err error) {
 	blocks, perr := parseStorageBlocks(cfgPath)
 	if perr != nil {
-		return 0, 0, perr
+		return 0, 0, 0, perr
 	}
 	if len(blocks) == 0 {
 		logger.Info("No storage definitions detected in storage.cfg")
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 
 	for _, blk := range blocks {
@@ -714,7 +739,7 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		// so an abort would be reported as storage definitions that failed to apply.
 		// The counts so far are returned with it: they say what really landed.
 		if cerr := ctx.Err(); cerr != nil {
-			return applied, failed, cerr
+			return applied, unknown, failed, cerr
 		}
 		createArgs, ok := storageBlockPveshArgs(blk)
 		if !ok {
@@ -747,18 +772,21 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 				// already hold the staged value, in which case there was nothing to
 				// do, or it may differ, in which case the restore could not put it
 				// back. Only the live definition answers that, so it is read rather
-				// than guessed - and when it cannot be compared, the conservative
-				// answer stands.
-				differing, comparable := refusedKeysThatDiffer(ctx, logger, blk.ID, dropped, setArgs)
+				// than guessed, and the answer has three shapes rather than two.
+				//
+				// differing first: a key proven wrong is a failure even when other
+				// keys went unjudged, because that one staged value is established
+				// as not in effect.
+				differing, uncompared := refusedKeysThatDiffer(ctx, logger, blk.ID, dropped, setArgs)
 				switch {
-				case !comparable:
-					logger.Warning("Applied nothing for storage %s: the update schema refuses every staged key (%s) and the live definition could not be compared",
-						blk.ID, strings.Join(dropped, ", "))
-					applied++
 				case len(differing) > 0:
 					logger.Warning("Failed to apply storage %s: the update schema refuses %s and the live definition does not match the staged value",
 						blk.ID, strings.Join(differing, ", "))
 					failed++
+				case len(uncompared) > 0:
+					logger.Warning("Applied nothing for storage %s: every staged key refused, not comparable (%s)",
+						blk.ID, strings.Join(uncompared, ", "))
+					unknown++
 				default:
 					logger.Info("Storage definition %s already matches every staged key the update schema refuses", blk.ID)
 					applied++
@@ -786,11 +814,11 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		}
 
 		if err := ctx.Err(); err != nil {
-			return applied, failed, err
+			return applied, unknown, failed, err
 		}
 	}
 
-	return applied, failed, nil
+	return applied, unknown, failed, nil
 }
 
 func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {

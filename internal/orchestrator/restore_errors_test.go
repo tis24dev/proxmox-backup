@@ -532,7 +532,7 @@ func TestApplyStorageCfg_ReadFileError(t *testing.T) {
 	restoreFS = osFS{}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	_, _, err := applyStorageCfg(context.Background(), "/nonexistent/path/storage.cfg", logger)
+	_, _, _, err := applyStorageCfg(context.Background(), "/nonexistent/path/storage.cfg", logger)
 	if err == nil {
 		t.Fatalf("expected read error")
 	}
@@ -564,7 +564,7 @@ storage: backup
 	restoreCmd = &FakeCommandRunner{}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	applied, failed, err := applyStorageCfg(context.Background(), cfgPath, logger)
+	applied, _, failed, err := applyStorageCfg(context.Background(), cfgPath, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -605,7 +605,7 @@ func TestApplyStorageCfg_PveshError(t *testing.T) {
 	restoreCmd = &alwaysFailCommandRunner{err: fmt.Errorf("pvesh failed")}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	applied, failed, err := applyStorageCfg(context.Background(), cfgPath, logger)
+	applied, _, failed, err := applyStorageCfg(context.Background(), cfgPath, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1868,7 +1868,7 @@ storage: backup
 	restoreCmd = fake
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	applied, failed, err := applyStorageCfg(context.Background(), cfgPath, logger)
+	applied, _, failed, err := applyStorageCfg(context.Background(), cfgPath, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -209,13 +209,17 @@ func applyPVEStorageCfgFromStage(ctx context.Context, logger *logging.Logger, st
 		return nil
 	}
 
-	applied, failed, err := applyStorageCfg(ctx, stagePath, logger)
+	applied, unknown, failed, err := applyStorageCfg(ctx, stagePath, logger)
 	if err != nil {
 		return err
 	}
-	logger.Info("PVE staged apply: storage.cfg applied (ok=%d failed=%d)", applied, failed)
+	logger.Info("PVE staged apply: storage.cfg applied (ok=%d unknown=%d failed=%d)", applied, unknown, failed)
+	// unknown does NOT fail the apply. Nothing was established as wrong there: the
+	// definition may already hold every staged value. It stays in the summary so the
+	// operator can see the restore did not answer for those definitions, which is
+	// what counting them as ok used to hide.
 	if failed > 0 {
-		return fmt.Errorf("storage.cfg applied with %d failure(s) (ok=%d)", failed, applied)
+		return fmt.Errorf("storage.cfg applied with %d failure(s) (ok=%d unknown=%d)", failed, applied, unknown)
 	}
 	return nil
 }

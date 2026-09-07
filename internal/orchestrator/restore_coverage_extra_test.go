@@ -254,7 +254,7 @@ func TestApplyStorageCfg_NoBlocksReturnsNil(t *testing.T) {
 		t.Fatalf("write storage.cfg: %v", err)
 	}
 
-	applied, failed, err := applyStorageCfg(context.Background(), cfgPath, newTestLogger())
+	applied, _, failed, err := applyStorageCfg(context.Background(), cfgPath, newTestLogger())
 	if err != nil {
 		t.Fatalf("applyStorageCfg error: %v", err)
 	}

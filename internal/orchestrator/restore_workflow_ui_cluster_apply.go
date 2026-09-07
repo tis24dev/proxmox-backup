@@ -296,12 +296,12 @@ func (f *safeClusterApplyUIFlow) maybeApplyStorageCfg() error {
 	}
 	logging.DebugStep(f.logger, "safe cluster apply (ui)", "User choice: apply_storage=%v", applyStorage)
 	if applyStorage {
-		applied, failed, applyErr := applyStorageCfg(f.ctx, storageCfg, f.logger)
-		logging.DebugStep(f.logger, "safe cluster apply (ui)", "Storage apply result: ok=%d failed=%d err=%v", applied, failed, applyErr)
+		applied, unknown, failed, applyErr := applyStorageCfg(f.ctx, storageCfg, f.logger)
+		logging.DebugStep(f.logger, "safe cluster apply (ui)", "Storage apply result: ok=%d unknown=%d failed=%d err=%v", applied, unknown, failed, applyErr)
 		if applyErr != nil {
 			f.logger.Warning("Storage apply encountered errors: %v", applyErr)
 		}
-		f.logger.Info("Storage apply completed: ok=%d failed=%d", applied, failed)
+		f.logger.Info("Storage apply completed: ok=%d unknown=%d failed=%d", applied, unknown, failed)
 	} else {
 		f.logger.Info("Skipping storage.cfg apply")
 	}

@@ -126,7 +126,7 @@ func TestLivePVEStorageCreateThenSet(t *testing.T) {
 	// Reapply only the node's current `local` block: create must fail (already
 	// defined), then the set fallback must apply the existing values unchanged.
 	stage := liveStage(t, "etc/pve/storage.cfg", liveStorageBlock(t, current, "local"))
-	applied, failed, err := applyStorageCfg(context.Background(), filepath.Join(stage, "etc/pve/storage.cfg"), logger)
+	applied, _, failed, err := applyStorageCfg(context.Background(), filepath.Join(stage, "etc/pve/storage.cfg"), logger)
 	if err != nil {
 		t.Fatalf("applyStorageCfg: %v", err)
 	}

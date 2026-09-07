@@ -41,7 +41,18 @@ type schemaAwarePvesh struct {
 	schemaRefuseSet map[string]bool
 	// refuseSetKeys refuses a guest set that CARRIES one of these keys, naming it
 	// the way the live node does, so the drop-and-retry arm can be driven.
-	refuseSetKeys   map[string]bool
+	refuseSetKeys map[string]bool
+	// refuseStorageSetKeys refuses a STORAGE set carrying one of these keys, the
+	// way the live node refuses --path. `path` is always refused (it is measured);
+	// this is how a test adds the other create-only keys a type has, such as an
+	// nfs --server.
+	refuseStorageSetKeys map[string]bool
+	// storageLive is what `pvesh get /storage/<id> --output-format=json` answers,
+	// and storageGetError is that call failing. Without either, the fake falls
+	// through to its permissive nil answer, which is what an unparseable empty
+	// body looks like to liveStorageDefinition.
+	storageLive     map[string]map[string]any
+	storageGetError map[string]error
 	statusOutput    map[string][]byte
 	statusError     map[string]error
 	inventoryOutput []byte
@@ -58,6 +69,10 @@ func newSchemaAwarePvesh(existingStorages ...string) *schemaAwarePvesh {
 		running:      map[string]bool{},
 		statusOutput: map[string][]byte{},
 		statusError:  map[string]error{},
+
+		refuseStorageSetKeys: map[string]bool{},
+		storageLive:          map[string]map[string]any{},
+		storageGetError:      map[string]error{},
 	}
 	for _, id := range existingStorages {
 		s.storages[id] = true
@@ -196,11 +211,24 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 		// too - "Unknown option: path" on the OUTPUT, bare exit status as the
 		// error. Any --path in a set is refused.
 		for _, a := range args[2:] {
-			if strings.HasPrefix(a, "--path=") {
-				return []byte("Unknown option: path\n400 unable to parse option"), errString("exit status 255")
+			if !strings.HasPrefix(a, "--") {
+				continue
+			}
+			key := strings.TrimPrefix(strings.SplitN(a, "=", 2)[0], "--")
+			if key == "path" || s.refuseStorageSetKeys[key] {
+				return []byte("Unknown option: " + key + "\n400 unable to parse option"), errString("exit status 255")
 			}
 		}
 		return nil, nil
+	}
+	if len(args) >= 2 && args[0] == "get" && strings.HasPrefix(args[1], "/storage/") {
+		id := strings.TrimPrefix(args[1], "/storage/")
+		if err, ok := s.storageGetError[id]; ok {
+			return nil, err
+		}
+		if live, ok := s.storageLive[id]; ok {
+			return json.Marshal(live)
+		}
 	}
 	return nil, nil
 }
