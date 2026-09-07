@@ -34,6 +34,42 @@ type DuplicatedVariable struct {
 	Discarded []int
 }
 
+// LegacyVariable is one variable assigned under a name the loader still reads but no
+// longer documents, together with the canonical name it stands in for.
+//
+// Wins records which of the two the loader consults FIRST, which is the whole reason
+// this category exists rather than a single line saying "old name". For seven of them
+// the LEGACY name is consulted first, so editing the canonical line in the same file
+// changes nothing at all and the backups keep landing wherever the legacy name points.
+type LegacyVariable struct {
+	Name             string
+	Canonical        string
+	Wins             bool
+	CanonicalAlsoSet bool
+}
+
+// legacyAliases is every name the loader reads as a stand-in for a canonical one, with
+// the order the loader consults them in. Derived from the getStringWithFallback and
+// getBoolWithFallback call sites: whichever name is listed FIRST there is the one that
+// wins, and that is what Wins records here.
+var legacyAliases = map[string]LegacyVariable{
+	"LOCAL_BACKUP_PATH":       {Canonical: "BACKUP_PATH", Wins: true},
+	"LOCAL_LOG_PATH":          {Canonical: "LOG_PATH", Wins: true},
+	"ENABLE_SECONDARY_BACKUP": {Canonical: "SECONDARY_ENABLED", Wins: true},
+	"SECONDARY_BACKUP_PATH":   {Canonical: "SECONDARY_PATH", Wins: true},
+	"ENABLE_CLOUD_BACKUP":     {Canonical: "CLOUD_ENABLED", Wins: true},
+	"RCLONE_REMOTE":           {Canonical: "CLOUD_REMOTE", Wins: true},
+	"PROMETHEUS_ENABLED":      {Canonical: "METRICS_ENABLED", Wins: true},
+
+	// These five are read only when the canonical name is ABSENT, because
+	// getBoolWithLegacyAlias lists the canonical one first.
+	telegramEnableLegacyKey:   {Canonical: telegramEnabledKey},
+	emailEnableLegacyKey:      {Canonical: emailEnabledKey},
+	gotifyEnableLegacyKey:     {Canonical: gotifyEnabledKey},
+	webhookEnableLegacyKey:    {Canonical: webhookEnabledKey},
+	emailFallbackPMFLegacyKey: {Canonical: emailFallbackSendmailKey},
+}
+
 // KnownVariable is one variable the loader reads although the embedded template does
 // not assign it, together with the rule that says so in operator-facing words.
 type KnownVariable struct {
@@ -43,9 +79,8 @@ type KnownVariable struct {
 
 // The rules templateKnows can accept a variable by, in the words the debug line uses.
 const (
-	knownDocumented  = "documented there as a commented example"
-	knownWebhook     = "per-endpoint webhook variable, WEBHOOK_<name>_<field>"
-	knownLegacyAlias = "legacy alias still read for files written before the rename"
+	knownDocumented = "documented there as a commented example"
+	knownWebhook    = "per-endpoint webhook variable, WEBHOOK_<name>_<field>"
 )
 
 // unknownRuleTrace is why a variable matched NO rule, spelled out rather than left as
@@ -95,6 +130,11 @@ type ConfigIntegrityReport struct {
 	// assign it, with the rule that accepted it. This is the decision that used to be
 	// wrong, so it is the one an operator checking the block will be looking for.
 	KnownOutsideTemplate []KnownVariable
+	// Legacy names each variable written under a name the loader still reads but no
+	// longer documents. It is its own category because neither of the others fits: the
+	// loader DOES read it, so it is not unknown, and for seven of them it wins over the
+	// canonical name, so it is not harmless either.
+	Legacy []LegacyVariable
 
 	// assignments answers "how is this variable written in the file" for callers that
 	// need to explain ONE variable rather than list the file's findings, e.g. the
@@ -118,7 +158,7 @@ func (r *ConfigIntegrityReport) Clean() bool {
 	if r == nil {
 		return true
 	}
-	return len(r.Duplicated) == 0 && len(r.Absent) == 0 && len(r.Unknown) == 0
+	return len(r.Duplicated) == 0 && len(r.Absent) == 0 && len(r.Unknown) == 0 && len(r.Legacy) == 0
 }
 
 // HasIssues reports whether the audit found something that discards or omits an
@@ -128,7 +168,17 @@ func (r *ConfigIntegrityReport) HasIssues() bool {
 	if r == nil {
 		return false
 	}
-	return len(r.Duplicated) > 0 || len(r.Absent) > 0
+	if len(r.Duplicated) > 0 || len(r.Absent) > 0 {
+		return true
+	}
+	// A legacy name alone works and discards nothing. A legacy name WITH its canonical
+	// twin means one of the two lines has no effect, which is the duplicate's harm.
+	for _, legacy := range r.Legacy {
+		if legacy.CanonicalAlsoSet {
+			return true
+		}
+	}
+	return false
 }
 
 // AuditConfigFile compares an env file against the embedded template.
@@ -189,6 +239,12 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 				Discarded:   discarded,
 				ByBlock:     at[replacingAssignment(name, at)].block,
 			})
+		}
+		if alias, ok := legacyAliases[name]; ok {
+			alias.Name = name
+			_, alias.CanonicalAlsoSet = fileScan.assignedAt[alias.Canonical]
+			report.Legacy = append(report.Legacy, alias)
+			continue
 		}
 		switch rule, known := templateKnows(name, templateScan.assignedAt, documented); {
 		case !known:
@@ -349,9 +405,6 @@ func templateKnows(upperKey string, assigned map[string][]envAssignment, documen
 	if isWebhookEndpointVariable(upperKey) {
 		return knownWebhook, true
 	}
-	if legacyReadOnlyKeys[upperKey] {
-		return knownLegacyAlias, true
-	}
 	return "", false
 }
 
@@ -414,18 +467,6 @@ func isWebhookEndpointVariable(upperKey string) bool {
 		}
 	}
 	return false
-}
-
-// legacyReadOnlyKeys are names the loader still READS, through getBoolWithLegacyAlias
-// and getBoolWithFallback, so a file written before the rename keeps working. No
-// template has ever carried them, not even commented, so listing them is the only way
-// the audit can know them.
-var legacyReadOnlyKeys = map[string]bool{
-	telegramEnableLegacyKey:   true,
-	emailEnableLegacyKey:      true,
-	gotifyEnableLegacyKey:     true,
-	webhookEnableLegacyKey:    true,
-	emailFallbackPMFLegacyKey: true,
 }
 
 func skippedMultiValueVariables() []string {
