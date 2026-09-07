@@ -421,3 +421,24 @@ func diagnosticsLogger(t *testing.T) (*logging.Logger, *bytes.Buffer) {
 	logger.SetOutput(buf)
 	return logger, buf
 }
+
+// The difference is detected BEFORE the verdict is rendered, so its debug line comes
+// first. Same rule TestIntegrityDebugCountsPrecedeTheVerdict holds for the
+// configuration block: the evidence precedes the conclusion drawn from it.
+func TestTheSynchronizationDebugPrecedesTheVerdict(t *testing.T) {
+	logger, buf := diagnosticsLogger(t)
+	logPersonalScriptSynchronization(logger, personalScriptComparison{
+		Synchronization: personalScriptPathStateChanged,
+		SyncReason:      "path ownership or mode changed after daemon startup",
+		SyncDetail:      "path components differ in owner or mode",
+	})
+	out := buf.String()
+	debug := strings.Index(out, "verdict=path-state-changed difference=path components differ in owner or mode")
+	verdict := strings.Index(out, "Synchronization: PATH STATE CHANGED SINCE STARTUP")
+	if debug < 0 || verdict < 0 {
+		t.Fatalf("expected both the debug detail and the verdict:\n%s", out)
+	}
+	if debug > verdict {
+		t.Fatalf("the debug detail must precede the verdict it explains:\n%s", out)
+	}
+}

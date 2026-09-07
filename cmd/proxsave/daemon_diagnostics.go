@@ -470,9 +470,11 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 	case personalScriptConfigurationDrift:
 		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
 	case personalScriptPathStateChanged:
-		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
+		// The difference is what was detected; the verdict is what was concluded from
+		// it, so the evidence goes first.
 		logging.DebugStep(logger, "personal script synchronization",
 			"verdict=path-state-changed difference=%s", daemonDiagnosticText(comparison.SyncDetail))
+		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
 	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
 	case personalScriptSyncNotApplicable:
