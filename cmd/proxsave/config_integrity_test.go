@@ -34,7 +34,7 @@ func integrityReportWithFindings() *config.ConfigIntegrityReport {
 		Distinct:          181,
 		TemplateVariables: 182,
 		SkippedMultiValue: []string{"AGE_RECIPIENT", "BACKUP_BLACKLIST", "BACKUP_EXCLUDE_PATTERNS", "CUSTOM_BACKUP_PATHS"},
-		Duplicated:        []config.DuplicatedVariable{{Name: "PERSONAL_SCRIPT_PRE_RUN", Lines: []int{120, 455}, WinningLine: 455}},
+		Duplicated:        []config.DuplicatedVariable{{Name: "PERSONAL_SCRIPT_PRE_RUN", Lines: []int{120, 455}, WinningLine: 455, Discarded: []int{120}}},
 		Absent:            []string{"HEALTHCHECK_UPDATES_ID", "SCHEDULER_TIME"},
 		Unknown:           []string{"PERSONAL_SCRIPTS_PRERUN"},
 	}
@@ -124,7 +124,7 @@ func TestThreeAssignmentsNameEveryDiscardedLine(t *testing.T) {
 	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
 		Path: "/opt/proxsave/configs/backup.env",
 		Duplicated: []config.DuplicatedVariable{
-			{Name: "PERSONAL_SCRIPT_PRE_RUN", Lines: []int{10, 20, 30}, WinningLine: 30},
+			{Name: "PERSONAL_SCRIPT_PRE_RUN", Lines: []int{10, 20, 30}, WinningLine: 30, Discarded: []int{10, 20}},
 		},
 	})
 	want := "PERSONAL_SCRIPT_PRE_RUN is set 3 times; line 30 wins and the values on lines 10, 20 are discarded"
@@ -138,7 +138,7 @@ func TestTheBlockNeverPrintsAValue(t *testing.T) {
 	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
 		Path: "/opt/proxsave/configs/backup.env",
 		Duplicated: []config.DuplicatedVariable{
-			{Name: "TELEGRAM_BOT_TOKEN", Lines: []int{40, 50}, WinningLine: 50},
+			{Name: "TELEGRAM_BOT_TOKEN", Lines: []int{40, 50}, WinningLine: 50, Discarded: []int{40}},
 		},
 	})
 	if !strings.Contains(logged, "TELEGRAM_BOT_TOKEN is set twice; line 50 wins and the value on line 40 is discarded") {
@@ -172,5 +172,51 @@ func TestTheIntegrityBlockIsWiredAheadOfTheConfigurationSectionEnd(t *testing.T)
 	}
 	if dryRun < 0 || audit > dryRun {
 		t.Fatalf("the integrity block must run before printDryRunBootstrapStatus:\n%s", fn)
+	}
+}
+
+// The list names the variables whose repetition CAN be legitimate, not the ones this
+// run left alone. The two forms differ: the single-line form of CUSTOM_BACKUP_PATHS
+// concatenates, its block form replaces, so the same variable is listed here AND
+// reported as duplicated two lines below. Calling the list "skipped" makes the block
+// contradict its own finding.
+func TestTheRepeatableListDoesNotClaimAReportedVariableWasSkipped(t *testing.T) {
+	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
+		Path: "/opt/proxsave/configs/backup.env", Lines: 462, Assignments: 183, Distinct: 182, TemplateVariables: 182,
+		SkippedMultiValue: []string{"AGE_RECIPIENT", "BACKUP_BLACKLIST", "BACKUP_EXCLUDE_PATTERNS", "CUSTOM_BACKUP_PATHS"},
+		Duplicated:        []config.DuplicatedVariable{{Name: "CUSTOM_BACKUP_PATHS", Lines: []int{395, 396}, WinningLine: 396, Discarded: []int{395}}},
+	})
+	if strings.Contains(logged, "skipped") {
+		t.Fatalf("the block calls a variable skipped and then reports it:\n%s", logged)
+	}
+	want := "variables that may repeat without discarding: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS"
+	if !strings.Contains(logged, want) {
+		t.Fatalf("missing %q in:\n%s", want, logged)
+	}
+}
+
+// A block does not have to be the LAST assignment of its variable. With a single
+// line after it the loader concatenates onto the block, so the block still discards
+// what came before it while that later line loses nothing. Deriving the discarded
+// lines as "everything but the last" then names the winner among the discarded and
+// the debug line credits the wrong assignment.
+func TestABlockThatIsNotTheLastAssignmentNamesOnlyWhatItDiscards(t *testing.T) {
+	path := t.TempDir() + "/backup.env"
+	body := "CUSTOM_BACKUP_PATHS=/srv/important\nCUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\nCUSTOM_BACKUP_PATHS=/srv/other\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report, err := config.AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	logged := renderIntegrityBlock(t, report)
+
+	want := "CUSTOM_BACKUP_PATHS is set 3 times; line 2 wins and the value on line 1 is discarded"
+	if !strings.Contains(logged, want) {
+		t.Fatalf("missing %q in:\n%s", want, logged)
+	}
+	if strings.Contains(logged, "last assignment wins") {
+		t.Fatalf("the debug line credits the last assignment, but line 2 is the winner:\n%s", logged)
 	}
 }

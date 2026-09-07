@@ -12,8 +12,11 @@ import (
 
 // DuplicatedVariable records one variable assigned more than once in backup.env.
 //
-// Lines holds every assignment line in file order; WinningLine is the last one,
-// because parseEnvFile writes raw[upperKey] on every hit and the last write wins.
+// Lines holds every assignment line in file order; WinningLine is the one whose
+// value survives. For an ordinary variable that is the last assignment, because
+// parseEnvFile writes raw[upperKey] on every hit. For a variable written in the
+// block form it is the last BLOCK, which replaces what came before it while a
+// later single line only concatenates onto it. See discardsAValue.
 // The discarded values are deliberately NOT recorded: a duplicated
 // TELEGRAM_BOT_TOKEN would put a secret in the log, and the line number is
 // enough for the operator to find it.
@@ -21,6 +24,10 @@ type DuplicatedVariable struct {
 	Name        string
 	Lines       []int
 	WinningLine int
+	// Discarded holds the lines whose value is thrown away, in file order. It is
+	// NOT "every line but the winner": an assignment that follows a block
+	// concatenates onto it and loses nothing, so it appears in Lines and not here.
+	Discarded []int
 }
 
 // VariableAssignment describes HOW one variable is assigned in the audited file:
@@ -130,11 +137,12 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 			WinningLine:  at[len(at)-1].line,
 			WinningEmpty: at[len(at)-1].empty,
 		}
-		if len(at) > 1 && !skipsUniquenessCheck(name) {
+		if winning, discarded := discardsAValue(name, at); len(discarded) > 0 {
 			report.Duplicated = append(report.Duplicated, DuplicatedVariable{
 				Name:        name,
 				Lines:       lines,
-				WinningLine: at[len(at)-1].line,
+				WinningLine: winning,
+				Discarded:   discarded,
 			})
 		}
 		if _, ok := templateScan.assignedAt[name]; !ok {
@@ -154,6 +162,7 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 type envAssignment struct {
 	line  int
 	empty bool
+	block bool
 }
 
 // envScan is one pass over an env file: which variables are assigned, on which
@@ -187,15 +196,19 @@ func scanEnvAssignments(scanner *bufio.Scanner) (envScan, error) {
 		if _, seen := scan.assignedAt[upperKey]; !seen {
 			scan.order = append(scan.order, upperKey)
 		}
+		// A block value swallows its own lines in the loader, so the audit has to
+		// swallow them too or it would read a value line as an assignment. Which
+		// form this is also decides whether repeating the variable discards
+		// anything, so the answer is kept on the assignment.
+		opensBlock := blockValueKeys[upperKey] && trimmed == fmt.Sprintf("%s=\"", key)
 		scan.assignedAt[upperKey] = append(scan.assignedAt[upperKey], envAssignment{
 			line:  scan.lines,
 			empty: strings.TrimSpace(value) == "",
+			block: opensBlock,
 		})
 		scan.assignments++
 
-		// A block value swallows its own lines in the loader, so the audit has to
-		// swallow them too or it would read a value line as an assignment.
-		if blockValueKeys[upperKey] && trimmed == fmt.Sprintf("%s=\"", key) {
+		if opensBlock {
 			for scanner.Scan() {
 				scan.lines++
 				next := strings.TrimRight(scanner.Text(), "\r")
@@ -211,11 +224,47 @@ func scanEnvAssignments(scanner *bufio.Scanner) (envScan, error) {
 	return scan, nil
 }
 
-// skipsUniquenessCheck reports whether repeating a variable is by design. The
-// multi-value and block forms concatenate in parseEnvFile instead of overwriting,
-// so a second line adds to the value and discards nothing.
-func skipsUniquenessCheck(upperKey string) bool {
-	return multiValueKeys[upperKey] || blockValueKeys[upperKey]
+// discardsAValue reports whether repeating a variable throws away something the
+// file already set, and which assignment does the throwing away.
+//
+// The loader does not resolve every variable by last-wins, so the audit cannot
+// either:
+//
+//   - an ordinary variable is overwritten by every later assignment;
+//   - the single-line form of a multi-value variable CONCATENATES, ending its
+//     branch with `raw[upperKey] = existing + "\n" + value`, so it discards
+//     nothing however often it is repeated;
+//   - the block form does NOT concatenate. Its branch ends with a plain
+//     `raw[upperKey] = strings.Join(blockLines, "\n")`, so a block replaces
+//     everything the file set before it, an earlier block included. Assignments
+//     that follow the last block concatenate onto it and lose nothing.
+//
+// The third case is why exempting the block variables outright was wrong: the
+// shipped template writes both of them in block form, so an operator who adds
+// their own line above one loses it in silence.
+func discardsAValue(upperKey string, at []envAssignment) (winning int, discarded []int) {
+	if len(at) < 2 {
+		return 0, nil
+	}
+	replacing := len(at) - 1
+	switch {
+	case blockValueKeys[upperKey]:
+		replacing = -1
+		for i := range at {
+			if at[i].block {
+				replacing = i
+			}
+		}
+		if replacing <= 0 {
+			return 0, nil
+		}
+	case multiValueKeys[upperKey]:
+		return 0, nil
+	}
+	for _, assignment := range at[:replacing] {
+		discarded = append(discarded, assignment.line)
+	}
+	return at[replacing].line, discarded
 }
 
 func skippedMultiValueVariables() []string {

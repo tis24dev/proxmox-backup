@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -194,4 +195,98 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// The audit exists to say when the loader discards a value the operator wrote, so
+// it has to model how the loader actually resolves a repeated variable - which is
+// NOT last-wins for every variable. CUSTOM_BACKUP_PATHS accepts two legal shapes
+// and parseEnvFile treats them in opposite ways: the single-line form concatenates
+// (config.go:1768 `raw[upperKey] = existing + "\n" + value`), the block form
+// replaces (config.go:1764 `raw[upperKey] = strings.Join(blockLines, "\n")`). An
+// audit that exempts the variable outright stays silent exactly where a value is
+// lost.
+//
+// This is the guard integrity.go's own doc comment names.
+func TestAuditAgreesWithTheLoader(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		// wantPaths is what the loader resolves CUSTOM_BACKUP_PATHS to.
+		wantPaths []string
+		// wantLines is empty when the loader discards nothing, so the audit must
+		// stay silent; otherwise it is every assignment line of the variable and
+		// wantWinning is the line whose value survives.
+		wantLines   []int
+		wantWinning int
+	}{
+		"two single lines concatenate": {
+			body:      "CUSTOM_BACKUP_PATHS=/etc/a\nCUSTOM_BACKUP_PATHS=/srv/important\n",
+			wantPaths: []string{"/etc/a", "/srv/important"},
+		},
+		"a line after a block concatenates onto it": {
+			body:      "CUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\nCUSTOM_BACKUP_PATHS=/srv/important\n",
+			wantPaths: []string{"/etc/a", "/srv/important"},
+		},
+		"a block after a line replaces it": {
+			body:        "CUSTOM_BACKUP_PATHS=/srv/important\nCUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\n",
+			wantPaths:   []string{"/etc/a"},
+			wantLines:   []int{1, 2},
+			wantWinning: 2,
+		},
+		"a block after a block replaces it": {
+			body:        "CUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\nCUSTOM_BACKUP_PATHS=\"\n/etc/b\n\"\n",
+			wantPaths:   []string{"/etc/b"},
+			wantLines:   []int{1, 4},
+			wantWinning: 4,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeEnvFile(t, tc.body)
+
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if got := strings.Join(cfg.CustomBackupPaths, "|"); got != strings.Join(tc.wantPaths, "|") {
+				t.Fatalf("the loader kept %q, the case says it keeps %q", got, strings.Join(tc.wantPaths, "|"))
+			}
+
+			report, err := AuditConfigFile(path)
+			if err != nil {
+				t.Fatalf("audit: %v", err)
+			}
+			var found *DuplicatedVariable
+			for i := range report.Duplicated {
+				if report.Duplicated[i].Name == "CUSTOM_BACKUP_PATHS" {
+					found = &report.Duplicated[i]
+				}
+			}
+
+			if len(tc.wantLines) == 0 {
+				if found != nil {
+					t.Fatalf("the loader discards nothing here, but the audit reported %+v", *found)
+				}
+				return
+			}
+			if found == nil {
+				t.Fatalf("the loader discarded the value on line %d and the audit said nothing",
+					tc.wantLines[0])
+			}
+			if got := joinInts(found.Lines); got != joinInts(tc.wantLines) {
+				t.Fatalf("the audit reported lines %s, expected %s", got, joinInts(tc.wantLines))
+			}
+			if found.WinningLine != tc.wantWinning {
+				t.Fatalf("the audit says line %d wins, the loader kept the value on line %d",
+					found.WinningLine, tc.wantWinning)
+			}
+		})
+	}
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, ",")
 }

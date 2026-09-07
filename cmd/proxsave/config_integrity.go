@@ -68,12 +68,15 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 	bootstrap.Debug("Configuration integrity: file=%s lines=%d assignments=%d distinct=%d template=%d",
 		report.Path, report.Lines, report.Assignments, report.Distinct, report.TemplateVariables)
 	if len(report.SkippedMultiValue) > 0 {
-		bootstrap.Debug("Configuration integrity: multi-value variables skipped: %s",
+		// These are the variables whose repetition CAN be legitimate, not the ones
+		// this run left alone: the block form replaces instead of concatenating, so
+		// one of them can be listed here and reported as duplicated below.
+		bootstrap.Debug("Configuration integrity: variables that may repeat without discarding: %s",
 			strings.Join(report.SkippedMultiValue, ", "))
 	}
 	for _, duplicated := range report.Duplicated {
-		bootstrap.Debug("Configuration integrity: %s assigned on lines %s; last assignment wins",
-			duplicated.Name, joinLineNumbers(duplicated.Lines))
+		bootstrap.Debug("Configuration integrity: %s assigned on lines %s; line %d wins",
+			duplicated.Name, joinLineNumbers(duplicated.Lines), duplicated.WinningLine)
 	}
 	for _, name := range report.Absent {
 		bootstrap.Debug("Configuration integrity: %s present in embedded template, absent from file", name)
@@ -110,13 +113,19 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 // duplicatedVariableSentence names the winner and every discarded line, never the
 // values: a duplicated TELEGRAM_BOT_TOKEN would otherwise print a secret.
 func duplicatedVariableSentence(duplicated config.DuplicatedVariable) string {
-	discarded := duplicated.Lines[:len(duplicated.Lines)-1]
-	if len(duplicated.Lines) == 2 {
-		return fmt.Sprintf("%s is set twice; line %d wins and the value on line %d is discarded",
-			duplicated.Name, duplicated.WinningLine, discarded[0])
+	// How many times it is SET and how many values are LOST are two different
+	// counts: a line that follows a block concatenates onto it, so it is one more
+	// assignment and one fewer discarded value.
+	times := "twice"
+	if len(duplicated.Lines) > 2 {
+		times = fmt.Sprintf("%d times", len(duplicated.Lines))
 	}
-	return fmt.Sprintf("%s is set %d times; line %d wins and the values on lines %s are discarded",
-		duplicated.Name, len(duplicated.Lines), duplicated.WinningLine, joinLineNumbers(discarded))
+	if len(duplicated.Discarded) == 1 {
+		return fmt.Sprintf("%s is set %s; line %d wins and the value on line %d is discarded",
+			duplicated.Name, times, duplicated.WinningLine, duplicated.Discarded[0])
+	}
+	return fmt.Sprintf("%s is set %s; line %d wins and the values on lines %s are discarded",
+		duplicated.Name, times, duplicated.WinningLine, joinLineNumbers(duplicated.Discarded))
 }
 
 // integrityVerdictCounts lists only the categories that actually fired, so the verdict
