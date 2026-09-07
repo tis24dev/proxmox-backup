@@ -180,6 +180,14 @@ func TestAskReturnsErrClosedOnCtrlC(t *testing.T) {
 	if !errors.Is(err, ErrClosed) {
 		t.Fatalf("expected ErrClosed on ctrl+c interrupt, got %v", err)
 	}
+	// errors.Is(ErrClosed) alone does not say WHICH termination happened: a UI
+	// death satisfies it too (TestAskReturnsErrClosedWhenProgramDies). The whole
+	// value is what tells them apart, and it is the value callers outside this
+	// package have to stand in for, so pin it here against the real thing rather
+	// than leaving each caller to guess at the wording.
+	if got, want := err.Error(), ClosedByInterrupt().Error(); got != want {
+		t.Fatalf("a real ctrl+c produced %q, but ClosedByInterrupt hands callers %q: every fixture built on it is now a shape production never emits", got, want)
+	}
 }
 
 func TestAskReturnsErrClosedWhenProgramDies(t *testing.T) {
@@ -194,6 +202,14 @@ func TestAskReturnsErrClosedWhenProgramDies(t *testing.T) {
 	_, err := askResult(t, ch)
 	if !errors.Is(err, ErrClosed) {
 		t.Fatalf("expected ErrClosed, got %v", err)
+	}
+	// The other half of the pair: a program that died is NOT a person pressing
+	// Ctrl+C, and the two must stay distinguishable. They differ by text only,
+	// because closedErr flattens its cause with %v, so a caller that wants to
+	// treat them differently has to change closedErr to %w first. This is what
+	// pins that they have not quietly collapsed into one value.
+	if err.Error() == ClosedByInterrupt().Error() {
+		t.Fatalf("a killed program is indistinguishable from ctrl+c: both are %q", err)
 	}
 	_ = s.Close()
 }

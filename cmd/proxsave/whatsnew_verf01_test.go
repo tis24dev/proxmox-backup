@@ -143,13 +143,21 @@ func TestVERF01(t *testing.T) {
 	// scheduled backup, which ParseLogCounts counted and applyIssueExitCode promoted
 	// to exit 1, reported to Healthchecks as down.
 	t.Run("any_keystroke_that_closes_the_screen_disarms_the_warning", func(t *testing.T) {
+		// Each row is the value whatsnewflow.Run REALLY returns for that keystroke,
+		// not a stand-in that merely lands in the same branch today. continue comes
+		// back nil from the resolved pager; Esc resolves the pager's abort sentinel
+		// (internal/ui/components/pager.go:41); and Ctrl+C terminates the program, so
+		// the pending Ask resolves through Session.closedErr - a bare shell.ErrClosed,
+		// which stood here before, is a shape production never emits. The distinction
+		// costs nothing while the rule saves on every non-timeout error, and it is the
+		// whole test the day the rule is narrowed to specific resolutions.
 		cases := []struct {
 			name   string
 			runErr error
 		}{
 			{"continue", nil},
 			{"esc", shell.ErrAborted},
-			{"ctrl+c", shell.ErrClosed},
+			{"ctrl+c", shell.ClosedByInterrupt()},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
