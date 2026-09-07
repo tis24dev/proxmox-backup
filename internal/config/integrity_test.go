@@ -290,3 +290,26 @@ func joinInts(values []int) string {
 	}
 	return strings.Join(parts, ",")
 }
+
+// Assignment answers "how is this variable written", and for a variable written in
+// the block form the answer is not the last line. The block replaces, a line after it
+// concatenates onto it, so the assignment whose value is in effect as the base is the
+// block, not whatever happens to come last.
+func TestTheAssignmentInEffectIsTheBlockNotTheLastLine(t *testing.T) {
+	path := writeEnvFile(t, "CUSTOM_BACKUP_PATHS=/srv/important\nCUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\nCUSTOM_BACKUP_PATHS=/srv/other\n")
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	assignment, ok := report.Assignment("CUSTOM_BACKUP_PATHS")
+	if !ok {
+		t.Fatal("CUSTOM_BACKUP_PATHS is assigned, the report says it is not")
+	}
+	if got := joinInts(assignment.Lines); got != "1,2,5" {
+		t.Fatalf("lines %s, expected 1,2,5", got)
+	}
+	if assignment.WinningLine != 2 {
+		t.Fatalf("WinningLine is %d, but line 2 is the block that replaces and line 5 only appends to it",
+			assignment.WinningLine)
+	}
+}

@@ -31,9 +31,14 @@ type DuplicatedVariable struct {
 }
 
 // VariableAssignment describes HOW one variable is assigned in the audited file:
-// every line that assigns it, the one parseEnvFile's last-wins rule keeps, and
-// whether that one carries an empty value. The value itself is never recorded, so a
-// duplicated TELEGRAM_BOT_TOKEN cannot reach a log through here either.
+// every line that assigns it, the one whose value is in effect, and whether that one
+// carries an empty value. The value itself is never recorded, so a duplicated
+// TELEGRAM_BOT_TOKEN cannot reach a log through here either.
+//
+// WinningLine is not simply the last line. It is the last assignment that REPLACES,
+// which for an ordinary variable is indeed the last one, but for a variable written
+// in the block form is the last block: a line after a block concatenates onto it
+// rather than winning over it. See replacingAssignment.
 type VariableAssignment struct {
 	Lines        []int
 	WinningLine  int
@@ -132,10 +137,11 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 		for _, entry := range at {
 			lines = append(lines, entry.line)
 		}
+		inEffect := at[replacingAssignment(name, at)]
 		report.assignments[name] = VariableAssignment{
 			Lines:        lines,
-			WinningLine:  at[len(at)-1].line,
-			WinningEmpty: at[len(at)-1].empty,
+			WinningLine:  inEffect.line,
+			WinningEmpty: inEffect.empty,
 		}
 		if winning, discarded := discardsAValue(name, at); len(discarded) > 0 {
 			report.Duplicated = append(report.Duplicated, DuplicatedVariable{
@@ -246,25 +252,38 @@ func discardsAValue(upperKey string, at []envAssignment) (winning int, discarded
 	if len(at) < 2 {
 		return 0, nil
 	}
-	replacing := len(at) - 1
-	switch {
-	case blockValueKeys[upperKey]:
-		replacing = -1
-		for i := range at {
-			if at[i].block {
-				replacing = i
-			}
-		}
-		if replacing <= 0 {
-			return 0, nil
-		}
-	case multiValueKeys[upperKey]:
+	replacing := replacingAssignment(upperKey, at)
+	if replacing == 0 {
 		return 0, nil
 	}
 	for _, assignment := range at[:replacing] {
 		discarded = append(discarded, assignment.line)
 	}
 	return at[replacing].line, discarded
+}
+
+// replacingAssignment returns the index of the assignment whose value is in effect
+// as the base: the LAST one that replaces rather than concatenates. Everything
+// before it is thrown away; everything after it adds to it.
+func replacingAssignment(upperKey string, at []envAssignment) int {
+	if blockValueKeys[upperKey] {
+		last := -1
+		for i := range at {
+			if at[i].block {
+				last = i
+			}
+		}
+		if last < 0 {
+			// No block in the file: every assignment is the single-line form, which
+			// concatenates, so the first one sets the value and the rest add to it.
+			return 0
+		}
+		return last
+	}
+	if multiValueKeys[upperKey] {
+		return 0
+	}
+	return len(at) - 1
 }
 
 func skippedMultiValueVariables() []string {

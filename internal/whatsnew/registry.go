@@ -163,7 +163,7 @@ var notes = []Note{
 			"Daemon status says why a personal script reads as not configured: absent from backup.env, empty, or overwritten",
 		},
 		Actions: []string{
-			"If a run reports a variable set twice, delete the line you do not want: the last one in the file is the one that wins",
+			"If a run reports a variable set twice, the warning names the line that wins: delete the other one",
 			"If a run reports absent variables, merge them from the dashboard: Maintenance > Upgrade > Check config",
 		},
 	},
