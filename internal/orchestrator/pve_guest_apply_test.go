@@ -510,9 +510,18 @@ func TestPveshRefusedKeyFromNamesTheKeyAcrossBothShapes(t *testing.T) {
 // the caller has to drop it and try again.
 type refusingStorageRunner struct {
 	refuse map[string]bool
+	// live is what `pvesh get /storage/<id>` answers, as PVE returns it: a flat JSON
+	// object of the definition's current values. Empty means the read fails.
+	live string
 }
 
 func (r *refusingStorageRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "get" {
+		if r.live == "" {
+			return nil, errors.New("exit status 2")
+		}
+		return []byte(r.live), nil
+	}
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "--") {
 			continue
@@ -615,5 +624,65 @@ func TestAnAbortedRegistrationNamesTheVMIDItMayHaveLeftBehind(t *testing.T) {
 	want := "Aborted while registering VM/CT config 101 (webserver): VMID 101 may be left reserved and locked on the cluster"
 	if !strings.Contains(buf.String(), want) {
 		t.Fatalf("missing %q in:\n%s", want, buf.String())
+	}
+}
+
+// When the set schema refuses EVERY key, the run cannot tell from the refusal alone
+// whether anything was lost: the refused key may already hold the staged value, in
+// which case there was nothing to do, or it may differ, in which case the restore
+// could not put it back. Counting it either way is a guess. Reading the live
+// definition and comparing the refused keys turns it into an answer, and a value
+// that cannot be compared safely keeps the conservative one.
+func TestAnAllRefusedStorageIsJudgedAgainstTheLiveDefinition(t *testing.T) {
+	cases := map[string]struct {
+		live        string
+		wantApplied int
+		wantFailed  int
+		wantLine    string
+	}{
+		"the refused key already holds the staged value": {
+			live:        `{"storage":"nfs-backup","type":"nfs","server":"1.2.3.4"}`,
+			wantApplied: 1,
+			wantFailed:  0,
+			wantLine:    "Storage definition nfs-backup already matches every staged key the update schema refuses",
+		},
+		"the refused key differs and cannot be set": {
+			live:        `{"storage":"nfs-backup","type":"nfs","server":"9.9.9.9"}`,
+			wantApplied: 0,
+			wantFailed:  1,
+			wantLine:    "Failed to apply storage nfs-backup: the update schema refuses server and the live definition does not match the staged value",
+		},
+		"the live definition cannot be read": {
+			live:        "",
+			wantApplied: 1,
+			wantFailed:  0,
+			wantLine:    "Applied nothing for storage nfs-backup: the update schema refuses every staged key (server) and the live definition could not be compared",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			origCmd := restoreCmd
+			t.Cleanup(func() { restoreCmd = origCmd })
+			restoreCmd = &refusingStorageRunner{refuse: map[string]bool{"server": true}, live: tc.live}
+
+			cfg := filepath.Join(t.TempDir(), "storage.cfg")
+			if err := os.WriteFile(cfg, []byte("nfs: nfs-backup\n\tserver 1.2.3.4\n"), 0o600); err != nil {
+				t.Fatalf("write storage.cfg: %v", err)
+			}
+			buf := &bytes.Buffer{}
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(buf)
+
+			applied, failed, err := applyStorageCfg(context.Background(), cfg, logger)
+			if err != nil {
+				t.Fatalf("applyStorageCfg: %v", err)
+			}
+			if applied != tc.wantApplied || failed != tc.wantFailed {
+				t.Fatalf("applied=%d failed=%d, want %d/%d", applied, failed, tc.wantApplied, tc.wantFailed)
+			}
+			if !strings.Contains(buf.String(), tc.wantLine) {
+				t.Fatalf("missing %q in:\n%s", tc.wantLine, buf.String())
+			}
+		})
 	}
 }

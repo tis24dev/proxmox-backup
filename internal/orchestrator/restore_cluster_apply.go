@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -333,6 +334,74 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		applied++
 	}
 	return applied, failed
+}
+
+// refusedKeysThatDiffer reads the LIVE storage definition and reports which of the
+// refused keys hold a value other than the staged one, and whether the comparison
+// could be made at all.
+//
+// comparable is false when the read fails or when not one refused key could be
+// compared safely, and the caller must keep its conservative answer there: a wrong
+// "differs" turns a clean restore into a failure, which is worse than the silence it
+// replaces.
+//
+// A value is compared only when both sides are plain scalars. `pvesh get
+// /storage/<id> --output-format=json` returns a flat object, but two of its shapes
+// cannot be compared as text: a content list is comma-joined in an order PVE does not
+// promise, and a boolean comes back as 1/0 against a cfg that may spell it either
+// way. Both are treated as not comparable rather than guessed.
+func refusedKeysThatDiffer(ctx context.Context, logger *logging.Logger, id string, dropped, args []string) (differing []string, comparable bool) {
+	live, err := liveStorageDefinition(ctx, id)
+	if err != nil {
+		logger.Debug("storage %s: the live definition could not be read, so the refused keys cannot be judged: %v", id, err)
+		return nil, false
+	}
+	staged := make(map[string]string, len(args))
+	for _, arg := range args {
+		key, value, ok := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if ok {
+			staged[key] = value
+		}
+	}
+	for _, key := range dropped {
+		want, haveStaged := staged[key]
+		got, haveLive := live[key]
+		if !haveStaged || !haveLive {
+			logger.Debug("storage %s: refused key %s has no comparable pair (staged=%v live=%v)", id, key, haveStaged, haveLive)
+			continue
+		}
+		comparable = true
+		if strings.TrimSpace(got) != strings.TrimSpace(want) {
+			logger.Debug("storage %s: refused key %s differs (live=%q staged=%q)", id, key, got, want)
+			differing = append(differing, key)
+			continue
+		}
+		logger.Debug("storage %s: refused key %s already holds the staged value", id, key)
+	}
+	return differing, comparable
+}
+
+// liveStorageDefinition returns the current values of a storage definition, keeping
+// only the ones that can be compared as text. See refusedKeysThatDiffer for why a
+// comma-joined list and a JSON boolean are left out instead of coerced.
+func liveStorageDefinition(ctx context.Context, id string) (map[string]string, error) {
+	out, err := runCommandStdout(ctx, "pvesh", "get", "/storage/"+id, "--output-format=json")
+	if err != nil {
+		return nil, fmt.Errorf("pvesh get /storage/%s: %w", id, err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse the live definition of storage %s: %w", id, err)
+	}
+	values := make(map[string]string, len(raw))
+	for key, value := range raw {
+		text, ok := value.(string)
+		if !ok || strings.Contains(text, ",") {
+			continue
+		}
+		values[key] = text
+	}
+	return values, nil
 }
 
 // guestConfDir maps a guest kind to its pmxcfs config directory.
@@ -673,13 +742,27 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
 				failed++
 			case !changed && len(dropped) > 0:
-				// Nothing reached the node AND keys were refused, which are two
-				// different facts that used to render as one line. The definition is
-				// NOT in the staged state here, so "already matches" would say the
-				// opposite of what happened.
-				logger.Warning("Applied nothing for storage %s: the update schema refuses every staged key (%s)",
-					blk.ID, strings.Join(dropped, ", "))
-				applied++
+				// Nothing reached the node AND keys were refused. The refusal alone
+				// does not say whether anything was LOST: a create-only key may
+				// already hold the staged value, in which case there was nothing to
+				// do, or it may differ, in which case the restore could not put it
+				// back. Only the live definition answers that, so it is read rather
+				// than guessed - and when it cannot be compared, the conservative
+				// answer stands.
+				differing, comparable := refusedKeysThatDiffer(ctx, logger, blk.ID, dropped, setArgs)
+				switch {
+				case !comparable:
+					logger.Warning("Applied nothing for storage %s: the update schema refuses every staged key (%s) and the live definition could not be compared",
+						blk.ID, strings.Join(dropped, ", "))
+					applied++
+				case len(differing) > 0:
+					logger.Warning("Failed to apply storage %s: the update schema refuses %s and the live definition does not match the staged value",
+						blk.ID, strings.Join(differing, ", "))
+					failed++
+				default:
+					logger.Info("Storage definition %s already matches every staged key the update schema refuses", blk.ID)
+					applied++
+				}
 			case changed && len(dropped) > 0:
 				// Part of the definition landed and part did not. Announcing the
 				// update without naming the rest loses the only evidence the operator
