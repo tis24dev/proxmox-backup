@@ -85,17 +85,36 @@ PERSONAL_SCRIPT_PRE_RUN=/home/me/mount-pbs   # discarded: an assignment below wi
 PERSONAL_SCRIPT_PRE_RUN=                     # the template line, empty, and it wins
 ```
 
-Four variables are exempt, because repeating them **concatenates** instead of overwriting and
-nothing is lost: `AGE_RECIPIENT`, `BACKUP_BLACKLIST`, `BACKUP_EXCLUDE_PATTERNS` and
-`CUSTOM_BACKUP_PATHS`.
+Four variables can be repeated without losing anything, because a second `KEY=value` line
+**concatenates** instead of overwriting: `AGE_RECIPIENT`, `BACKUP_BLACKLIST`,
+`BACKUP_EXCLUDE_PATTERNS` and `CUSTOM_BACKUP_PATHS`.
+
+The exemption is the FORM, not the name. `BACKUP_BLACKLIST` and `CUSTOM_BACKUP_PATHS` also accept
+the multi-line block form the template ships them in, and a block does **not** concatenate: it
+replaces everything set before it. Writing your own line above the template's block therefore
+loses it, exactly like an ordinary duplicate, and the audit reports it:
+
+```bash
+CUSTOM_BACKUP_PATHS=/srv/important   # discarded: the block below replaces it
+CUSTOM_BACKUP_PATHS="                # the template's block, and it wins
+# /srv/custom-config.yaml
+"
+```
+
+A line written **after** the block concatenates onto it and loses nothing.
 
 ### Absent: the merge never ran
 
 The template is compiled into the binary, so a host that has not upgraded carries an older
 binary with an older template and never sees this finding. Seeing it means the binary is new and
 `backup.env` was not merged. `--upgrade-config` adds the missing variables and
-`--upgrade-config-dry-run` shows what it would add; a missing variable falls back to its default in
-the meantime, it does not fail the run.
+`--upgrade-config-dry-run` shows what it would add.
+
+A missing variable falls back to its default, so nothing you wrote is lost and the backup itself
+is unaffected. The finding is still a `WARNING`, and like every other warning it promotes the run
+to exit 1: a host that upgraded the binary without merging its `backup.env` exits 1 on every run,
+and the Healthchecks backup check goes down with it, until `--upgrade-config` is run. Merge the
+file, or expect that state until you do.
 
 ### What the block does not do
 
