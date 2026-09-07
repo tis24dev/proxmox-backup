@@ -124,16 +124,19 @@ func TestCloseDashboardAndRelaunchClosesSessionFirst(t *testing.T) {
 	var output bytes.Buffer
 	session := shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"}, &output, nil)
 	called := false
-	dashboardRelaunchAfterUpgrade = func(context.Context, string, *logging.BootstrapLogger) {
+	dashboardRelaunchAfterUpgrade = func(context.Context, string, *logging.BootstrapLogger) int {
 		called = true
 		select {
 		case <-session.Done():
 		default:
 			t.Fatal("dashboard session was still active when replacement process started")
 		}
+		return 7
 	}
 
-	closeDashboardAndRelaunch(context.Background(), session, "/opt/proxsave/proxsave", nil)
+	if code := closeDashboardAndRelaunch(context.Background(), session, "/opt/proxsave/proxsave", nil); code != 7 {
+		t.Fatalf("exit code = %d, want the relaunched dashboard's own 7", code)
+	}
 	if !called {
 		t.Fatal("replacement process was not started")
 	}
@@ -145,5 +148,61 @@ func TestDashboardRelaunchHelperProcess(t *testing.T) {
 		os.Exit(0)
 	case "failure":
 		os.Exit(23)
+	}
+}
+
+// The relaunched dashboard is a full interactive session, and its exit code is that
+// SESSION's outcome: a backup run inside it that ends with a warning exits 1. Calling
+// that "Dashboard reload failed after upgrade" says the reload did not happen, when
+// the operator has just spent a session in the process it started. Only an error that
+// is NOT a child exit means nothing took over the terminal.
+func TestAChildExitIsNotAReloadFailure(t *testing.T) {
+	orig := dashboardRelaunchCommandContext
+	t.Cleanup(func() { dashboardRelaunchCommandContext = orig })
+	dashboardRelaunchCommandContext = func(ctx context.Context, _ string, _ ...string) (*exec.Cmd, error) {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDashboardRelaunchHelperProcess$")
+		cmd.Env = append(os.Environ(), "PROXSAVE_TEST_DASHBOARD_RELAUNCH=failure")
+		return cmd, nil
+	}
+
+	boot := logging.NewBootstrapLogger()
+	boot.SetConsoleQuiet(true)
+	buf := &bytes.Buffer{}
+	mirror := logging.New(types.LogLevelDebug, false)
+	mirror.SetOutput(buf)
+	boot.SetMirrorLogger(mirror)
+
+	code := relaunchDashboardAfterUpgrade(context.Background(), "/opt/proxsave/proxsave", boot)
+
+	if code == 0 {
+		t.Fatal("the child's exit code must reach the caller, not be replaced with success")
+	}
+	if strings.Contains(buf.String(), "Dashboard reload failed after upgrade") {
+		t.Fatalf("a reload that worked must not be reported as failed:\n%s", buf.String())
+	}
+}
+
+// A relaunch that never started IS a reload failure, and keeps its line.
+func TestARelaunchThatNeverStartedIsStillReported(t *testing.T) {
+	orig := dashboardRelaunchCommandContext
+	t.Cleanup(func() { dashboardRelaunchCommandContext = orig })
+	dashboardRelaunchCommandContext = func(context.Context, string, ...string) (*exec.Cmd, error) {
+		return nil, errors.New("no such file or directory")
+	}
+
+	boot := logging.NewBootstrapLogger()
+	boot.SetConsoleQuiet(true)
+	buf := &bytes.Buffer{}
+	mirror := logging.New(types.LogLevelDebug, false)
+	mirror.SetOutput(buf)
+	boot.SetMirrorLogger(mirror)
+
+	code := relaunchDashboardAfterUpgrade(context.Background(), "/opt/proxsave/proxsave", boot)
+
+	if code == 0 {
+		t.Fatal("a reload that never started must not exit success")
+	}
+	if !strings.Contains(buf.String(), "Dashboard reload failed after upgrade: no such file or directory") {
+		t.Fatalf("the real failure lost its line:\n%s", buf.String())
 	}
 }

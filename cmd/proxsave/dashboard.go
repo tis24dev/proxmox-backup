@@ -324,8 +324,9 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			continue
 		case dashboardActionReload:
 			keepAlive = true
-			closeDashboardAndRelaunch(ctx, session, getExecInfo().ExecPath, bootstrap)
-			return types.ExitSuccess.Int(), true
+			// The reloaded dashboard's own exit code, not a blanket success: the
+			// operator's session happened in THAT process.
+			return closeDashboardAndRelaunch(ctx, session, getExecInfo().ExecPath, bootstrap), true
 		}
 
 		switch action {
