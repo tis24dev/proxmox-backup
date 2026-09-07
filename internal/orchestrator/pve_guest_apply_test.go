@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -499,6 +500,78 @@ func TestPveshRefusedKeyFromNamesTheKeyAcrossBothShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := pveshRefusedKeyFrom(tc.err, []byte(tc.out)); got != tc.want {
 				t.Fatalf("pveshRefusedKeyFrom = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// refusingStorageRunner refuses the named keys one at a time, the way pvesh does:
+// a set carrying a key the schema does not accept fails naming that ONE key, and
+// the caller has to drop it and try again.
+type refusingStorageRunner struct {
+	refuse map[string]bool
+}
+
+func (r *refusingStorageRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "--") {
+			continue
+		}
+		key := strings.TrimPrefix(strings.SplitN(arg, "=", 2)[0], "--")
+		if r.refuse[key] {
+			return []byte("Parameter verification failed.\n" + key + ": property is not defined in schema and the schema does not allow additional properties\n"),
+				errors.New("exit status 2")
+		}
+	}
+	return nil, nil
+}
+
+// The storage arm and the guest arm share pveshSetDroppingRefusedKeys, whose own
+// doc comment says a caller that stays silent about the dropped keys loses the fact
+// that their staged values were NOT applied. The guest arm reports them; the storage
+// arm discarded the list and announced an update anyway, so an operator read
+// "Updated existing storage definition" over a definition that is not in the staged
+// state, and "already matches every settable key" over one where nothing could be
+// sent at all.
+func TestStorageApplyNamesTheKeysThatWereRefused(t *testing.T) {
+	cases := map[string]struct {
+		refuse   []string
+		wantLine string
+	}{
+		"some keys refused": {
+			refuse:   []string{"server"},
+			wantLine: "Updated existing storage definition nfs-backup without server: the update schema refuses those keys, so their staged values are not applied",
+		},
+		"every key refused": {
+			refuse:   []string{"server", "export", "content"},
+			wantLine: "Applied nothing for storage nfs-backup: the update schema refuses every staged key (server, export, content)",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			origCmd := restoreCmd
+			t.Cleanup(func() { restoreCmd = origCmd })
+			refuse := make(map[string]bool, len(tc.refuse))
+			for _, key := range tc.refuse {
+				refuse[key] = true
+			}
+			restoreCmd = &refusingStorageRunner{refuse: refuse}
+
+			cfg := filepath.Join(t.TempDir(), "storage.cfg")
+			body := "nfs: nfs-backup\n\tserver 1.2.3.4\n\texport /srv/nfs\n\tcontent backup\n"
+			if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+				t.Fatalf("write storage.cfg: %v", err)
+			}
+
+			buf := &bytes.Buffer{}
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(buf)
+
+			if _, _, err := applyStorageCfg(context.Background(), cfg, logger); err != nil {
+				t.Fatalf("applyStorageCfg: %v", err)
+			}
+			if !strings.Contains(buf.String(), tc.wantLine) {
+				t.Fatalf("missing %q in:\n%s", tc.wantLine, buf.String())
 			}
 		})
 	}

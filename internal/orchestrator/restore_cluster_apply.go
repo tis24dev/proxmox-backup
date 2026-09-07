@@ -463,12 +463,12 @@ func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
 // changed reports whether a set actually reached the node. It is false in the two
 // shapes where there was nothing to send: a staged block whose only keys are the
 // create-only header ones (--storage/--type, stripped by the caller), and a block
-// whose every remaining key came back refused. Both mean the existing definition
-// already matches everything this restore could change, which is a success - but
-// not an update, and the caller must not announce one.
-func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) (changed bool, err error) {
-	changed, _, err = pveshSetDroppingRefusedKeys(ctx, logger, "storage "+id, "/storage/"+id, args)
-	return changed, err
+// whose every remaining key came back refused. Neither is an update and the caller
+// must not announce one, but they are NOT the same fact and dropped is what tells
+// them apart: empty means the definition already matches everything this restore
+// could change, non-empty means nothing could be sent and it does not.
+func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) (changed bool, dropped []string, err error) {
+	return pveshSetDroppingRefusedKeys(ctx, logger, "storage "+id, "/storage/"+id, args)
 }
 
 // pveshSetDroppingRefusedKeys runs `pvesh set <path>` and, on a refusal that NAMES
@@ -652,17 +652,33 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 				}
 				setArgs = append(setArgs, arg)
 			}
-			changed, setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs)
+			changed, dropped, setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs)
 			switch {
 			case setErr != nil:
 				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
 				failed++
+			case !changed && len(dropped) > 0:
+				// Nothing reached the node AND keys were refused, which are two
+				// different facts that used to render as one line. The definition is
+				// NOT in the staged state here, so "already matches" would say the
+				// opposite of what happened.
+				logger.Warning("Applied nothing for storage %s: the update schema refuses every staged key (%s)",
+					blk.ID, strings.Join(dropped, ", "))
+				applied++
+			case changed && len(dropped) > 0:
+				// Part of the definition landed and part did not. Announcing the
+				// update without naming the rest loses the only evidence the operator
+				// has that their staged values are not in effect.
+				logger.Warning("Updated existing storage definition %s without %s: the update schema refuses those keys, so their staged values are not applied",
+					blk.ID, strings.Join(dropped, ", "))
+				applied++
 			case changed:
 				logger.Info("Updated existing storage definition %s", blk.ID)
 				applied++
 			default:
-				// Nothing was sent, so saying "Updated" would claim a write that
-				// never happened; the definition is nonetheless in the staged state.
+				// Nothing was sent and nothing was refused: the block carried no
+				// settable key at all, so the definition really does already match
+				// everything this restore could change.
 				logger.Info("Storage definition %s already matches every settable key", blk.ID)
 				applied++
 			}
