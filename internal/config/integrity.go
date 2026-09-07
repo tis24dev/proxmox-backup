@@ -120,6 +120,7 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading embedded template: %w", err)
 	}
+	documented := scanDocumentedVariables(bufio.NewScanner(strings.NewReader(DefaultEnvTemplate())))
 
 	report := &ConfigIntegrityReport{
 		Path:              path,
@@ -151,7 +152,7 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 				Discarded:   discarded,
 			})
 		}
-		if _, ok := templateScan.assignedAt[name]; !ok {
+		if !templateKnows(name, templateScan.assignedAt, documented) {
 			report.Unknown = append(report.Unknown, name)
 		}
 	}
@@ -284,6 +285,98 @@ func replacingAssignment(upperKey string, at []envAssignment) int {
 		return 0
 	}
 	return len(at) - 1
+}
+
+// templateKnows reports whether the loader reads a variable, which is what "unknown"
+// has to mean. The template's ACTIVE assignments are only part of the answer, and
+// taking them for the whole of it told operators that working configuration was
+// being ignored, which invites them to delete it.
+//
+// Three families the loader reads never appear as an active template assignment:
+// variables the template only DOCUMENTS as a commented example, the per-endpoint
+// webhook variables whose names are the operator's own, and the legacy notification
+// aliases no template has ever carried.
+func templateKnows(upperKey string, assigned map[string][]envAssignment, documented map[string]struct{}) bool {
+	if _, ok := assigned[upperKey]; ok {
+		return true
+	}
+	if _, ok := documented[upperKey]; ok {
+		return true
+	}
+	return isWebhookEndpointVariable(upperKey) || legacyReadOnlyKeys[upperKey]
+}
+
+// scanDocumentedVariables collects the names the template DOCUMENTS on a commented
+// line rather than assigning, the shape it uses for anything an operator has to opt
+// into by hand: `# SAFE_PROCESSES=""`, `# WEBHOOK_PUSHOVER_URL=...`.
+//
+// Only a bare NAME before the '=' counts, so the prose around those lines is not read
+// as a declaration: "# Example: SAFE_PROCESSES=\"ffmpeg\"." and a commented URL with a
+// query string both fail that test and are ignored.
+func scanDocumentedVariables(scanner *bufio.Scanner) map[string]struct{} {
+	names := make(map[string]struct{})
+	for scanner.Scan() {
+		trimmed := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, _, ok := utils.SplitKeyValue(strings.TrimSpace(strings.TrimLeft(trimmed, "#")))
+		if !ok || !isEnvVariableName(key) {
+			continue
+		}
+		names[strings.ToUpper(key)] = struct{}{}
+	}
+	return names
+}
+
+// isEnvVariableName reports whether a token is a bare shell variable name.
+func isEnvVariableName(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r == '_':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// webhookEndpointFields are the per-endpoint suffixes BuildWebhookConfig reads off the
+// runtime prefix `WEBHOOK_<NAME>_`. The endpoint NAME is the operator's, so it can
+// never appear in the template; keeping the FIELD a closed set is what stops this rule
+// from accepting a misspelling as known.
+var webhookEndpointFields = []string{
+	"URL", "FORMAT", "METHOD", "PRIORITY", "HEADERS",
+	"AUTH_TYPE", "AUTH_TOKEN", "AUTH_USER", "AUTH_PASS", "AUTH_SECRET",
+}
+
+func isWebhookEndpointVariable(upperKey string) bool {
+	rest, ok := strings.CutPrefix(upperKey, "WEBHOOK_")
+	if !ok {
+		return false
+	}
+	for _, field := range webhookEndpointFields {
+		if name, found := strings.CutSuffix(rest, "_"+field); found && name != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyReadOnlyKeys are names the loader still READS, through getBoolWithLegacyAlias
+// and getBoolWithFallback, so a file written before the rename keeps working. No
+// template has ever carried them, not even commented, so listing them is the only way
+// the audit can know them.
+var legacyReadOnlyKeys = map[string]bool{
+	telegramEnableLegacyKey:   true,
+	emailEnableLegacyKey:      true,
+	gotifyEnableLegacyKey:     true,
+	webhookEnableLegacyKey:    true,
+	emailFallbackPMFLegacyKey: true,
 }
 
 func skippedMultiValueVariables() []string {

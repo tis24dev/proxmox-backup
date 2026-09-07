@@ -313,3 +313,45 @@ func TestTheAssignmentInEffectIsTheBlockNotTheLastLine(t *testing.T) {
 			assignment.WinningLine)
 	}
 }
+
+// "Unknown" must mean "the loader does not read this", not "the template does not
+// assign it on an uncommented line". Three families of variable the loader really
+// reads never appear as an active template assignment, and calling them ignored
+// invites the operator to delete working configuration.
+func TestAVariableTheLoaderReadsIsNotReportedAsUnknown(t *testing.T) {
+	cases := map[string]string{
+		"documented as a commented example": "SAFE_PROCESSES=\"ffmpeg\"\n",
+		"a second commented example":        "SAFE_BRACKET_PROCESSES=\"[kworker]\"\n",
+		"per-endpoint webhook, templated":   "WEBHOOK_ENDPOINTS=pushover\nWEBHOOK_PUSHOVER_URL=https://example.invalid/hook\n",
+		"per-endpoint webhook, own name":    "WEBHOOK_ENDPOINTS=mine\nWEBHOOK_MINE_URL=https://example.invalid/hook\nWEBHOOK_MINE_AUTH_TOKEN=t\n",
+		"legacy notification alias":         "EMAIL_ENABLE=true\n",
+		"legacy fallback alias":             "EMAIL_FALLBACK_PMF=true\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			report, err := AuditConfigFile(writeEnvFile(t, DefaultEnvTemplate()+body))
+			if err != nil {
+				t.Fatalf("audit: %v", err)
+			}
+			if len(report.Unknown) != 0 {
+				t.Fatalf("the loader reads these, the audit calls them unknown and ignored: %v", report.Unknown)
+			}
+		})
+	}
+}
+
+// The counterpart: a name nothing reads must still be reported, or the category
+// stops meaning anything.
+func TestAVariableNothingReadsIsStillReportedAsUnknown(t *testing.T) {
+	report, err := AuditConfigFile(writeEnvFile(t, DefaultEnvTemplate()+"PERSONAL_SCRIPTS_PRERUN=/tmp/x\nWEBHOOK_MINE_NOSUCHFIELD=1\n"))
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if joinStrings(report.Unknown) != "PERSONAL_SCRIPTS_PRERUN,WEBHOOK_MINE_NOSUCHFIELD" {
+		t.Fatalf("unknown = %v, expected both misspellings", report.Unknown)
+	}
+}
+
+func joinStrings(values []string) string {
+	return strings.Join(values, ",")
+}
