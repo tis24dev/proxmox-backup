@@ -411,8 +411,17 @@ func TestHardlinkClauseRidesWithTheOwnershipAdvisoryOnly(t *testing.T) {
 	if got.State != personalScriptReadyWithWarning {
 		t.Fatalf("state = %q, want ready-with-warning: %+v", got.State, got)
 	}
-	if !strings.Contains(got.Reason, "UID 1000-owned") || !strings.Contains(got.Reason, "fs.protected_hardlinks=0") {
-		t.Fatalf("the reason does not carry both the advisory and its mitigation: %q", got.Reason)
+	// The mitigation still travels WITH the advisory, never alone and never absent;
+	// it rides HardlinkAdvisory rather than Reason because it is a live kernel
+	// reading and comparePersonalScript compares Reason between the two sides.
+	if !strings.Contains(got.Reason, "UID 1000-owned") {
+		t.Fatalf("the reason does not carry the ownership advisory: %q", got.Reason)
+	}
+	if !strings.Contains(got.HardlinkAdvisory, "fs.protected_hardlinks=0") {
+		t.Fatalf("the advisory does not carry its mitigation: %q", got.HardlinkAdvisory)
+	}
+	if strings.Contains(got.Reason, "fs.protected_hardlinks") {
+		t.Fatalf("a live kernel reading is back inside the compared Reason: %q", got.Reason)
 	}
 
 	foreign = map[string]uint32{}
@@ -456,15 +465,14 @@ func TestOneClausePerOwnerNotPerDirectory(t *testing.T) {
 	got := inspectForeignAncestors(t, "/home/howard/dd/mount-pve",
 		map[string]uint32{"/home/howard": 1000, "/home/howard/dd": 1000}, 1, 0)
 
-	want := "/home/howard, /home/howard/dd: UID 1000-owned; owner can replace descendants run as UID 0; " +
-		"fs.protected_hardlinks=1 blocks hard-linking root-owned executables"
+	want := "/home/howard, /home/howard/dd: UID 1000-owned; owner can replace descendants run as UID 0"
 	if got.Reason != want {
 		t.Fatalf("reason =\n  %q\nwant\n  %q", got.Reason, want)
 	}
 	if strings.Count(got.Reason, "owner can replace descendants") != 1 {
 		t.Fatalf("the clause must appear once per owner: %q", got.Reason)
 	}
-	if strings.Count(got.Reason, "fs.protected_hardlinks") != 1 {
+	if strings.Count(got.HardlinkAdvisory, "fs.protected_hardlinks") != 1 {
 		t.Fatalf("the mitigation must be named once, at the end: %q", got.Reason)
 	}
 }
@@ -475,8 +483,7 @@ func TestTwoOwnersStayTwoClauses(t *testing.T) {
 		map[string]uint32{"/srv/a": 1000, "/srv/a/b": 1001}, 1, 0)
 
 	want := "/srv/a: UID 1000-owned; owner can replace descendants run as UID 0; " +
-		"/srv/a/b: UID 1001-owned; owner can replace descendants run as UID 0; " +
-		"fs.protected_hardlinks=1 blocks hard-linking root-owned executables"
+		"/srv/a/b: UID 1001-owned; owner can replace descendants run as UID 0"
 	if got.Reason != want {
 		t.Fatalf("reason =\n  %q\nwant\n  %q", got.Reason, want)
 	}
@@ -489,8 +496,7 @@ func TestForeignAncestorsReadShallowestFirst(t *testing.T) {
 		map[string]uint32{"/home/howard": 1000, "/home/howard/dd": 1000, "/home/howard/dd/sub": 1000}, 1, 0)
 
 	want := "/home/howard, /home/howard/dd, /home/howard/dd/sub: UID 1000-owned; " +
-		"owner can replace descendants run as UID 0; " +
-		"fs.protected_hardlinks=1 blocks hard-linking root-owned executables"
+		"owner can replace descendants run as UID 0"
 	if got.Reason != want {
 		t.Fatalf("reason =\n  %q\nwant\n  %q", got.Reason, want)
 	}

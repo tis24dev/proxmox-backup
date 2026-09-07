@@ -52,6 +52,9 @@ type personalScriptComparison struct {
 	Current         personalScriptDiagnostic
 	Synchronization personalScriptSynchronization
 	SyncReason      string
+	// SyncDetail names WHICH compared fact moved, for the debug line only. The
+	// operator-facing SyncReason stays the same short sentence.
+	SyncDetail string
 }
 
 type personalScriptComparisons struct {
@@ -248,10 +251,14 @@ func personalScriptDiagnosticFromRuntime(
 		})
 	}
 	return personalScriptDiagnostic{
-		Key:        key,
-		Path:       in.Path,
+		Key:  key,
+		Path: in.Path,
+		// A daemon from before the advisory moved out of Reason wrote it INTO the
+		// stored text. Comparing that against a current Reason that no longer carries
+		// it would report PATH STATE CHANGED on every such daemon until it restarts,
+		// which is the very verdict this split exists to stop being wrong.
 		State:      state,
-		Reason:     in.Reason,
+		Reason:     withoutHardlinkAdvisory(in.Reason),
 		DaemonUID:  daemonUID,
 		Components: pathComponents,
 	}, true
@@ -289,14 +296,51 @@ func comparePersonalScript(
 		comparison.SyncReason = "restart the daemon to apply current personal-script configuration"
 		return comparison
 	}
-	if running.State != current.State || running.Reason != current.Reason ||
-		!reflect.DeepEqual(running.Components, current.Components) {
+	if changed := pathStateDifference(running, current); changed != "" {
 		comparison.Synchronization = personalScriptPathStateChanged
 		comparison.SyncReason = "path ownership or mode changed after daemon startup"
+		comparison.SyncDetail = changed
 		return comparison
 	}
 	comparison.Synchronization = personalScriptInSync
 	return comparison
+}
+
+// pathStateDifference names WHICH of the three compared facts moved, and is empty
+// when none did. The verdict says "path ownership or mode changed", so a reader who
+// disagrees needs to see which comparison produced it rather than re-deriving it.
+func pathStateDifference(running, current personalScriptDiagnostic) string {
+	switch {
+	case running.State != current.State:
+		return fmt.Sprintf("state %q -> %q", running.State, current.State)
+	// Normalised on both sides, not only where the stored state is read: this is the
+	// function whose contract is that a kernel setting cannot flip the verdict, and it
+	// has to hold for any diagnostic handed to it, however it was built.
+	case withoutHardlinkAdvisory(running.Reason) != withoutHardlinkAdvisory(current.Reason):
+		return fmt.Sprintf("reason %q -> %q", running.Reason, current.Reason)
+	case !reflect.DeepEqual(running.Components, current.Components):
+		return "path components differ in owner or mode"
+	}
+	return ""
+}
+
+// hardlinkAdvisoryPrefix opens every shape personalScriptHardlinkAdvisory can return:
+// the sysctl read, and the unreadable case.
+const hardlinkAdvisoryPrefix = "fs.protected_hardlinks"
+
+// withoutHardlinkAdvisory removes the advisory clause a daemon from before the split
+// appended to its stored Reason. Without it the two sides differ for a fact that is
+// no longer part of either, and every such daemon reports PATH STATE CHANGED until
+// it restarts.
+func withoutHardlinkAdvisory(reason string) string {
+	kept := make([]string, 0, 4)
+	for _, clause := range strings.Split(reason, "; ") {
+		if strings.HasPrefix(strings.TrimSpace(clause), hardlinkAdvisoryPrefix) {
+			continue
+		}
+		kept = append(kept, clause)
+	}
+	return strings.Join(kept, "; ")
 }
 
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:
@@ -427,6 +471,8 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
 	case personalScriptPathStateChanged:
 		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
+		logging.DebugStep(logger, "personal script synchronization",
+			"verdict=path-state-changed difference=%s", daemonDiagnosticText(comparison.SyncDetail))
 	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
 	case personalScriptSyncNotApplicable:
@@ -434,6 +480,17 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 	default:
 		logger.Warning("  Synchronization: UNKNOWN")
 	}
+}
+
+// logPersonalScriptHardlinkAdvisory puts the mitigation on its own line, next to the
+// side it describes. It is a live kernel reading, so only the CURRENT side can carry
+// one; the running side shows the path facts alone.
+func logPersonalScriptHardlinkAdvisory(logger *logging.Logger, label string, diagnostic personalScriptDiagnostic) {
+	advisory := daemonDiagnosticText(diagnostic.HardlinkAdvisory)
+	if advisory == "" {
+		return
+	}
+	logger.Warning("%s: %s", label, advisory)
 }
 
 func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnostic personalScriptDiagnostic) {
@@ -444,6 +501,7 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 		logger.Info("%s: READY (%s)", label, path)
 	case personalScriptReadyWithWarning:
 		logger.Warning("%s: READY WITH WARNING (%s): %s", label, path, reason)
+		logPersonalScriptHardlinkAdvisory(logger, label, diagnostic)
 	case personalScriptRefused:
 		if path == "" {
 			logger.Warning("%s: REFUSED: %s", label, reason)

@@ -60,7 +60,14 @@ type personalScriptDiagnostic struct {
 	// Reason between the two sides, so a note that only one side can ever carry would
 	// turn every IN SYNC into PATH STATE CHANGED.
 	Assignment string
-	Components []personalScriptPathComponent
+	// HardlinkAdvisory states whether the kernel setting the accepted foreign-owned
+	// ancestor rests on is in force. It is read from /proc/sys RIGHT NOW, so it is a
+	// fact about the KERNEL and not about the path, and it lives outside Reason for
+	// the same rule Assignment does: comparePersonalScript compares Reason between
+	// the two sides, so a clause that can change without the path moving turns a
+	// sysctl edit into PATH STATE CHANGED SINCE STARTUP.
+	HardlinkAdvisory string
+	Components       []personalScriptPathComponent
 }
 
 type personalScriptsDiagnostics struct {
@@ -220,12 +227,15 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 		if dir == "/" {
 			diagnostic.Path = clean
 			if len(foreign) > 0 {
-				// The mitigation the accepted ancestor rests on is named alongside
-				// the advisory, never separately: an operator reading "owner can
-				// replace descendants" needs to know in the same breath whether
-				// anything is stopping them.
+				// The mitigation the accepted ancestor rests on is reported with it,
+				// never separately: an operator reading "owner can replace
+				// descendants" needs to know in the same breath whether anything is
+				// stopping them. It rides its own field rather than the Reason text
+				// because it is a live kernel reading, not a fact about the path -
+				// see HardlinkAdvisory.
 				diagnostic.State = personalScriptReadyWithWarning
 				diagnostic.Reason = personalScriptForeignAncestorReason(foreign, daemonUID)
+				diagnostic.HardlinkAdvisory = personalScriptHardlinkAdvisory()
 			} else {
 				diagnostic.State = personalScriptReady
 			}
@@ -290,11 +300,10 @@ func personalScriptForeignAncestorReason(foreign []personalScriptForeignAncestor
 		}
 		paths[entry.UID] = append(paths[entry.UID], entry.Path)
 	}
-	clauses := make([]string, 0, len(order)+1)
+	clauses := make([]string, 0, len(order))
 	for _, uid := range order {
 		clauses = append(clauses, fmt.Sprintf("%s: UID %d-owned; owner can replace descendants run as UID %d",
 			strings.Join(paths[uid], ", "), uid, daemonUID))
 	}
-	clauses = append(clauses, personalScriptHardlinkAdvisory())
 	return strings.Join(clauses, "; ")
 }
