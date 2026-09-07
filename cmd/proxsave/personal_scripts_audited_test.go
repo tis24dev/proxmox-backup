@@ -707,3 +707,124 @@ func TestStartingTheDetachedScriptCannotParkTheShutdown(t *testing.T) {
 		t.Fatal("startPersonalScriptDetached never returned: the open of the parent directory is unbounded")
 	}
 }
+
+// parkedParentOpens counts the goroutines currently sitting in the parent-directory open that
+// os.OpenRoot performs. NumGoroutine would count every straggler the rest of the package left
+// behind; this counts only the ones this file is about, so the assertions below are exact
+// rather than tolerant.
+func parkedParentOpens(t *testing.T) int {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	stacks := string(buf[:runtime.Stack(buf, true)])
+	parked := 0
+	for _, goroutine := range strings.Split(stacks, "\n\n") {
+		if strings.Contains(goroutine, "os.openRootNolog") || strings.Contains(goroutine, "os.OpenRoot(") {
+			parked++
+		}
+	}
+	return parked
+}
+
+// waitForParkedParentOpens polls until the count settles on want, so a probe that has been
+// launched but has not yet reached the syscall does not decide the outcome. Every assertion
+// below is a DELTA against a baseline taken at the start of the test: a parked open never
+// returns on its own, so the tests in this file hand each other their stragglers and an
+// absolute count would only ever measure the order they ran in.
+func waitForParkedParentOpens(t *testing.T, want int, why string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := parkedParentOpens(t)
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: %d goroutines parked in the parent open, want %d", why, got, want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// personalScriptOpenTimeout bounds the WAIT, not the open: the goroutine it gives up on is
+// abandoned, and a parent that is a FIFO with no writer never lets that open return. One
+// abandoned goroutine is the price of not wedging the scheduler and is paid once; one per
+// invocation is a leak, because a goroutine parked in a syscall holds an OS thread and the Go
+// runtime kills the process at 10000 of them.
+//
+// The daemon calls this twice per backup run, pre and post, for as long as the condition
+// lasts, so nothing else bounds the count. This asserts the bound: while a probe for a path is
+// still outstanding, another call for that same path must refuse without launching a second.
+func TestATimedOutOpenLeavesOneProbeNoMatterHowManyRuns(t *testing.T) {
+	script := fifoParentScript(t)
+	base := parkedParentOpens(t)
+
+	for i := 0; i < 8; i++ {
+		if file := openPersonalScriptForExecution(script); file != nil {
+			_ = file.Close()
+			t.Fatalf("run %d opened a script whose parent is a FIFO", i)
+		}
+	}
+
+	waitForParkedParentOpens(t, base+1, "8 runs against one stuck path")
+}
+
+// The bound is per path, not global: a second script on a healthy path must still be opened
+// while the first one is stuck, and a second stuck path gets its own single probe rather than
+// being silenced by the first one's.
+func TestTheProbeBoundIsPerPathNotGlobal(t *testing.T) {
+	stuck := fifoParentScript(t)
+	base := parkedParentOpens(t)
+	if file := openPersonalScriptForExecution(stuck); file != nil {
+		_ = file.Close()
+		t.Fatal("opened a script whose parent is a FIFO")
+	}
+	waitForParkedParentOpens(t, base+1, "the first stuck path")
+
+	otherDir := t.TempDir()
+	otherFifo := filepath.Join(otherDir, "dd")
+	if err := syscall.Mkfifo(otherFifo, 0o755); err != nil {
+		t.Skipf("mkfifo is unavailable here: %v", err)
+	}
+	if file := openPersonalScriptForExecution(filepath.Join(otherFifo, "post.sh")); file != nil {
+		_ = file.Close()
+		t.Fatal("opened a second script whose parent is a FIFO")
+	}
+	waitForParkedParentOpens(t, base+2, "a second stuck path must get its own probe")
+
+	healthy := writePersonalScript(t, t.TempDir(), "ok.sh", "true")
+	file := openPersonalScriptForExecution(healthy)
+	if file == nil {
+		t.Fatal("a healthy script was refused while an unrelated path was stuck: the bound is global, not per path")
+	}
+	_ = file.Close()
+}
+
+// The bound must lift itself. A dead NFS or CIFS mount is the reachable way into this state and
+// it comes back, so once the abandoned open finally returns, the next run has to probe again
+// instead of refusing the script forever. Opening the FIFO for writing is what releases the
+// parked open here: it returns a descriptor, os.OpenRoot fstats it, sees it is not a directory
+// and fails - the goroutine ends, exactly as a recovered mount would end it.
+func TestTheProbeBoundLiftsWhenTheOpenFinallyReturns(t *testing.T) {
+	script := fifoParentScript(t)
+	base := parkedParentOpens(t)
+	if file := openPersonalScriptForExecution(script); file != nil {
+		_ = file.Close()
+		t.Fatal("opened a script whose parent is a FIFO")
+	}
+	waitForParkedParentOpens(t, base+1, "the stuck path")
+
+	writer, err := os.OpenFile(filepath.Dir(script), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("opening the FIFO for writing is what unblocks the parked open: %v", err)
+	}
+	waitForParkedParentOpens(t, base, "the parked open never returned after a writer arrived")
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close the writer so the path blocks again: %v", err)
+	}
+
+	if file := openPersonalScriptForExecution(script); file != nil {
+		_ = file.Close()
+		t.Fatal("opened a script whose parent is a FIFO")
+	}
+	waitForParkedParentOpens(t, base+1, "the path blocked again and the bound never lifted: the script is refused for the daemon's lifetime")
+}

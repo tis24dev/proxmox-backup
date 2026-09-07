@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -130,6 +131,47 @@ func configurePersonalScriptCmd(cmd *exec.Cmd, path string) *exec.Cmd {
 	return cmd
 }
 
+// personalScriptProbes holds the script paths whose parent-directory open was abandoned by
+// personalScriptOpenTimeout and has not come back. It is what keeps that abandonment from
+// being a leak.
+//
+// probeWithin bounds the WAIT, never the open, because a blocking open(2) cannot be cancelled
+// at all. One abandoned goroutine is the price of not wedging the scheduler and it buys a great
+// deal; one PER INVOCATION is a different thing, because a goroutine parked in a syscall holds
+// an OS thread and the Go runtime aborts the process at 10000 of them (runtime.maxmcount). The
+// daemon reaches here twice per backup run, pre and post, for as long as the condition lasts,
+// and nothing else counts them.
+//
+// So a path gets one outstanding probe and no more: while the previous one is still parked,
+// the script is refused without launching a second. The claim is released from inside the
+// probe, so the bound lifts itself the moment the open finally returns - which is what a
+// recovered NFS or CIFS mount does, and that mount is the reachable way into this state.
+var personalScriptProbes = struct {
+	sync.Mutex
+	inFlight map[string]bool
+}{inFlight: make(map[string]bool)}
+
+// claimPersonalScriptProbe reserves the single outstanding probe for path, reporting whether
+// this caller got it. A false answer means a previous open for that same path is still parked.
+func claimPersonalScriptProbe(path string) bool {
+	personalScriptProbes.Lock()
+	defer personalScriptProbes.Unlock()
+	if personalScriptProbes.inFlight[path] {
+		return false
+	}
+	personalScriptProbes.inFlight[path] = true
+	return true
+}
+
+// releasePersonalScriptProbe gives the claim back. It is called from inside the probe rather
+// than from openPersonalScriptForExecution, because the claim has to outlive the caller
+// exactly as long as the open outlives it.
+func releasePersonalScriptProbe(path string) {
+	personalScriptProbes.Lock()
+	defer personalScriptProbes.Unlock()
+	delete(personalScriptProbes.inFlight, path)
+}
+
 // openPersonalScriptForExecution opens the final component without following a symlink, then
 // validates the opened inode itself. OpenFileUnderRoot removes the variable-path gosec sink;
 // O_NONBLOCK stops a final component replaced by a FIFO from parking the check, and
@@ -141,11 +183,15 @@ func openPersonalScriptForExecution(path string) *os.File {
 	if !filepath.IsAbs(path) {
 		return nil
 	}
+	if !claimPersonalScriptProbe(path) {
+		return nil
+	}
 	// probeWithin's contract is the one this needs: the goroutine it gives up on is abandoned,
 	// not cancelled, because a blocking open cannot be cancelled at all. If that open ever does
 	// return, its *os.File is left in the buffered channel nobody reads and the runtime
 	// finalizer os.File carries closes the descriptor, so the straggler needs no drain here.
 	file, answered := probeWithin(personalScriptOpenTimeout, func() *os.File {
+		defer releasePersonalScriptProbe(path)
 		opened, err := safefs.OpenFileUnderRoot(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return nil
