@@ -67,6 +67,11 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 	bootstrap.Info("Configuration integrity check:")
 	bootstrap.Debug("Configuration integrity: file=%s lines=%d assignments=%d distinct=%d template=%d",
 		report.Path, report.Lines, report.Assignments, report.Distinct, report.TemplateVariables)
+	// Both halves of what counts as known, so the verdict can be reconstructed from the
+	// block instead of from the source: the template ASSIGNS some variables and only
+	// DOCUMENTS others on a commented line, and the audit reads both.
+	bootstrap.Debug("Configuration integrity: template assigns %d variables and documents %d more as commented examples",
+		report.TemplateVariables, report.TemplateDocumented)
 	if len(report.SkippedMultiValue) > 0 {
 		// These are the variables whose repetition CAN be legitimate, not the ones
 		// this run left alone: the block form replaces instead of concatenating, so
@@ -75,14 +80,30 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 			strings.Join(report.SkippedMultiValue, ", "))
 	}
 	for _, duplicated := range report.Duplicated {
-		bootstrap.Debug("Configuration integrity: %s assigned on lines %s; line %d wins",
-			duplicated.Name, joinLineNumbers(duplicated.Lines), duplicated.WinningLine)
+		// Which FORM won matters more than the line number: an ordinary assignment is
+		// last-wins, a block replaces everything before it and lets a later single line
+		// concatenate onto it. The two resolve in opposite ways, so naming the line
+		// without naming the form leaves the reader to guess which rule applied.
+		form := "last assignment wins"
+		if duplicated.ByBlock {
+			form = "block form: it replaces everything before it"
+		}
+		bootstrap.Debug("Configuration integrity: %s assigned on lines %s; line %d wins (%s)",
+			duplicated.Name, joinLineNumbers(duplicated.Lines), duplicated.WinningLine, form)
+	}
+	for _, known := range report.KnownOutsideTemplate {
+		bootstrap.Debug("Configuration integrity: %s is read although the template does not assign it: %s",
+			known.Name, known.Rule)
 	}
 	for _, name := range report.Absent {
 		bootstrap.Debug("Configuration integrity: %s present in embedded template, absent from file", name)
 	}
 	for _, name := range report.Unknown {
-		bootstrap.Debug("Configuration integrity: %s assigned in file, absent from embedded template", name)
+		// Name every gate that was tried rather than only the outcome: "absent from the
+		// template" was the OLD rule and, on its own, is exactly what made this category
+		// report working configuration as ignored.
+		bootstrap.Debug("Configuration integrity: %s is assigned in the file and matched no rule: %s",
+			name, config.UnknownRuleTrace())
 	}
 
 	for _, duplicated := range report.Duplicated {

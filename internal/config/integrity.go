@@ -24,11 +24,38 @@ type DuplicatedVariable struct {
 	Name        string
 	Lines       []int
 	WinningLine int
+	// ByBlock records that the winner is a BLOCK, which replaces everything before it,
+	// rather than an ordinary last assignment. The two forms resolve in opposite ways
+	// and the debug line has to say which one it saw.
+	ByBlock bool
 	// Discarded holds the lines whose value is thrown away, in file order. It is
 	// NOT "every line but the winner": an assignment that follows a block
 	// concatenates onto it and loses nothing, so it appears in Lines and not here.
 	Discarded []int
 }
+
+// KnownVariable is one variable the loader reads although the embedded template does
+// not assign it, together with the rule that says so in operator-facing words.
+type KnownVariable struct {
+	Name string
+	Rule string
+}
+
+// The rules templateKnows can accept a variable by, in the words the debug line uses.
+const (
+	knownDocumented  = "documented there as a commented example"
+	knownWebhook     = "per-endpoint webhook variable, WEBHOOK_<name>_<field>"
+	knownLegacyAlias = "legacy alias still read for files written before the rename"
+)
+
+// unknownRuleTrace is why a variable matched NO rule, spelled out rather than left as
+// the absence of a line: it names every gate that was tried, in the order they were.
+const unknownRuleTrace = "not assigned in the template, not documented there, not a webhook endpoint field, not a legacy alias"
+
+// UnknownRuleTrace is the operator-facing list of every gate a variable failed before
+// the audit called it unknown, exported so the renderer states the rules rather than
+// keeping its own copy of them.
+func UnknownRuleTrace() string { return unknownRuleTrace }
 
 // VariableAssignment describes HOW one variable is assigned in the audited file:
 // every line that assigns it, the one whose value is in effect, and whether that one
@@ -59,6 +86,15 @@ type ConfigIntegrityReport struct {
 	Duplicated        []DuplicatedVariable
 	Absent            []string
 	Unknown           []string
+
+	// TemplateDocumented counts the variables the template only DOCUMENTS on a
+	// commented line. With TemplateVariables it accounts for both halves of what the
+	// audit treats as known, so a wrong verdict can be reconstructed from the block.
+	TemplateDocumented int
+	// KnownOutsideTemplate names each variable accepted although the template does not
+	// assign it, with the rule that accepted it. This is the decision that used to be
+	// wrong, so it is the one an operator checking the block will be looking for.
+	KnownOutsideTemplate []KnownVariable
 
 	// assignments answers "how is this variable written in the file" for callers that
 	// need to explain ONE variable rather than list the file's findings, e.g. the
@@ -123,13 +159,14 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 	documented := scanDocumentedVariables(bufio.NewScanner(strings.NewReader(DefaultEnvTemplate())))
 
 	report := &ConfigIntegrityReport{
-		Path:              path,
-		Lines:             fileScan.lines,
-		Assignments:       fileScan.assignments,
-		Distinct:          len(fileScan.order),
-		TemplateVariables: len(templateScan.order),
-		SkippedMultiValue: skippedMultiValueVariables(),
-		assignments:       make(map[string]VariableAssignment, len(fileScan.order)),
+		Path:               path,
+		Lines:              fileScan.lines,
+		Assignments:        fileScan.assignments,
+		Distinct:           len(fileScan.order),
+		TemplateVariables:  len(templateScan.order),
+		SkippedMultiValue:  skippedMultiValueVariables(),
+		TemplateDocumented: len(documented),
+		assignments:        make(map[string]VariableAssignment, len(fileScan.order)),
 	}
 
 	for _, name := range fileScan.order {
@@ -150,10 +187,14 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 				Lines:       lines,
 				WinningLine: winning,
 				Discarded:   discarded,
+				ByBlock:     at[replacingAssignment(name, at)].block,
 			})
 		}
-		if !templateKnows(name, templateScan.assignedAt, documented) {
+		switch rule, known := templateKnows(name, templateScan.assignedAt, documented); {
+		case !known:
 			report.Unknown = append(report.Unknown, name)
+		case rule != "":
+			report.KnownOutsideTemplate = append(report.KnownOutsideTemplate, KnownVariable{Name: name, Rule: rule})
 		}
 	}
 	for _, name := range templateScan.order {
@@ -296,14 +337,22 @@ func replacingAssignment(upperKey string, at []envAssignment) int {
 // variables the template only DOCUMENTS as a commented example, the per-endpoint
 // webhook variables whose names are the operator's own, and the legacy notification
 // aliases no template has ever carried.
-func templateKnows(upperKey string, assigned map[string][]envAssignment, documented map[string]struct{}) bool {
+// It returns the rule that accepted the variable, empty when the template assigns it
+// outright and no rule was needed, and reports whether anything accepted it at all.
+func templateKnows(upperKey string, assigned map[string][]envAssignment, documented map[string]struct{}) (string, bool) {
 	if _, ok := assigned[upperKey]; ok {
-		return true
+		return "", true
 	}
 	if _, ok := documented[upperKey]; ok {
-		return true
+		return knownDocumented, true
 	}
-	return isWebhookEndpointVariable(upperKey) || legacyReadOnlyKeys[upperKey]
+	if isWebhookEndpointVariable(upperKey) {
+		return knownWebhook, true
+	}
+	if legacyReadOnlyKeys[upperKey] {
+		return knownLegacyAlias, true
+	}
+	return "", false
 }
 
 // scanDocumentedVariables collects the names the template DOCUMENTS on a commented

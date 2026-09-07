@@ -220,3 +220,44 @@ func TestABlockThatIsNotTheLastAssignmentNamesOnlyWhatItDiscards(t *testing.T) {
 		t.Fatalf("the debug line credits the last assignment, but line 2 is the winner:\n%s", logged)
 	}
 }
+
+// A finding is readable without the code only if the block says WHY the audit decided
+// what it decided. Three of those decisions are invisible today: why a variable that
+// the template never assigns was accepted anyway, why one that it never assigns was
+// NOT accepted, and which of the two write forms won a duplicate. All three are the
+// ones that were wrong before, so they are the ones an operator will be checking.
+func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
+	body := config.DefaultEnvTemplate() +
+		"WEBHOOK_ENDPOINTS=mine\n" +
+		"WEBHOOK_MINE_URL=https://example.invalid/hook\n" +
+		"SAFE_PROCESSES=\"ffmpeg\"\n" +
+		"EMAIL_ENABLE=true\n" +
+		"PERSONAL_SCRIPTS_PRERUN=/tmp/x\n" +
+		"CUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\n"
+	path := t.TempDir() + "/backup.env"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report, err := config.AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	logged := renderIntegrityBlock(t, report)
+
+	for _, want := range []string{
+		// why each variable outside the template's active assignments was accepted
+		"SAFE_PROCESSES is read although the template does not assign it: documented there as a commented example",
+		"WEBHOOK_MINE_URL is read although the template does not assign it: per-endpoint webhook variable, WEBHOOK_<name>_<field>",
+		"EMAIL_ENABLE is read although the template does not assign it: legacy alias still read for files written before the rename",
+		// why the one that was NOT accepted failed every rule
+		"PERSONAL_SCRIPTS_PRERUN is assigned in the file and matched no rule: not assigned in the template, not documented there, not a webhook endpoint field, not a legacy alias",
+		// which write form won, since the two resolve in opposite ways
+		"CUSTOM_BACKUP_PATHS assigned on lines 395, 467; line 467 wins (block form: it replaces everything before it)",
+		// the template's own two halves, so the counts above can be reconstructed
+		"template assigns 182 variables and documents",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("missing %q in:\n%s", want, logged)
+		}
+	}
+}
