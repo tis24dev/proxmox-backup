@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -110,4 +111,79 @@ func TestPVEGuestLockedWriterRejectsInvalidInputsBeforeExecution(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The apply refuses a RUNNING guest, but PVE has a second way of saying "busy": a
+// lock written into the config itself while a backup, a migration, a clone or a
+// snapshot is in progress, which a STOPPED guest can carry. Overriding it is the
+// decided behaviour - the marker is frequently left behind by an operation that
+// died, and refusing would block the operator in the one case the restore exists
+// for - so the requirement is that the override is stated, never silent.
+func TestOverridingAGuestLockIsReportedInsteadOfPassingSilently(t *testing.T) {
+	cases := map[string]struct {
+		helperOutput string
+		wantLine     string
+	}{
+		"a backup was in progress": {
+			helperOutput: "proxsave-lock: backup\n",
+			wantLine:     `Applied VM/CT config 101 (webserver) over a "backup" lock - PVE had the guest marked busy and that marker is now gone`,
+		},
+		"a migration was in progress": {
+			helperOutput: "proxsave-lock: migrate\n",
+			wantLine:     `Applied VM/CT config 101 (webserver) over a "migrate" lock - PVE had the guest marked busy and that marker is now gone`,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			orig := runPVEGuestLockHelper
+			t.Cleanup(func() { runPVEGuestLockHelper = orig })
+			runPVEGuestLockHelper = func(_ context.Context, _ ...string) ([]byte, error) {
+				return []byte(tc.helperOutput), nil
+			}
+
+			logger, buf := loggerCapturingOutput(t)
+			err := writeGuestConfigWithPVELock(
+				context.Background(), logger, "pve",
+				vmEntry{VMID: "101", Kind: "qemu", Name: "webserver", Path: "/var/tmp/staged/101.conf"},
+				guestMustBeStopped, []byte("name: webserver\n"),
+			)
+			if err != nil {
+				t.Fatalf("writeGuestConfigWithPVELock: %v", err)
+			}
+			logged := buf.String()
+			if !strings.Contains(logged, tc.wantLine) {
+				t.Fatalf("missing %q in:\n%s", tc.wantLine, logged)
+			}
+			if !strings.Contains(logged, "WARNING") {
+				t.Fatalf("overriding a lock must be a WARNING, not an INFO:\n%s", logged)
+			}
+		})
+	}
+}
+
+// A guest carrying no lock is the ordinary case and must gain no line at all.
+func TestAGuestWithoutALockGainsNoExtraLine(t *testing.T) {
+	orig := runPVEGuestLockHelper
+	t.Cleanup(func() { runPVEGuestLockHelper = orig })
+	runPVEGuestLockHelper = func(_ context.Context, _ ...string) ([]byte, error) { return nil, nil }
+
+	logger, buf := loggerCapturingOutput(t)
+	if err := writeGuestConfigWithPVELock(
+		context.Background(), logger, "pve",
+		vmEntry{VMID: "101", Kind: "qemu", Name: "webserver", Path: "/var/tmp/staged/101.conf"},
+		guestMustBeStopped, []byte("name: webserver\n"),
+	); err != nil {
+		t.Fatalf("writeGuestConfigWithPVELock: %v", err)
+	}
+	if strings.Contains(buf.String(), "lock") {
+		t.Fatalf("a guest with no lock must gain no line:\n%s", buf.String())
+	}
+}
+
+func loggerCapturingOutput(t *testing.T) (*logging.Logger, *bytes.Buffer) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(buf)
+	return logger, buf
 }

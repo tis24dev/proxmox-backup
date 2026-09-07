@@ -219,10 +219,7 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			return applied, failed
 		}
 		target := fmt.Sprintf("/nodes/%s/%s/%s/config", node, vm.Kind, vm.VMID)
-		display := vm.VMID
-		if vm.Name != "" {
-			display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
-		}
+		display := guestDisplay(vm)
 
 		resource, exists := inventory[vm.VMID]
 		if exists && resource.Node != node {

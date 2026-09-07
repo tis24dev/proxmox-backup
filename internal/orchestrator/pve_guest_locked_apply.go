@@ -114,8 +114,16 @@ my $apply = sub {
 
         # Loading the canonical same-kind config inside the lock also refuses a
         # concurrent move or deletion before the runtime-state decision.
-        $class->load_config($vmid, $node);
+        my $conf = $class->load_config($vmid, $node);
         die "guest $vmid is running; refusing locked file apply\n" if $is_running->();
+
+        # PVE marks a guest busy with a config-level lock while a backup, migration,
+        # clone or snapshot runs, and a STOPPED guest carries it just the same. The
+        # apply goes ahead regardless: that marker is frequently left behind by an
+        # operation that died, and refusing would block the restore in the very case
+        # it exists for. Report it instead, so the override reaches the operator.
+        my $lock = $conf->{lock};
+        print "proxsave-lock: $lock\n" if defined($lock) && $lock =~ m/\A[a-z-]+\z/;
     }
 
     eval { PVE::Tools::file_set_contents($target, $data, 0640); };
@@ -179,10 +187,55 @@ func writeGuestConfigWithPVELock(
 		}
 		return fmt.Errorf("PVE locked guest apply failed: %w", runErr)
 	}
+	if lock := parseOverriddenGuestLock(out); lock != "" {
+		logging.DebugStep(logger, "pve guest configs apply",
+			"vmid=%s lock=%s action=override-lock", vm.VMID, lock)
+		logger.Warning("Applied VM/CT config %s over a %q lock - PVE had the guest marked busy and that marker is now gone",
+			guestDisplay(vm), lock)
+	}
 	if detail := compactPVEGuestHelperOutput(out); detail != "" {
 		logger.Debug("PVE locked guest apply vmid=%s output: %s", vm.VMID, detail)
 	}
 	return nil
+}
+
+// pveGuestLockMarker is how the helper reports a config-level lock it wrote over. It
+// is its own line rather than part of an error because the apply SUCCEEDS: overriding
+// is the decided behaviour, and this is the record of it.
+const pveGuestLockMarker = "proxsave-lock:"
+
+// parseOverriddenGuestLock reads the lock name out of the helper output. The value
+// comes from a guest config file, so it is accepted only as a bare lowercase word -
+// PVE's own set (backup, migrate, clone, snapshot, rollback) fits and anything else
+// is dropped rather than put in a log line.
+func parseOverriddenGuestLock(out []byte) string {
+	for _, line := range strings.Split(string(out), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), pveGuestLockMarker)
+		if !ok {
+			continue
+		}
+		lock := strings.TrimSpace(rest)
+		if lock == "" || len(lock) > 32 {
+			return ""
+		}
+		for _, r := range lock {
+			if (r < 'a' || r > 'z') && r != '-' {
+				return ""
+			}
+		}
+		return lock
+	}
+	return ""
+}
+
+// guestDisplay is how a guest is named in every operator-facing line of the apply,
+// the VMID alone when the export carries no name. It lives in one place so the
+// applied line and the override line above it cannot drift apart.
+func guestDisplay(vm vmEntry) string {
+	if strings.TrimSpace(vm.Name) == "" {
+		return vm.VMID
+	}
+	return fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
 }
 
 func compactPVEGuestHelperOutput(out []byte) string {
