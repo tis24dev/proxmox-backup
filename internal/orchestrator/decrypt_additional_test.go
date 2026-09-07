@@ -137,7 +137,7 @@ func TestPrepareDecryptedBackup_SuccessPlain(t *testing.T) {
 	t.Cleanup(prepared.Cleanup)
 
 	if cand.Source != sourceRaw {
-		t.Fatalf("candidate Source=%q; want %q", cand.Source, sourceRaw)
+		t.Fatalf("candidate Source=%v; want %v", cand.Source, sourceRaw)
 	}
 	if prepared.Manifest.EncryptionMode != "none" {
 		t.Fatalf("prepared manifest EncryptionMode=%q; want %q", prepared.Manifest.EncryptionMode, "none")

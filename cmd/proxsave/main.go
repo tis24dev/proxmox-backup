@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	goRuntimeMinVersion           = "1.25.13"
+	goRuntimeMinVersion           = "1.26.8"
 	networkPreflightTimeout       = 2 * time.Second
 	bytesPerMegabyte        int64 = 1024 * 1024
 	defaultDirPerm                = 0o755
