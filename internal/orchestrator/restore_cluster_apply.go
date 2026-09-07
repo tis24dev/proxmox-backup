@@ -245,6 +245,21 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			// the cluster-wide absence check before doing so. Its disks are not
 			// part of a config restore and the log says so.
 			if err := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeAbsent); err != nil {
+				// A registration claims the VMID cluster-wide BEFORE the staged conf is
+				// written, and the helper's own cleanup only runs when that write
+				// returns an error. A cancelled restore kills the helper outright, so
+				// nothing runs and the claim can outlive the run as an empty,
+				// create-locked guest on a VMID nobody can reuse. It cannot be made
+				// atomic - the process can die at any instant - so say what may be
+				// left rather than leave the operator to find it.
+				if ctx.Err() != nil {
+					logging.DebugStep(logger, "pve guest configs apply",
+						"vmid=%s classification=absent action=aborted-mid-registration", vm.VMID)
+					logger.Warning("Aborted while registering VM/CT config %s: VMID %s may be left reserved and locked on the cluster",
+						display, vm.VMID)
+					failed++
+					continue
+				}
 				logger.Warning("Failed to register VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
 				failed++
 				continue

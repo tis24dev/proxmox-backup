@@ -576,3 +576,44 @@ func TestStorageApplyNamesTheKeysThatWereRefused(t *testing.T) {
 		})
 	}
 }
+
+// Registering a guest that does not exist yet claims the VMID cluster-wide FIRST and
+// writes the staged conf second. The helper's own cleanup only runs when that second
+// write returns an error; a cancelled restore kills the process outright, so nothing
+// runs and the claim can outlive the run as an empty, create-locked guest holding a
+// VMID nobody can reuse. It cannot be made atomic - the process can die at any
+// instant - so the run has to say what it may have left behind.
+func TestAnAbortedRegistrationNamesTheVMIDItMayHaveLeftBehind(t *testing.T) {
+	fakeFS, pvesh, _, _ := guestApplyFixture(t)
+	_ = pvesh
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// The loop's own ctx check passes, and the cancellation lands INSIDE the helper,
+	// which is the only interleaving that can leave the claim behind.
+	pveGuestLockedWriter = func(
+		_ context.Context, _ *logging.Logger, _ string,
+		_ vmEntry, precondition guestApplyPrecondition, _ []byte,
+	) error {
+		if precondition != guestMustBeAbsent {
+			t.Fatalf("precondition = %q, want absent", precondition)
+		}
+		cancel()
+		return context.Canceled
+	}
+
+	if err := fakeFS.AddFile("/stage/101.conf", []byte("name: webserver\n")); err != nil {
+		t.Fatal(err)
+	}
+	buf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(buf)
+
+	applyVMConfigs(ctx, []vmEntry{{VMID: "101", Kind: "qemu", Name: "webserver", Path: "/stage/101.conf"}}, logger)
+
+	want := "Aborted while registering VM/CT config 101 (webserver): VMID 101 may be left reserved and locked on the cluster"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
+	}
+}
