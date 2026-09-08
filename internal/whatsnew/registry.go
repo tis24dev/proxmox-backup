@@ -162,7 +162,8 @@ var notes = []Note{
 			"A value you wrote is no longer discarded in silence when the same variable is set again further down the file",
 			"Daemon status says why a personal script reads as not configured: absent from backup.env, empty, or overwritten",
 			"The configuration check names a legacy variable and says which of the old and the new name is the one in use",
-			"A restore reports a storage definition it could not put back, instead of counting it as applied",
+			"A variable ProxSave reads is no longer called unknown and ignored, so nothing tells you to delete a working setting",
+			"A restore counts a storage definition as applied only when it can show it: otherwise it says failed or unknown",
 			"A restore says when it wrote a guest configuration while Proxmox had that guest marked busy",
 			"An aborted restore names the VMID it may have left reserved and locked on the cluster",
 		},
@@ -170,6 +171,7 @@ var notes = []Note{
 			"If a run reports a variable set twice, the warning names the line that wins: delete the other one",
 			"If a run reports absent variables, merge them from the dashboard: Maintenance > Upgrade > Check config",
 			"If a run reports a legacy variable set alongside its current name, delete the one the line says has no effect",
+			"If an earlier version said a variable is not known and is ignored, check it again before deleting that line",
 		},
 	},
 }
