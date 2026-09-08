@@ -49,9 +49,16 @@ type LegacyVariable struct {
 }
 
 // legacyAliases is every name the loader reads as a stand-in for a canonical one, with
-// the order the loader consults them in. Derived from the getStringWithFallback and
-// getBoolWithFallback call sites: whichever name is listed FIRST there is the one that
-// wins, and that is what Wins records here.
+// the order the loader consults them in: whichever name a call site lists FIRST is the
+// one that wins, and that is what Wins records here.
+//
+// It is hand-written, and it was hand-written from only TWO of the four fallback
+// helpers - getStringWithFallback and getBoolWithFallback. getIntWithFallback,
+// getStringSliceWithFallback and half the getBoolWithFallback sites were never read,
+// so eleven names the loader honours were reported to the operator as "not a known
+// variable and is ignored". TestEveryFallbackNameIsRegisteredOrInTheTemplate now
+// derives the same list from config.go with go/ast and fails naming the call site, so
+// the twelfth cannot arrive in silence.
 var legacyAliases = map[string]LegacyVariable{
 	"LOCAL_BACKUP_PATH":       {Canonical: "BACKUP_PATH", Wins: true},
 	"LOCAL_LOG_PATH":          {Canonical: "LOG_PATH", Wins: true},
@@ -68,6 +75,26 @@ var legacyAliases = map[string]LegacyVariable{
 	gotifyEnableLegacyKey:     {Canonical: gotifyEnabledKey},
 	webhookEnableLegacyKey:    {Canonical: webhookEnabledKey},
 	emailFallbackPMFLegacyKey: {Canonical: emailFallbackSendmailKey},
+
+	// The eleven from the helpers this table was never derived from. Every one of
+	// these call sites lists the canonical name first and the canonical name is the
+	// one the template assigns, so none of them wins.
+	"FULL_SECURITY_CHECK":        {Canonical: "SECURITY_CHECK_ENABLED"},
+	"CLOUD_CONNECTIVITY_TIMEOUT": {Canonical: "RCLONE_TIMEOUT_CONNECTION"},
+	"LOCAL_RETENTION_DAYS":       {Canonical: "MAX_LOCAL_BACKUPS"},
+	"SECONDARY_RETENTION_DAYS":   {Canonical: "MAX_SECONDARY_BACKUPS"},
+	"CLOUD_RETENTION_DAYS":       {Canonical: "MAX_CLOUD_BACKUPS"},
+	"PROMETHEUS_TEXTFILE_DIR":    {Canonical: "METRICS_PATH"},
+	"BACKUP_REMOTE_CFG":          {Canonical: "BACKUP_REMOTE_CONFIGS"},
+	"BACKUP_NETWORK_CONFIG":      {Canonical: "BACKUP_NETWORK_CONFIGS"},
+	"BACKUP_PXAR_FILES":          {Canonical: "PXAR_SCAN_ENABLE"},
+	"PXAR_INCLUDE_PATTERN":       {Canonical: "PXAR_FILE_INCLUDE_PATTERN"},
+	"BACKUP_CRONTABS":            {Canonical: "BACKUP_CRON_JOBS"},
+
+	// Read by hand rather than through a helper (config.go:690-693 falls back to
+	// AGE_RECIPIENTS only when AGE_RECIPIENT yielded nothing), so the AST test above
+	// cannot see it and it has to be kept here deliberately.
+	"AGE_RECIPIENTS": {Canonical: "AGE_RECIPIENT"},
 }
 
 // KnownVariable is one variable the loader reads although the embedded template does
