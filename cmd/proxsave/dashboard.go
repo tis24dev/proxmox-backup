@@ -108,16 +108,56 @@ func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
 }
 
 // whatsnewRender pushes Screen 0 (body) onto session, bounded by the total
-// whatsnewScreenTimeout, and clears the seen-flag ONLY on an explicit continue
-// (err == nil): a timeout (context.DeadlineExceeded) or Esc (shell.ErrAborted) is a
-// non-nil error and leaves the flag untouched, so the write stays out of any
-// defer/teardown and the fallback warning keeps firing next run (SCRN-03/04, Pitfall 9).
+// whatsnewScreenTimeout, and marks the notes seen once the screen has been shown,
+// HOWEVER the operator left it: continue, Esc, q, Ctrl+C (shell.ErrClosed) or the
+// timeout.
+//
+// It used to write only on an explicit continue, so reading the notes and closing
+// with Esc or Ctrl+C, which is what most people do, left the flag unwritten. The
+// next scheduled backup then logged "has unseen release notes" as a WARNING,
+// ParseLogCounts counted it, and applyIssueExitCode promoted an otherwise clean
+// run to exit 1, which the daemon reports to Healthchecks as down (issue #305).
+// Demanding a specific keystroke to disarm that is not a gate, it is a trap.
+//
+// Nothing is lost by dropping the confirmation, because presence is established
+// BEFORE this point and not by which key was pressed: showWhatsnewScreen and
+// maybeShowWhatsnew both gate on a real terminal (dashboardIsInteractive), the
+// post-upgrade hand-off gates on whatsnewAfterUpgradeInteractive, and --dry-run
+// returns before rendering. An unattended run never reaches this function, so
+// reaching it means a person saw the screen.
 func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVersion, body string) {
 	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
 	defer cancel()
-	if whatsnewRun(wnCtx, session, body) == nil {
-		_ = whatsnewSaveSeen(baseDir, toolVersion)
+	err := whatsnewRun(wnCtx, session, body)
+	// A torn-down PARENT means the screen never really ran: an external SIGINT or
+	// SIGTERM, which setupRunContextWithSignals maps to ctx cancellation. A Ctrl+C
+	// typed INTO the screen does not land here, because the terminal is in raw mode
+	// and bubbletea reads it as a key the router turns into tea.Interrupt.
+	if ctx.Err() != nil {
+		return
 	}
+	// The 10-minute timeout is the other exit that does not count, and it is the only
+	// one the interactivity gate cannot rule out. isTerminalInteractive proves a
+	// TERMINAL, not a person: a detached tmux window, an expect script or an `ssh -t`
+	// from a wrapper all carry a real TTY. Every OTHER resolution is a keystroke, so
+	// it is evidence a person was there; sitting untouched for ten minutes is the
+	// opposite.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	// The last exit that does not count, and the one the timeout check cannot cover:
+	// shell.Ask returns ErrClosed for a program that DIED as well as for ctrl+c, so
+	// saving on every non-timeout error marked the notes seen after a renderer or
+	// terminal failure the operator never got to read past. Only an interrupt is a
+	// person; every other closed session is the UI going away on its own.
+	//
+	// Esc and q do NOT come through here at all - the pager resolves them itself, as
+	// nil or as its abort sentinel - so narrowing this arm cannot re-arm the warning
+	// for the keystrokes issue #305 was about.
+	if errors.Is(err, shell.ErrClosed) && !shell.IsUserInterrupt(err) {
+		return
+	}
+	_ = whatsnewSaveSeen(baseDir, toolVersion)
 }
 
 // showWhatsnewScreen runs ONLY Screen 0 (what's new) and returns, without the dashboard
@@ -296,8 +336,9 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			continue
 		case dashboardActionReload:
 			keepAlive = true
-			closeDashboardAndRelaunch(ctx, session, getExecInfo().ExecPath, bootstrap)
-			return types.ExitSuccess.Int(), true
+			// The reloaded dashboard's own exit code, not a blanket success: the
+			// operator's session happened in THAT process.
+			return closeDashboardAndRelaunch(ctx, session, getExecInfo().ExecPath, bootstrap), true
 		}
 
 		switch action {
@@ -1029,18 +1070,18 @@ func buildDashboardPersonalScriptComparison(label string, runtime daemonRuntimeD
 	b.WriteString("\n")
 	switch runtime.Availability {
 	case daemonRuntimeAvailable:
-		b.WriteString(buildDashboardPersonalScriptLine("  Running daemon", comparison.Running))
+		b.WriteString(buildDashboardPersonalScriptLine("  Daemon now", comparison.Running))
 	case daemonRuntimeNotApplicable:
-		b.WriteString(theme.Subtle.Render("  Running daemon: NOT RUNNING"))
+		b.WriteString(theme.Subtle.Render("  Daemon now: NOT RUNNING"))
 	default:
 		reason := components.SanitizeText(runtime.Reason)
-		b.WriteString(theme.WarningText.Render("  Running daemon state: UNAVAILABLE"))
+		b.WriteString(theme.WarningText.Render("  Daemon now: UNAVAILABLE"))
 		if reason != "" {
 			b.WriteString(theme.Subtle.Render(" (" + reason + ")"))
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(buildDashboardPersonalScriptLine("  Current configuration", comparison.Current))
+	b.WriteString(buildDashboardPersonalScriptLine("  Configuration", comparison.Current))
 	b.WriteString("\n")
 	b.WriteString(buildDashboardPersonalScriptSynchronization(comparison))
 	return b.String()
@@ -1083,6 +1124,17 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		if reason != "" {
 			line += theme.Subtle.Render(": " + reason)
 		}
+		// The mitigation the accepted ancestor RESTS ON, on its own line under the
+		// verdict, exactly where logPersonalScriptDiagnostic puts it. Leaving it out
+		// showed the trust decision without what stands behind it, on the screen an
+		// operator is most likely to be reading.
+		if advisory := components.SanitizeText(diagnostic.HardlinkAdvisory); advisory != "" {
+			style := theme.WarningText
+			if diagnostic.HardlinkProtectionInForce {
+				style = theme.Subtle
+			}
+			line += "\n" + theme.Text.Render(label+": ") + style.Render(advisory)
+		}
 	case personalScriptRefused:
 		line += theme.ErrorText.Render("REFUSED")
 		if path != "" {
@@ -1098,6 +1150,9 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		}
 	default:
 		line += theme.Subtle.Render("NOT CONFIGURED")
+		if assignment := components.SanitizeText(diagnostic.Assignment); assignment != "" {
+			line += theme.Subtle.Render(" (" + assignment + ")")
+		}
 	}
 	return line
 }

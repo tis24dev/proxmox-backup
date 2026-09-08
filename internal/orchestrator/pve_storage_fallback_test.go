@@ -39,7 +39,7 @@ func TestApplyStorageCfgFallsBackToSetOnAnExistingStorage(t *testing.T) {
 	}
 
 	logger := logging.New(types.LogLevelDebug, false)
-	applied, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
+	applied, _, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
 	if err != nil {
 		t.Fatalf("applyStorageCfg: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestApplyStorageCfgStillFailsWhenCreateAndSetBothFail(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := logging.New(types.LogLevelDebug, false)
-	applied, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
+	applied, _, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
 	if err != nil {
 		t.Fatalf("applyStorageCfg: %v", err)
 	}

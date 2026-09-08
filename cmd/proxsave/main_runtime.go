@@ -207,6 +207,10 @@ func loadRunConfig(args *cli.Args, bootstrap *logging.BootstrapLogger) (*config.
 }
 
 func validateRunConfig(rt *appRuntime) (int, bool) {
+	// Before printDryRunBootstrapStatus, which closes the configuration section with a
+	// blank line, and well before the effective-settings recap: a value the loader
+	// discarded has to be reported before the recap that shows the surviving one.
+	auditRunConfigFile(rt)
 	printDryRunBootstrapStatus(rt)
 	if err := validateFutureFeatures(rt.cfg); err != nil {
 		rt.bootstrap.Error("Invalid configuration: %v", err)

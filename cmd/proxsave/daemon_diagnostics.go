@@ -52,6 +52,9 @@ type personalScriptComparison struct {
 	Current         personalScriptDiagnostic
 	Synchronization personalScriptSynchronization
 	SyncReason      string
+	// SyncDetail names WHICH compared fact moved, for the debug line only. The
+	// operator-facing SyncReason stays the same short sentence.
+	SyncDetail string
 }
 
 type personalScriptComparisons struct {
@@ -143,6 +146,7 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr er
 	if cfg != nil {
 		currentConfigPath = cfg.ConfigPath
 	}
+	annotatePersonalScriptAssignments(&currentScripts, currentConfigPath)
 	scripts := personalScriptComparisons{
 		Pre: comparePersonalScript(
 			runtimeDiagnostic, currentConfigPath, runningScripts.Pre, currentScripts.Pre,
@@ -247,10 +251,14 @@ func personalScriptDiagnosticFromRuntime(
 		})
 	}
 	return personalScriptDiagnostic{
-		Key:        key,
-		Path:       in.Path,
+		Key:  key,
+		Path: in.Path,
+		// A daemon from before the advisory moved out of Reason wrote it INTO the
+		// stored text. Comparing that against a current Reason that no longer carries
+		// it would report PATH STATE CHANGED on every such daemon until it restarts,
+		// which is the very verdict this split exists to stop being wrong.
 		State:      state,
-		Reason:     in.Reason,
+		Reason:     withoutHardlinkAdvisory(in.Reason),
 		DaemonUID:  daemonUID,
 		Components: pathComponents,
 	}, true
@@ -288,14 +296,55 @@ func comparePersonalScript(
 		comparison.SyncReason = "restart the daemon to apply current personal-script configuration"
 		return comparison
 	}
-	if running.State != current.State || running.Reason != current.Reason ||
-		!reflect.DeepEqual(running.Components, current.Components) {
+	if changed := pathStateDifference(running, current); changed != "" {
 		comparison.Synchronization = personalScriptPathStateChanged
 		comparison.SyncReason = "path ownership or mode changed after daemon startup"
+		comparison.SyncDetail = changed
 		return comparison
 	}
 	comparison.Synchronization = personalScriptInSync
 	return comparison
+}
+
+// pathStateDifference names WHICH of the three compared facts moved, and is empty
+// when none did. The verdict says "path ownership or mode changed", so a reader who
+// disagrees needs to see which comparison produced it rather than re-deriving it.
+func pathStateDifference(running, current personalScriptDiagnostic) string {
+	switch {
+	case running.State != current.State:
+		return fmt.Sprintf("state %q -> %q", running.State, current.State)
+	// Normalised on both sides, not only where the stored state is read: this is the
+	// function whose contract is that a kernel setting cannot flip the verdict, and it
+	// has to hold for any diagnostic handed to it, however it was built.
+	case withoutHardlinkAdvisory(running.Reason) != withoutHardlinkAdvisory(current.Reason):
+		return fmt.Sprintf("reason %q -> %q", running.Reason, current.Reason)
+	case !reflect.DeepEqual(running.Components, current.Components):
+		return "path components differ in owner or mode"
+	}
+	return ""
+}
+
+// hardlinkAdvisoryPrefix opens every shape personalScriptHardlinkAdvisory can return:
+// the sysctl read, and the unreadable case.
+const hardlinkAdvisoryPrefix = "fs.protected_hardlinks"
+
+// withoutHardlinkAdvisory removes the advisory a daemon from before the split appended
+// to its stored Reason. Without it the two sides differ for a fact that is no longer
+// part of either, and every such daemon reports PATH STATE CHANGED until it restarts.
+//
+// It cuts from the prefix to the END of the string rather than filtering "; "-separated
+// clauses, because the advisory is not one clause. The disabled shape is
+// "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1" -
+// a filter split on "; " dropped the half that carries the prefix and kept "set it to
+// 1", so the stored side came out one clause longer than the live one and produced the
+// very verdict this function exists to stop. The cut is safe because there is one
+// producer, personalScriptForeignAncestorReason, and it appends the advisory last.
+func withoutHardlinkAdvisory(reason string) string {
+	start := strings.Index(reason, hardlinkAdvisoryPrefix)
+	if start < 0 {
+		return reason
+	}
+	return strings.TrimSuffix(strings.TrimSpace(reason[:start]), ";")
 }
 
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:
@@ -407,13 +456,13 @@ func logPersonalScriptComparison(logger *logging.Logger, label string, runtime d
 	logger.Info("%s:", label)
 	switch runtime.Availability {
 	case daemonRuntimeAvailable:
-		logPersonalScriptDiagnostic(logger, "  Running daemon", comparison.Running)
+		logPersonalScriptDiagnostic(logger, "  Daemon now", comparison.Running)
 	case daemonRuntimeNotApplicable:
-		logger.Info("  Running daemon: NOT RUNNING")
+		logger.Info("  Daemon now: NOT RUNNING")
 	default:
-		logger.Warning("  Running daemon state: UNAVAILABLE (%s)", daemonDiagnosticText(runtime.Reason))
+		logger.Warning("  Daemon now: UNAVAILABLE (%s)", daemonDiagnosticText(runtime.Reason))
 	}
-	logPersonalScriptDiagnostic(logger, "  Current configuration", comparison.Current)
+	logPersonalScriptDiagnostic(logger, "  Configuration", comparison.Current)
 	logPersonalScriptSynchronization(logger, comparison)
 }
 
@@ -425,6 +474,10 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 	case personalScriptConfigurationDrift:
 		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
 	case personalScriptPathStateChanged:
+		// The difference is what was detected; the verdict is what was concluded from
+		// it, so the evidence goes first.
+		logging.DebugStep(logger, "personal script synchronization",
+			"verdict=path-state-changed difference=%s", daemonDiagnosticText(comparison.SyncDetail))
 		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
 	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
@@ -435,6 +488,27 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 	}
 }
 
+// logPersonalScriptHardlinkAdvisory puts the mitigation on its own line, next to the
+// side it describes. It is a live kernel reading, so only the CURRENT side can carry
+// one; the running side shows the path facts alone.
+//
+// The LEVEL follows the reading rather than the field being present, because the two
+// readings say opposite things. Protection off, or unreadable, leaves the accepted
+// ancestor with nothing behind it and is a WARNING. Protection in force is the
+// reassurance that the trust decision holds, and announcing that as a WARNING put it
+// among lines that all mean the opposite.
+func logPersonalScriptHardlinkAdvisory(logger *logging.Logger, label string, diagnostic personalScriptDiagnostic) {
+	advisory := daemonDiagnosticText(diagnostic.HardlinkAdvisory)
+	if advisory == "" {
+		return
+	}
+	if diagnostic.HardlinkProtectionInForce {
+		logger.Info("%s: %s", label, advisory)
+		return
+	}
+	logger.Warning("%s: %s", label, advisory)
+}
+
 func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnostic personalScriptDiagnostic) {
 	path := daemonDiagnosticText(diagnostic.Path)
 	reason := daemonDiagnosticText(diagnostic.Reason)
@@ -443,6 +517,7 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 		logger.Info("%s: READY (%s)", label, path)
 	case personalScriptReadyWithWarning:
 		logger.Warning("%s: READY WITH WARNING (%s): %s", label, path, reason)
+		logPersonalScriptHardlinkAdvisory(logger, label, diagnostic)
 	case personalScriptRefused:
 		if path == "" {
 			logger.Warning("%s: REFUSED: %s", label, reason)
@@ -452,6 +527,10 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 	case personalScriptUnknown:
 		logger.Warning("%s: UNKNOWN: %s", label, reason)
 	default:
+		if assignment := daemonDiagnosticText(diagnostic.Assignment); assignment != "" {
+			logger.Info("%s: NOT CONFIGURED (%s)", label, assignment)
+			return
+		}
 		logger.Info("%s: NOT CONFIGURED", label)
 	}
 }

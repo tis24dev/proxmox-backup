@@ -86,7 +86,7 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 	}
 	emailAdapter := orchestrator.NewNotificationAdapter(emailNotifier, logger)
 	orch.RegisterNotificationChannel(emailAdapter)
-	logging.Info("✓ Email initialized (method: %s)", cfg.EmailDeliveryMethod)
+	logging.Info("✓ Email initialized (mode: %s)", cfg.EmailDeliveryMethod)
 }
 
 // initializeHealthcheckSection verifies the healthchecks config at run start and

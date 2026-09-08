@@ -31,7 +31,7 @@ func TestSetFallbackSendsNothingWhenNoKeyIsSettable(t *testing.T) {
 	restoreCmd = pvesh
 	logger, _ := nothingSettableLogger(t)
 
-	changed, err := pveshSetStorageDroppingCreateOnly(context.Background(), logger, "local", nil)
+	changed, _, err := pveshSetStorageDroppingCreateOnly(context.Background(), logger, "local", nil)
 	if err != nil {
 		t.Fatalf("an empty set is nothing to do, not a failure: %v", err)
 	}
@@ -43,28 +43,38 @@ func TestSetFallbackSendsNothingWhenNoKeyIsSettable(t *testing.T) {
 	}
 }
 
-// Two shapes reach the caller with a successful fallback that sent nothing: the
-// block with no settable key at all, and the block whose every key came back
-// refused as create-only. Announcing either as "Updated existing storage
-// definition" claims a write that never happened.
+// Two shapes reach the caller with a successful fallback that sent nothing, and
+// announcing either as "Updated existing storage definition" claims a write that
+// never happened. They are NOT the same fact, though, and they render neither as one
+// line nor in one count: a block with no settable key really does already match
+// everything this restore could change, and that is an apply; a block whose every key
+// came back refused, on a node whose live definition cannot answer, is neither applied
+// nor failed and is counted as unknown.
 func TestApplyStorageCfgDoesNotClaimAnUpdateItNeverSent(t *testing.T) {
 	tests := []struct {
-		name     string
-		cfg      string
-		id       string
-		wantSets int
+		name        string
+		cfg         string
+		id          string
+		wantSets    int
+		wantApplied int
+		wantUnknown int
+		wantLine    string
 	}{
 		{
-			name:     "no settable key",
-			cfg:      "dir: local\n",
-			id:       "local",
-			wantSets: 0,
+			name:        "no settable key",
+			cfg:         "dir: local\n",
+			id:          "local",
+			wantSets:    0,
+			wantApplied: 1,
+			wantLine:    "Storage definition local already matches every settable key",
 		},
 		{
-			name:     "every key refused as create-only",
-			cfg:      "dir: onlypath\n\tpath /var/lib/vz\n",
-			id:       "onlypath",
-			wantSets: 1,
+			name:        "every key refused as create-only",
+			cfg:         "dir: onlypath\n\tpath /var/lib/vz\n",
+			id:          "onlypath",
+			wantSets:    1,
+			wantUnknown: 1,
+			wantLine:    "Applied nothing for storage onlypath: every staged key refused, not comparable (path)",
 		},
 	}
 
@@ -83,12 +93,13 @@ func TestApplyStorageCfgDoesNotClaimAnUpdateItNeverSent(t *testing.T) {
 			}
 			logger, buf := nothingSettableLogger(t)
 
-			applied, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
+			applied, unknown, failed, err := applyStorageCfg(context.Background(), "/stage/etc/pve/storage.cfg", logger)
 			if err != nil {
 				t.Fatalf("applyStorageCfg: %v", err)
 			}
-			if applied != 1 || failed != 0 {
-				t.Fatalf("applied=%d failed=%d, want 1/0: an already-matching definition is not a failure", applied, failed)
+			if applied != tc.wantApplied || unknown != tc.wantUnknown || failed != 0 {
+				t.Fatalf("applied=%d unknown=%d failed=%d, want %d/%d/0: nothing here was established as a failure",
+					applied, unknown, failed, tc.wantApplied, tc.wantUnknown)
 			}
 
 			sets := strings.Count(strings.Join(pvesh.calls, "\n"), "set /storage/"+tc.id)
@@ -97,8 +108,8 @@ func TestApplyStorageCfgDoesNotClaimAnUpdateItNeverSent(t *testing.T) {
 			}
 
 			out := buf.String()
-			if !strings.Contains(out, "Storage definition "+tc.id+" already matches every settable key") {
-				t.Fatalf("the outcome does not say nothing was sent:\n%s", out)
+			if !strings.Contains(out, tc.wantLine) {
+				t.Fatalf("missing %q in:\n%s", tc.wantLine, out)
 			}
 			if strings.Contains(out, "Updated existing storage definition "+tc.id) {
 				t.Fatalf("an update was announced without a single key reaching the node:\n%s", out)
@@ -120,7 +131,7 @@ func TestSetFallbackConvergesWhenMostKeysAreRefused(t *testing.T) {
 	restoreCmd = runner
 	logger, _ := nothingSettableLogger(t)
 
-	changed, err := pveshSetStorageDroppingCreateOnly(context.Background(), logger, "nas",
+	changed, _, err := pveshSetStorageDroppingCreateOnly(context.Background(), logger, "nas",
 		[]string{"--server=10.0.0.1", "--export=/srv/backups", "--content=backup"})
 	if err != nil {
 		t.Fatalf("the retry gave up before converging: %v", err)

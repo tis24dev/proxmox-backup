@@ -267,8 +267,8 @@ func TestLogDaemonDiagnosticsUsesStandardEnvelopeAndSeverity(t *testing.T) {
 	out := buf.String()
 
 	start := strings.Index(out, "DEBUG    Start daemon diagnostics")
-	ready := strings.Index(out, "INFO       Running daemon: READY")
-	warning := strings.Index(out, "WARNING    Running daemon: READY WITH WARNING")
+	ready := strings.Index(out, "INFO       Daemon now: READY")
+	warning := strings.Index(out, "WARNING    Daemon now: READY WITH WARNING")
 	end := strings.Index(out, "DEBUG    End daemon diagnostics")
 	if start < 0 || ready < 0 || warning < 0 || end < 0 || start >= ready || ready >= warning || warning >= end {
 		t.Fatalf("diagnostic lines are not enclosed and ordered correctly:\n%s", out)
@@ -279,7 +279,7 @@ func TestLogDaemonDiagnosticsUsesStandardEnvelopeAndSeverity(t *testing.T) {
 	for _, want := range []string{
 		"Running daemon configuration: /opt/proxsave/configs/backup.env",
 		"Running daemon loaded at: ",
-		"Personal pre-run script:", "Running daemon: READY", "Current configuration: NOT CONFIGURED",
+		"Personal pre-run script:", "Daemon now: READY", "Configuration: NOT CONFIGURED",
 		"Synchronization: OUT OF SYNC", "Personal post-run script:", "READY WITH WARNING", "Synchronization: IN SYNC",
 		"running daemon pre-run: key=", "current config pre-run: key=",
 		"running daemon post-run: key=", "current config post-run: key=",
@@ -330,8 +330,8 @@ func TestBuildDaemonStatusPromptRendersSanitizedPersonalScripts(t *testing.T) {
 	assertNoRawInjection(t, prompt)
 	plain := ansi.Strip(prompt)
 	for _, want := range []string{
-		"Personal pre-run script:", "Running daemon: READY", "/safe/pre.sh",
-		"Personal post-run script:", "Current configuration: READY WITH WARNING",
+		"Personal pre-run script:", "Daemon now: READY", "/safe/pre.sh",
+		"Personal post-run script:", "Configuration: READY WITH WARNING",
 		"Running daemon configuration: /bad/backup.env", "unsafeowner", "restartdaemon",
 		"Synchronization: IN SYNC", "Synchronization: OUT OF SYNC",
 	} {
@@ -384,13 +384,13 @@ func TestLogDaemonDiagnosticsDoesNotCallUnavailableRuntimeNotConfigured(t *testi
 	logger.SetOutput(buf)
 	logDaemonDiagnostics(logger, diagnostics)
 	out := buf.String()
-	if !strings.Contains(out, "Running daemon state: UNAVAILABLE") {
+	if !strings.Contains(out, "Daemon now: UNAVAILABLE") {
 		t.Fatalf("missing unavailable state:\n%s", out)
 	}
-	if strings.Contains(out, "Running daemon: NOT CONFIGURED") {
+	if strings.Contains(out, "Daemon now: NOT CONFIGURED") {
 		t.Fatalf("unavailable runtime was mislabeled:\n%s", out)
 	}
-	if !strings.Contains(out, "Current configuration: READY (/current/pre.sh)") || !strings.Contains(out, "Synchronization: UNKNOWN") {
+	if !strings.Contains(out, "Configuration: READY (/current/pre.sh)") || !strings.Contains(out, "Synchronization: UNKNOWN") {
 		t.Fatalf("unavailable runtime hid current configuration or synchronization:\n%s", out)
 	}
 }
@@ -416,7 +416,7 @@ func TestLogDaemonDiagnosticsSanitizesComparisonSourcesAndEvidence(t *testing.T)
 				t.Errorf("sanitizer retained %q:\n%s", forbidden, out)
 			}
 		}
-		for _, want := range []string{"Running daemon configuration: /bad/backup.env", "Running daemon: READY WITH WARNING (/bad/post.sh): unsafeowner", "Current configuration: READY WITH WARNING (/bad/post.sh): unsafeowner", "Synchronization: OUT OF SYNC (restartdaemon)"} {
+		for _, want := range []string{"Running daemon configuration: /bad/backup.env", "Daemon now: READY WITH WARNING (/bad/post.sh): unsafeowner", "Configuration: READY WITH WARNING (/bad/post.sh): unsafeowner", "Synchronization: OUT OF SYNC (restartdaemon)"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("missing %q:\n%s", want, out)
 			}

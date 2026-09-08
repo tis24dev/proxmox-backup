@@ -259,7 +259,7 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 				"proxmox-mail-forward",
 				[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
 				true,
-				"email delivery method set to pmf (Proxmox Notifications via proxmox-mail-forward)",
+				"email delivery mode set to pmf (Proxmox Notifications via proxmox-mail-forward)",
 			))
 			if c.cfg.EmailFallbackSendmail {
 				deps = append(deps, c.binaryDependency(
@@ -274,7 +274,7 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 				"sendmail",
 				[]string{"/usr/sbin/sendmail", "sendmail"},
 				true,
-				"email delivery method set to sendmail (/usr/sbin/sendmail)",
+				"email delivery mode set to sendmail (/usr/sbin/sendmail)",
 			))
 		} else if emailMethod == "relay" && c.cfg.EmailFallbackSendmail {
 			deps = append(deps, c.binaryDependency(

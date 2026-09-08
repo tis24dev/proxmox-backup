@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -89,6 +90,36 @@ func StartForTest(ctx context.Context, cfg Config) *Session {
 		tea.WithoutSignalHandler(),
 		tea.WithWindowSize(100, 30),
 	)
+}
+
+// ClosedByInterrupt is the exact error Ask hands a caller when the operator
+// pressed Ctrl+C: the router turns the key into tea.Interrupt, Program.Run ends
+// and wraps that as ErrProgramKilled, and the pending Ask resolves through
+// Session.closedErr.
+//
+// It exists because that error CANNOT be rebuilt from the sentinels by a caller.
+// closedErr flattens its cause with %v rather than %w, so the interrupt survives
+// as text and errors.Is(err, tea.ErrInterrupted) is false on the value a caller
+// actually receives - as is errors.Is(err, tea.ErrProgramKilled). Every fixture
+// written by hand elsewhere is therefore a copy of two wordings that can drift
+// apart from production in silence, and one already had: the what's-new suite
+// stood a bare ErrClosed in for Ctrl+C, a shape production never emits.
+//
+// Built by calling the real closedErr, so the wrapping can never diverge from it.
+// TestAskReturnsErrClosedOnCtrlC pins the whole chain against a real driven
+// session, and TestAskReturnsErrClosedWhenProgramDies pins that a UI death does
+// NOT produce this value.
+func ClosedByInterrupt() error { return closedByKilled(tea.ErrInterrupted) }
+
+// ClosedByUIFailure is its counterpart: the same shape, reached because the PROGRAM
+// died rather than because a person pressed anything. Program.Run wraps every event
+// loop error as ErrProgramKilled, so the two differ only by what sits under that
+// wrapper, and a caller that must treat them differently needs both fixtures to be
+// built the same way rather than one real and one invented.
+func ClosedByUIFailure(cause error) error { return closedByKilled(cause) }
+
+func closedByKilled(cause error) error {
+	return (&Session{runErr: fmt.Errorf("%w: %w", tea.ErrProgramKilled, cause)}).closedErr()
 }
 
 // SyncBuffer is a goroutine-safe writer that accumulates renderer output so

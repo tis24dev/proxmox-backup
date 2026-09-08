@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -347,5 +349,109 @@ func TestRunDaemonStatusUsesSharedDiagnosticsCollector(t *testing.T) {
 	}
 	if called != 1 {
 		t.Fatalf("shared collector calls = %d, want 1", called)
+	}
+}
+
+// The Reason strings are compared between the two sides, so anything in them that is
+// not a fact ABOUT THE PATH turns a kernel setting into "PATH STATE CHANGED SINCE
+// STARTUP". Assignment was already kept out of Reason for exactly this reason, in
+// that field's own doc comment; the hard-link advisory reads /proc/sys live and was
+// left in.
+func TestAKernelSettingChangeIsNotAPathStateChange(t *testing.T) {
+	const path = "/home/me/dd/hook.sh"
+	const ancestors = "/home/me, /home/me/dd: UID 1000-owned; owner can replace descendants run as UID 0"
+	components := []personalScriptPathComponent{{Path: "/home/me", UID: 1000, Mode: 0o755}}
+
+	// The stored state was written by a daemon that appended the advisory to Reason,
+	// which is what every release before this one did. Every shape it could have
+	// appended has to normalise away, not just the ones without internal punctuation:
+	// the disabled shape carries its own "; set it to 1", so a clause filter split on
+	// "; " dropped the first half and kept the second, leaving the stored side one
+	// clause longer than the live one.
+	runtime := daemonRuntimeDiagnostic{
+		Availability: daemonRuntimeAvailable,
+		ConfigPath:   "/etc/proxsave/backup.env",
+	}
+	stored := map[string]string{
+		"enforced":   "fs.protected_hardlinks=1 blocks hard-linking root-owned executables",
+		"disabled":   "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
+		"unreadable": "fs.protected_hardlinks unreadable: permission denied",
+	}
+	for name, advisory := range stored {
+		t.Run(name, func(t *testing.T) {
+			running := personalScriptDiagnostic{
+				Path:       path,
+				State:      personalScriptReadyWithWarning,
+				Reason:     ancestors + "; " + advisory,
+				Components: components,
+			}
+			// The sysctl has since moved, and nothing about the path did.
+			current := personalScriptDiagnostic{
+				Path:             path,
+				State:            personalScriptReadyWithWarning,
+				Reason:           ancestors,
+				HardlinkAdvisory: "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
+				Components:       components,
+			}
+
+			comparison := comparePersonalScript(runtime, "/etc/proxsave/backup.env", running, current)
+			if comparison.Synchronization != personalScriptInSync {
+				t.Fatalf("synchronization = %q (%s: %s); the path did not change, only fs.protected_hardlinks did",
+					comparison.Synchronization, comparison.SyncReason, comparison.SyncDetail)
+			}
+		})
+	}
+}
+
+// The advisory still has to reach the operator, on its own line, next to the side it
+// describes.
+func TestTheHardlinkAdvisoryIsShownOnItsOwnLine(t *testing.T) {
+	logger, buf := diagnosticsLogger(t)
+	logPersonalScriptDiagnostic(logger, "  Configuration", personalScriptDiagnostic{
+		Path:             "/home/me/dd/hook.sh",
+		State:            personalScriptReadyWithWarning,
+		Reason:           "/home/me, /home/me/dd: UID 1000-owned; owner can replace descendants run as UID 0",
+		HardlinkAdvisory: "fs.protected_hardlinks=1 blocks hard-linking root-owned executables",
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"Configuration: READY WITH WARNING (/home/me/dd/hook.sh): /home/me, /home/me/dd: UID 1000-owned; owner can replace descendants run as UID 0",
+		"Configuration: fs.protected_hardlinks=1 blocks hard-linking root-owned executables",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "UID 0; fs.protected_hardlinks") {
+		t.Fatalf("the advisory is still glued onto the path line:\n%s", out)
+	}
+}
+
+func diagnosticsLogger(t *testing.T) (*logging.Logger, *bytes.Buffer) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(buf)
+	return logger, buf
+}
+
+// The difference is detected BEFORE the verdict is rendered, so its debug line comes
+// first. Same rule TestIntegrityDebugCountsPrecedeTheVerdict holds for the
+// configuration block: the evidence precedes the conclusion drawn from it.
+func TestTheSynchronizationDebugPrecedesTheVerdict(t *testing.T) {
+	logger, buf := diagnosticsLogger(t)
+	logPersonalScriptSynchronization(logger, personalScriptComparison{
+		Synchronization: personalScriptPathStateChanged,
+		SyncReason:      "path ownership or mode changed after daemon startup",
+		SyncDetail:      "path components differ in owner or mode",
+	})
+	out := buf.String()
+	debug := strings.Index(out, "verdict=path-state-changed difference=path components differ in owner or mode")
+	verdict := strings.Index(out, "Synchronization: PATH STATE CHANGED SINCE STARTUP")
+	if debug < 0 || verdict < 0 {
+		t.Fatalf("expected both the debug detail and the verdict:\n%s", out)
+	}
+	if debug > verdict {
+		t.Fatalf("the debug detail must precede the verdict it explains:\n%s", out)
 	}
 }

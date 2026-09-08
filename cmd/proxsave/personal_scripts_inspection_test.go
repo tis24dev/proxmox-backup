@@ -221,7 +221,7 @@ func TestInspectPersonalScriptStatesAndReasons(t *testing.T) {
 			},
 			validate:   func(string) error { return nil },
 			wantState:  personalScriptReadyWithWarning,
-			wantReason: "/home/operator is owned by uid 4242",
+			wantReason: "/home/operator: UID 4242-owned",
 			wantParts:  4,
 		},
 		{
@@ -333,7 +333,7 @@ func TestApplyPersonalScriptDiagnosticKeepsAdvisoryPathAndWarnsOnce(t *testing.T
 		Key:    "PERSONAL_SCRIPT_PRE_RUN",
 		Path:   "/home/operator/script.sh",
 		State:  personalScriptReadyWithWarning,
-		Reason: "/home/operator is owned by uid 4242; that owner can replace descendants executed as daemon uid 0",
+		Reason: "/home/operator: UID 4242-owned; owner can replace descendants run as UID 0",
 	}
 	if got := applyPersonalScriptDiagnostic(diagnostic); got != diagnostic.Path {
 		t.Fatalf("advisory path = %q, want %q", got, diagnostic.Path)
@@ -356,9 +356,12 @@ func TestForeignOwnedAncestorAdvisoryNamesTheHardlinkProtection(t *testing.T) {
 		probeer error
 		want    string
 	}{
-		{"enforced", 1, nil, "cannot hard-link a root-owned executable"},
-		{"disabled", 0, nil, "CAN hard-link a root-owned executable"},
-		{"unreadable", 0, errors.New("permission denied"), "could not be read"},
+		{"enforced", 1, nil, "fs.protected_hardlinks=1 blocks hard-linking root-owned executables"},
+		// An unexpected value still reports what the kernel actually says, instead of
+		// asserting the number the message was written around.
+		{"enforced with an unexpected value", 2, nil, "fs.protected_hardlinks=2 blocks hard-linking root-owned executables"},
+		{"disabled", 0, nil, "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1"},
+		{"unreadable", 0, errors.New("permission denied"), "fs.protected_hardlinks unreadable: permission denied"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -366,7 +369,7 @@ func TestForeignOwnedAncestorAdvisoryNamesTheHardlinkProtection(t *testing.T) {
 			t.Cleanup(func() { personalScriptHardlinkProtection = orig })
 			personalScriptHardlinkProtection = func() (int, error) { return tc.value, tc.probeer }
 
-			got := personalScriptHardlinkAdvisory()
+			got, _ := personalScriptHardlinkAdvisory()
 			if !strings.Contains(got, tc.want) {
 				t.Fatalf("advisory = %q, want it to contain %q", got, tc.want)
 			}
@@ -408,8 +411,17 @@ func TestHardlinkClauseRidesWithTheOwnershipAdvisoryOnly(t *testing.T) {
 	if got.State != personalScriptReadyWithWarning {
 		t.Fatalf("state = %q, want ready-with-warning: %+v", got.State, got)
 	}
-	if !strings.Contains(got.Reason, "owned by uid 1000") || !strings.Contains(got.Reason, "fs.protected_hardlinks is 0") {
-		t.Fatalf("the reason does not carry both the advisory and its mitigation: %q", got.Reason)
+	// The mitigation still travels WITH the advisory, never alone and never absent;
+	// it rides HardlinkAdvisory rather than Reason because it is a live kernel
+	// reading and comparePersonalScript compares Reason between the two sides.
+	if !strings.Contains(got.Reason, "UID 1000-owned") {
+		t.Fatalf("the reason does not carry the ownership advisory: %q", got.Reason)
+	}
+	if !strings.Contains(got.HardlinkAdvisory, "fs.protected_hardlinks=0") {
+		t.Fatalf("the advisory does not carry its mitigation: %q", got.HardlinkAdvisory)
+	}
+	if strings.Contains(got.Reason, "fs.protected_hardlinks") {
+		t.Fatalf("a live kernel reading is back inside the compared Reason: %q", got.Reason)
 	}
 
 	foreign = map[string]uint32{}
@@ -419,5 +431,88 @@ func TestHardlinkClauseRidesWithTheOwnershipAdvisoryOnly(t *testing.T) {
 	}
 	if strings.Contains(clean.Reason, "protected_hardlinks") {
 		t.Fatalf("a path with no advisory got the mitigation clause anyway: %q", clean.Reason)
+	}
+}
+
+// inspectForeignAncestors runs the real inspection over a synthetic tree where the
+// named directories belong to a foreign uid and everything else belongs to root.
+func inspectForeignAncestors(t *testing.T, script string, foreign map[string]uint32, hardlinks, daemonUID int) personalScriptDiagnostic {
+	t.Helper()
+	origStat, origEval, origValidate, origLinks := personalScriptStat, personalScriptEvalSymlinks, personalScriptValidateExecutable, personalScriptHardlinkProtection
+	t.Cleanup(func() {
+		personalScriptStat, personalScriptEvalSymlinks = origStat, origEval
+		personalScriptValidateExecutable, personalScriptHardlinkProtection = origValidate, origLinks
+	})
+	personalScriptEvalSymlinks = func(p string) (string, error) { return p, nil }
+	personalScriptValidateExecutable = func(string) error { return nil }
+	personalScriptHardlinkProtection = func() (int, error) { return hardlinks, nil }
+	personalScriptStat = func(p string) (os.FileInfo, error) {
+		mode := os.FileMode(0o755)
+		if p == script {
+			mode = 0o700
+		} else {
+			mode |= os.ModeDir
+		}
+		return personalScriptInspectionFileInfo{name: filepath.Base(p), mode: mode, uid: foreign[p], dir: mode.IsDir()}, nil
+	}
+	return inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", script, daemonUID)
+}
+
+// The trust decision is stated once per OWNER, not once per directory. A script under
+// /home/<user>/<dir> has two foreign ancestors with the same uid, and repeating
+// "owner can replace descendants" for each only made the line longer.
+func TestOneClausePerOwnerNotPerDirectory(t *testing.T) {
+	got := inspectForeignAncestors(t, "/home/howard/dd/mount-pve",
+		map[string]uint32{"/home/howard": 1000, "/home/howard/dd": 1000}, 1, 0)
+
+	want := "/home/howard, /home/howard/dd: UID 1000-owned; owner can replace descendants run as UID 0"
+	if got.Reason != want {
+		t.Fatalf("reason =\n  %q\nwant\n  %q", got.Reason, want)
+	}
+	if strings.Count(got.Reason, "owner can replace descendants") != 1 {
+		t.Fatalf("the clause must appear once per owner: %q", got.Reason)
+	}
+	if strings.Count(got.HardlinkAdvisory, "fs.protected_hardlinks") != 1 {
+		t.Fatalf("the mitigation must be named once, at the end: %q", got.Reason)
+	}
+}
+
+// Two different owners are two different trust decisions and stay separate.
+func TestTwoOwnersStayTwoClauses(t *testing.T) {
+	got := inspectForeignAncestors(t, "/srv/a/b/run.sh",
+		map[string]uint32{"/srv/a": 1000, "/srv/a/b": 1001}, 1, 0)
+
+	want := "/srv/a: UID 1000-owned; owner can replace descendants run as UID 0; " +
+		"/srv/a/b: UID 1001-owned; owner can replace descendants run as UID 0"
+	if got.Reason != want {
+		t.Fatalf("reason =\n  %q\nwant\n  %q", got.Reason, want)
+	}
+}
+
+// The paths read in the order the path itself is written. The walk collects them
+// deepest-first, so printing them as collected would spell the path backwards.
+func TestForeignAncestorsReadShallowestFirst(t *testing.T) {
+	got := inspectForeignAncestors(t, "/home/howard/dd/sub/mount-pve",
+		map[string]uint32{"/home/howard": 1000, "/home/howard/dd": 1000, "/home/howard/dd/sub": 1000}, 1, 0)
+
+	want := "/home/howard, /home/howard/dd, /home/howard/dd/sub: UID 1000-owned; " +
+		"owner can replace descendants run as UID 0"
+	if got.Reason != want {
+		t.Fatalf("reason =\n  %q\nwant\n  %q", got.Reason, want)
+	}
+}
+
+// The uid in "run as UID N" is the daemon's real uid. A daemon under its own service
+// user is a supported shape, and telling that operator the scripts run as root would
+// be wrong about the only fact the sentence exists to convey.
+func TestTheAdvisoryNamesTheRealDaemonUID(t *testing.T) {
+	got := inspectForeignAncestors(t, "/home/howard/dd/mount-pve",
+		map[string]uint32{"/home/howard": 1000, "/home/howard/dd": 1000}, 1, 1001)
+
+	if !strings.Contains(got.Reason, "owner can replace descendants run as UID 1001") {
+		t.Fatalf("the advisory must name the daemon uid it was given: %q", got.Reason)
+	}
+	if strings.Contains(got.Reason, "run as UID 0") {
+		t.Fatalf("the advisory must not assume root: %q", got.Reason)
 	}
 }

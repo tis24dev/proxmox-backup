@@ -18,11 +18,11 @@ Enable Telegram notifications (centralized)? [y/N]:
 --- Email ---
 Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.
 ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.
-Enable email notifications? [y/N]: Email delivery methods:
+Enable email notifications? [y/N]: Email delivery modes:
   relay    ProxSave Cloud Relay over outbound HTTPS (default)
   sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)
   pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)
-Email delivery method [relay]: 
+Email delivery mode [relay]: 
 --- Encryption ---
 Enable backup encryption? [y/N]: 
 --- Scheduler ---

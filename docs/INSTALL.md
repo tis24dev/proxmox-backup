@@ -145,8 +145,8 @@ For more details, see [CLI Reference - Binary Upgrade](CLI_REFERENCE.md#binary-u
 
 ```bash
 # Install Go (if building from source)
-wget https://go.dev/dl/go1.25.11.linux-amd64.tar.gz
-tar -C /usr/local -xzf go1.25.11.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.26.8.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.26.8.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Install rclone (for cloud storage)
@@ -159,7 +159,7 @@ apt update && apt install -y git
 apt update && apt install -y make
 
 # Verify installations
-go version    # Should show go1.25.11+
+go version    # Should show go1.26.8+
 rclone version  # Should show rclone v1.60+
 git --version # Should show git 2.47.3+
 make --version # Should show make 4.4.1+
@@ -222,7 +222,7 @@ Final install steps still run:
 2. **Secondary storage**: Optional path for backup/log copies; disabling it clears both saved secondary paths from `backup.env`
 3. **Cloud storage (rclone)**: Optional rclone configuration (supports `CLOUD_REMOTE` as a remote name (recommended) or legacy `remote:path`; `CLOUD_LOG_PATH` supports path-only (recommended) or `otherremote:/path`)
 4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
-5. **Notifications**: Enable Telegram (centralized) and Email notifications; Email asks for a delivery method and defaults to `relay` with `sendmail` failover. Use `pmf` only when you want Proxmox Notifications via `proxmox-mail-forward`.
+5. **Notifications**: Enable Telegram (centralized) and Email notifications; Email asks for a delivery mode and defaults to `relay` with `sendmail` failover. Use `pmf` only when you want Proxmox Notifications via `proxmox-mail-forward`.
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 7. **Scheduler engine**: choose the ProxSave local daemon or system cron. Fresh installs and Overwrite default to the daemon (a resident systemd service with a hang watchdog and healthchecks); editing an existing config keeps its current engine. See [DAEMON.md](DAEMON.md).
 8. **Healthchecks** (daemon only): with the daemon engine, choose the monitoring mode: `Off`, `ProxSave HC Server` (centralized, zero setup, the default), or `Your own server` (self). Self mode opens a follow-up screen to paste your ping URLs, then a verification screen. Centralized mode goes straight to the verification screen, which also hands you the way into your monitoring portal: a single-use link until you set a portal password, the portal address and your sign-in identity afterwards. With the cron engine this choice is dimmed and forced off. See [HEALTHCHECKS.md](HEALTHCHECKS.md).

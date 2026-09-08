@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -499,6 +500,189 @@ func TestPveshRefusedKeyFromNamesTheKeyAcrossBothShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := pveshRefusedKeyFrom(tc.err, []byte(tc.out)); got != tc.want {
 				t.Fatalf("pveshRefusedKeyFrom = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// refusingStorageRunner refuses the named keys one at a time, the way pvesh does:
+// a set carrying a key the schema does not accept fails naming that ONE key, and
+// the caller has to drop it and try again.
+type refusingStorageRunner struct {
+	refuse map[string]bool
+	// live is what `pvesh get /storage/<id>` answers, as PVE returns it: a flat JSON
+	// object of the definition's current values. Empty means the read fails.
+	live string
+}
+
+func (r *refusingStorageRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "get" {
+		if r.live == "" {
+			return nil, errors.New("exit status 2")
+		}
+		return []byte(r.live), nil
+	}
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "--") {
+			continue
+		}
+		key := strings.TrimPrefix(strings.SplitN(arg, "=", 2)[0], "--")
+		if r.refuse[key] {
+			return []byte("Parameter verification failed.\n" + key + ": property is not defined in schema and the schema does not allow additional properties\n"),
+				errors.New("exit status 2")
+		}
+	}
+	return nil, nil
+}
+
+// The storage arm and the guest arm share pveshSetDroppingRefusedKeys, whose own
+// doc comment says a caller that stays silent about the dropped keys loses the fact
+// that their staged values were NOT applied. The guest arm reports them; the storage
+// arm discarded the list and announced an update anyway, so an operator read
+// "Updated existing storage definition" over a definition that is not in the staged
+// state, and "already matches every settable key" over one where nothing could be
+// sent at all.
+func TestStorageApplyNamesTheKeysThatWereRefused(t *testing.T) {
+	cases := map[string]struct {
+		refuse   []string
+		wantLine string
+	}{
+		"some keys refused": {
+			refuse:   []string{"server"},
+			wantLine: "Updated existing storage definition nfs-backup without server: the update schema refuses those keys, so their staged values are not applied",
+		},
+		"every key refused": {
+			refuse:   []string{"server", "export", "content"},
+			wantLine: "Applied nothing for storage nfs-backup: every staged key refused, not comparable (server, export, content)",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			origCmd := restoreCmd
+			t.Cleanup(func() { restoreCmd = origCmd })
+			refuse := make(map[string]bool, len(tc.refuse))
+			for _, key := range tc.refuse {
+				refuse[key] = true
+			}
+			restoreCmd = &refusingStorageRunner{refuse: refuse}
+
+			cfg := filepath.Join(t.TempDir(), "storage.cfg")
+			body := "nfs: nfs-backup\n\tserver 1.2.3.4\n\texport /srv/nfs\n\tcontent backup\n"
+			if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+				t.Fatalf("write storage.cfg: %v", err)
+			}
+
+			buf := &bytes.Buffer{}
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(buf)
+
+			if _, _, _, err := applyStorageCfg(context.Background(), cfg, logger); err != nil {
+				t.Fatalf("applyStorageCfg: %v", err)
+			}
+			if !strings.Contains(buf.String(), tc.wantLine) {
+				t.Fatalf("missing %q in:\n%s", tc.wantLine, buf.String())
+			}
+		})
+	}
+}
+
+// Registering a guest that does not exist yet claims the VMID cluster-wide FIRST and
+// writes the staged conf second. The helper's own cleanup only runs when that second
+// write returns an error; a cancelled restore kills the process outright, so nothing
+// runs and the claim can outlive the run as an empty, create-locked guest holding a
+// VMID nobody can reuse. It cannot be made atomic - the process can die at any
+// instant - so the run has to say what it may have left behind.
+func TestAnAbortedRegistrationNamesTheVMIDItMayHaveLeftBehind(t *testing.T) {
+	fakeFS, pvesh, _, _ := guestApplyFixture(t)
+	_ = pvesh
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// The loop's own ctx check passes, and the cancellation lands INSIDE the helper,
+	// which is the only interleaving that can leave the claim behind.
+	pveGuestLockedWriter = func(
+		_ context.Context, _ *logging.Logger, _ string,
+		_ vmEntry, precondition guestApplyPrecondition, _ []byte,
+	) error {
+		if precondition != guestMustBeAbsent {
+			t.Fatalf("precondition = %q, want absent", precondition)
+		}
+		cancel()
+		return context.Canceled
+	}
+
+	if err := fakeFS.AddFile("/stage/101.conf", []byte("name: webserver\n")); err != nil {
+		t.Fatal(err)
+	}
+	buf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(buf)
+
+	applyVMConfigs(ctx, []vmEntry{{VMID: "101", Kind: "qemu", Name: "webserver", Path: "/stage/101.conf"}}, logger)
+
+	want := "Aborted while registering VM/CT config 101 (webserver): VMID 101 may be left reserved and locked on the cluster"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
+	}
+}
+
+// When the set schema refuses EVERY key, the run cannot tell from the refusal alone
+// whether anything was lost: the refused key may already hold the staged value, in
+// which case there was nothing to do, or it may differ, in which case the restore
+// could not put it back. Counting it either way is a guess. Reading the live
+// definition and comparing the refused keys turns it into an answer - and where it
+// cannot, the third count says so instead of picking one of the other two.
+func TestAnAllRefusedStorageIsJudgedAgainstTheLiveDefinition(t *testing.T) {
+	cases := map[string]struct {
+		live        string
+		wantApplied int
+		wantUnknown int
+		wantFailed  int
+		wantLine    string
+	}{
+		"the refused key already holds the staged value": {
+			live:        `{"storage":"nfs-backup","type":"nfs","server":"1.2.3.4"}`,
+			wantApplied: 1,
+			wantLine:    "Storage definition nfs-backup already matches every staged key the update schema refuses",
+		},
+		"the refused key differs and cannot be set": {
+			live:       `{"storage":"nfs-backup","type":"nfs","server":"9.9.9.9"}`,
+			wantFailed: 1,
+			wantLine:   "Failed to apply storage nfs-backup: the update schema refuses server and the live definition does not match the staged value",
+		},
+		// This row used to want applied=1. Nothing here was applied and nothing was
+		// shown to be wrong; the honest count is neither of those two.
+		"the live definition cannot be read": {
+			live:        "",
+			wantUnknown: 1,
+			wantLine:    "Applied nothing for storage nfs-backup: every staged key refused, not comparable (server)",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			origCmd := restoreCmd
+			t.Cleanup(func() { restoreCmd = origCmd })
+			restoreCmd = &refusingStorageRunner{refuse: map[string]bool{"server": true}, live: tc.live}
+
+			cfg := filepath.Join(t.TempDir(), "storage.cfg")
+			if err := os.WriteFile(cfg, []byte("nfs: nfs-backup\n\tserver 1.2.3.4\n"), 0o600); err != nil {
+				t.Fatalf("write storage.cfg: %v", err)
+			}
+			buf := &bytes.Buffer{}
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(buf)
+
+			applied, unknown, failed, err := applyStorageCfg(context.Background(), cfg, logger)
+			if err != nil {
+				t.Fatalf("applyStorageCfg: %v", err)
+			}
+			if applied != tc.wantApplied || unknown != tc.wantUnknown || failed != tc.wantFailed {
+				t.Fatalf("applied=%d unknown=%d failed=%d, want %d/%d/%d",
+					applied, unknown, failed, tc.wantApplied, tc.wantUnknown, tc.wantFailed)
+			}
+			if !strings.Contains(buf.String(), tc.wantLine) {
+				t.Fatalf("missing %q in:\n%s", tc.wantLine, buf.String())
 			}
 		})
 	}

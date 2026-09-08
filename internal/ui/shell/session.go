@@ -111,11 +111,30 @@ func (s *Session) Close() error {
 	return nil
 }
 
+// closedErr wraps the program's own termination error with %w rather than %v, so the
+// CAUSE survives in the chain. It used to flatten it to text, which left every caller
+// with one undifferentiated ErrClosed: a person pressing ctrl+c and a UI dying under
+// them arrive here through the same door, and the only thing that tells them apart is
+// tea.ErrInterrupted sitting under tea.ErrProgramKilled. The change is additive - it
+// adds links, it removes none - so every errors.Is(err, ErrClosed) already written
+// keeps matching exactly as before.
 func (s *Session) closedErr() error {
 	if s.runErr != nil {
-		return fmt.Errorf("%w: %v", ErrClosed, s.runErr)
+		return fmt.Errorf("%w: %w", ErrClosed, s.runErr)
 	}
 	return ErrClosed
+}
+
+// IsUserInterrupt reports whether a closed session was closed by a PERSON pressing
+// ctrl+c, rather than by the program dying. The router turns that key into
+// tea.Interrupt and Program.Run returns it wrapped in ErrProgramKilled, the same
+// wrapper every other event-loop failure gets, so the interrupt sentinel is the only
+// thing separating the two.
+//
+// It lives here so a caller does not import bubbletea to ask one question about a
+// session, and so the encoding of "a person did this" has one owner.
+func IsUserInterrupt(err error) bool {
+	return errors.Is(err, ErrClosed) && errors.Is(err, tea.ErrInterrupted)
 }
 
 // adoptConfigMsg swaps the frame chrome (subtitle, config path, colors) of a

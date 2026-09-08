@@ -5,6 +5,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 ## Table of Contents
 
 - [Configuration File Location](#configuration-file-location)
+- [Configuration integrity check](#configuration-integrity-check)
 - [General Settings](#general-settings)
 - [Scheduler engine](#scheduler-engine)
 - [Personal scripts (daemon)](#personal-scripts-daemon)
@@ -40,6 +41,93 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 # Use custom config file
 proxsave --config /path/to/my-backup.env
 ```
+
+---
+
+## Configuration integrity check
+
+Every run audits `backup.env` against the template embedded in the binary, right after loading
+it and before the effective settings are printed:
+
+```text
+INFO     Configuration integrity check:
+DEBUG    Configuration integrity: file=/opt/proxsave/configs/backup.env lines=475 assignments=182 distinct=182 template=182
+DEBUG    Configuration integrity: template assigns 182 variables and documents 33 more as commented examples
+DEBUG    Configuration integrity: variables that may repeat without discarding: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS
+DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown, 0 legacy (duration=3.1ms)
+INFO     ✓ Configuration file ok
+```
+
+It reports four things, one line each, and their levels differ because the facts differ:
+
+| Finding | Level | Meaning |
+|---------|-------|---------|
+| duplicated | `WARNING` | the variable is assigned more than once, so a value you wrote is discarded |
+| absent | `WARNING` | the binary carries the variable in its embedded template, the file does not |
+| unknown | `INFO` | the file assigns a variable the binary does not read at all: a misspelling |
+| legacy | `WARNING` or `INFO` | the file uses a [legacy name](#legacy-key-names). `WARNING` when the canonical name is set too, because then one of the two lines has no effect; `INFO` when the legacy name is the only one |
+
+```text
+WARNING    PERSONAL_SCRIPT_PRE_RUN is set twice; line 456 wins and the value on line 120 is discarded
+WARNING    HEALTHCHECK_UPDATES_ID is absent and falls back to its default
+WARNING    LOCAL_BACKUP_PATH is the legacy name for BACKUP_PATH and both are set; LOCAL_BACKUP_PATH wins and BACKUP_PATH has no effect
+INFO       RCLONE_REMOTE is the legacy name for CLOUD_REMOTE and is still read; rename it to CLOUD_REMOTE when convenient
+INFO       PERSONAL_SCRIPTS_PRERUN is not a known variable and is ignored
+WARNING  ⚠ Configuration file: 1 duplicated, 1 absent, 1 unknown, 2 legacy
+```
+
+### Duplicated: the one that loses data
+
+A repeated variable is resolved **last-wins**. The last assignment in the file is kept and every
+earlier one is discarded, silently, whatever it held. Thirty-six of the template's 182 variables
+ship as an empty line, the personal scripts among them, so adding your own line **above** one of
+them loses it, while the same file with the two lines swapped works:
+
+```bash
+PERSONAL_SCRIPT_PRE_RUN=/home/me/mount-pbs   # discarded: an assignment below wins
+...
+PERSONAL_SCRIPT_PRE_RUN=                     # the template line, empty, and it wins
+```
+
+Four variables can be repeated without losing anything, because a second `KEY=value` line
+**concatenates** instead of overwriting: `AGE_RECIPIENT`, `BACKUP_BLACKLIST`,
+`BACKUP_EXCLUDE_PATTERNS` and `CUSTOM_BACKUP_PATHS`.
+
+The exemption is the FORM, not the name. `BACKUP_BLACKLIST` and `CUSTOM_BACKUP_PATHS` also accept
+the multi-line block form the template ships them in, and a block does **not** concatenate: it
+replaces everything set before it. Writing your own line above the template's block therefore
+loses it, exactly like an ordinary duplicate, and the audit reports it:
+
+```bash
+CUSTOM_BACKUP_PATHS=/srv/important   # discarded: the block below replaces it
+CUSTOM_BACKUP_PATHS="                # the template's block, and it wins
+# /srv/custom-config.yaml
+"
+```
+
+A line written **after** the block concatenates onto it and loses nothing.
+
+### Absent: the merge never ran
+
+The template is compiled into the binary, so a host that has not upgraded carries an older
+binary with an older template and never sees this finding. Seeing it means the binary is new and
+`backup.env` was not merged. `--upgrade-config` adds the missing variables and
+`--upgrade-config-dry-run` shows what it would add.
+
+A missing variable falls back to its default, so nothing you wrote is lost and the backup itself
+is unaffected. The finding is still a `WARNING`, and like every other warning it promotes the run
+to exit 1: a host that upgraded the binary without merging its `backup.env` exits 1 on every run,
+and the Healthchecks backup check goes down with it, until `--upgrade-config` is run. Merge the
+file, or expect that state until you do.
+
+### What the block does not do
+
+Values are never printed, not even at debug level: a duplicated `TELEGRAM_BOT_TOKEN` would put a
+secret in the log, and the line number locates it just as well. Nothing is rewritten and the
+last-wins rule is unchanged; the audit only stops it from being silent.
+
+The `WARNING` lines count towards the run's warning total and its exit code, like every other
+warning. The same block runs under `proxsave --daemon-status`.
 
 ---
 
@@ -416,9 +504,9 @@ Seven keys have a legacy alias from the Bash-era configuration, and **the legacy
 | `RCLONE_REMOTE` | `CLOUD_REMOTE` |
 | `PROMETHEUS_ENABLED` | `METRICS_ENABLED` |
 
-These seven are the ones where the legacy name is checked first. Other pairs, such as `MAX_LOCAL_BACKUPS` / `LOCAL_RETENTION_DAYS` or `AGE_RECIPIENT` / `AGE_RECIPIENTS`, list the canonical name first and are harmless.
+These seven are the ones where the legacy name is checked first. Every other pair goes the other way round: the canonical name is consulted first, so the legacy name on its own still works and setting both leaves the legacy line with no effect. Those pairs are not listed here because there are many of them and they are not the dangerous direction, but the [configuration integrity check](#configuration-integrity-check) names each one it finds in your file, whichever way it goes.
 
-This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. Two more cloud pairs are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md), where the canonical name wins instead, so check that table rather than assuming.
+This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across, or read them off the [configuration integrity check](#configuration-integrity-check), which lists every one of them by name and says which of the two the loader consults first. Setting both is the case worth acting on, and the check raises a `WARNING` for it: one of the two lines has no effect, and it is not always the one you would guess. These seven are the pairs where the LEGACY name is consulted first; every other alias goes the other way, so there the canonical name wins and the legacy line is the one being ignored. The check states the direction per variable rather than leaving you to remember which list a name belongs to. Two more cloud pairs are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md), where the canonical name wins instead, so check that table rather than assuming.
 
 ---
 
@@ -1023,7 +1111,7 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 
 If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EMAIL_ENABLE` is still accepted during migration and runtime loading.
 
-**Which delivery method should I choose?**
+**Which delivery mode should I choose?**
 
 | Method | Best when | Where SMTP is configured |
 | --- | --- | --- |

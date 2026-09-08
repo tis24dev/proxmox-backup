@@ -46,12 +46,38 @@ type personalScriptPathComponent struct {
 }
 
 type personalScriptDiagnostic struct {
-	Key        string
-	Path       string
-	State      personalScriptState
-	Reason     string
-	DaemonUID  int
-	Components []personalScriptPathComponent
+	Key       string
+	Path      string
+	State     personalScriptState
+	Reason    string
+	DaemonUID int
+	// Assignment explains a NOT CONFIGURED verdict by naming how the variable is
+	// written in the file being read RIGHT NOW: absent, empty, or overwritten by a
+	// later line. It belongs to the current-configuration side only, because the
+	// running daemon read its own copy of the file when it started.
+	//
+	// It is deliberately NOT part of the Reason field: comparePersonalScript compares
+	// Reason between the two sides, so a note that only one side can ever carry would
+	// turn every IN SYNC into PATH STATE CHANGED.
+	Assignment string
+	// HardlinkAdvisory states whether the kernel setting the accepted foreign-owned
+	// ancestor rests on is in force. It is read from /proc/sys RIGHT NOW, so it is a
+	// fact about the KERNEL and not about the path, and it lives outside Reason for
+	// the same rule Assignment does: comparePersonalScript compares Reason between
+	// the two sides, so a clause that can change without the path moving turns a
+	// sysctl edit into PATH STATE CHANGED SINCE STARTUP.
+	HardlinkAdvisory string
+	// HardlinkProtectionInForce is the same reading as a fact rather than a sentence,
+	// so a renderer decides the LEVEL without matching on the advisory's words. The
+	// two halves are written together by personalScriptHardlinkAdvisory and must never
+	// disagree; TestTheAdvisoryTextAndItsFlagAgree pins that they cannot.
+	//
+	// It exists because the advisory says two opposite things. Off or unreadable is a
+	// warning: the trust decision has nothing behind it. In force is the reassurance
+	// that it does, and raising that as a WARNING told the operator to act on
+	// something already right.
+	HardlinkProtectionInForce bool
+	Components                []personalScriptPathComponent
 }
 
 type personalScriptsDiagnostics struct {
@@ -91,15 +117,18 @@ func readProtectedHardlinks() (int, error) {
 // the ownership check stops nothing and the trust decision has no mitigation left
 // behind it. Reporting it is not a policy change: the path stays enabled either
 // way, as the maintainer decided; the operator is told what the decision rests on.
-func personalScriptHardlinkAdvisory() string {
+// It returns the sentence AND whether the protection is actually in force, because
+// the two readings need opposite levels and matching on the sentence to tell them
+// apart would put a renderer's verdict at the mercy of an edit to this text.
+func personalScriptHardlinkAdvisory() (string, bool) {
 	value, err := personalScriptHardlinkProtection()
 	if err != nil {
-		return fmt.Sprintf("%s could not be read (%v), so it is unknown whether that owner can hard-link a root-owned executable into place", protectedHardlinksPath, err)
+		return fmt.Sprintf("fs.protected_hardlinks unreadable: %v", err), false
 	}
 	if value == 0 {
-		return "fs.protected_hardlinks is 0, so that owner CAN hard-link a root-owned executable into place and the ownership check above stops nothing; set it to 1"
+		return "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1", false
 	}
-	return fmt.Sprintf("fs.protected_hardlinks is %d, so that owner cannot hard-link a root-owned executable into place", value)
+	return fmt.Sprintf("fs.protected_hardlinks=%d blocks hard-linking root-owned executables", value), true
 }
 
 // inspectPersonalScripts returns both configured-script verdicts without
@@ -189,7 +218,7 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 		return refuse(fmt.Errorf("%s is writable by group or others (mode %04o)", clean, info.Mode().Perm()))
 	}
 
-	var advisories []string
+	var foreign []personalScriptForeignAncestor
 	for dir := filepath.Dir(clean); ; dir = filepath.Dir(dir) {
 		dirInfo, err := personalScriptStat(dir)
 		if err != nil {
@@ -203,24 +232,23 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 			return refuse(err)
 		}
 		if uid != 0 && int(uid) != daemonUID {
-			advisories = append(advisories, fmt.Sprintf(
-				"%s is owned by uid %d; that owner can replace descendants executed as daemon uid %d",
-				dir, uid, daemonUID,
-			))
+			foreign = append(foreign, personalScriptForeignAncestor{Path: dir, UID: int(uid)})
 		}
 		if dirInfo.Mode().Perm()&0o022 != 0 && dirInfo.Mode()&os.ModeSticky == 0 {
 			return refuse(fmt.Errorf("directory %s is writable by group or others without the sticky bit (mode %04o)", dir, dirInfo.Mode().Perm()))
 		}
 		if dir == "/" {
 			diagnostic.Path = clean
-			if len(advisories) > 0 {
-				// The mitigation the accepted ancestor rests on is named alongside
-				// the advisory, never separately: an operator reading "that owner can
-				// replace descendants" needs to know in the same breath whether
-				// anything is stopping them.
-				advisories = append(advisories, personalScriptHardlinkAdvisory())
+			if len(foreign) > 0 {
+				// The mitigation the accepted ancestor rests on is reported with it,
+				// never separately: an operator reading "owner can replace
+				// descendants" needs to know in the same breath whether anything is
+				// stopping them. It rides its own field rather than the Reason text
+				// because it is a live kernel reading, not a fact about the path -
+				// see HardlinkAdvisory.
 				diagnostic.State = personalScriptReadyWithWarning
-				diagnostic.Reason = strings.Join(advisories, "; ")
+				diagnostic.Reason = personalScriptForeignAncestorReason(foreign, daemonUID)
+				diagnostic.HardlinkAdvisory, diagnostic.HardlinkProtectionInForce = personalScriptHardlinkAdvisory()
 			} else {
 				diagnostic.State = personalScriptReady
 			}
@@ -259,4 +287,36 @@ func personalScriptOwnerError(path string, info os.FileInfo, daemonUID int) erro
 		return fmt.Errorf("%s is owned by uid %d; accepted owners are root or daemon uid %d. Keep the user home ownership unchanged and move the script to a root-owned path such as /usr/local/bin", path, uid, daemonUID)
 	}
 	return nil
+}
+
+// personalScriptForeignAncestor is one directory on the path that belongs to neither
+// root nor the daemon, so its owner can replace what sits below it.
+type personalScriptForeignAncestor struct {
+	Path string
+	UID  int
+}
+
+// personalScriptForeignAncestorReason states the trust decision once per owner rather
+// than once per directory. A script under /home/<user>/<dir> has two foreign ancestors
+// with the same uid, and repeating the same clause twice made the line longer without
+// telling the operator anything the first clause had not.
+//
+// The walk collects deepest-first; the sentence reads shallowest-first, the order the
+// path itself is written in.
+func personalScriptForeignAncestorReason(foreign []personalScriptForeignAncestor, daemonUID int) string {
+	order := make([]int, 0, len(foreign))
+	paths := make(map[int][]string, len(foreign))
+	for i := len(foreign) - 1; i >= 0; i-- {
+		entry := foreign[i]
+		if _, seen := paths[entry.UID]; !seen {
+			order = append(order, entry.UID)
+		}
+		paths[entry.UID] = append(paths[entry.UID], entry.Path)
+	}
+	clauses := make([]string, 0, len(order))
+	for _, uid := range order {
+		clauses = append(clauses, fmt.Sprintf("%s: UID %d-owned; owner can replace descendants run as UID %d",
+			strings.Join(paths[uid], ", "), uid, daemonUID))
+	}
+	return strings.Join(clauses, "; ")
 }

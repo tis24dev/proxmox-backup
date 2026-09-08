@@ -32,11 +32,19 @@ func stubWhatsnewSeams(t *testing.T) {
 	})
 }
 
-// TestScreen0WriteOnlyOnContinue is the MANDATORY continue-only-write contract
-// (SCRN-03, Pitfall 9, threat T-01-07): the seen-flag is written EXACTLY ONCE on an
-// explicit continue (whatsnewRun returns nil) and NEVER on Esc (shell.ErrAborted) or
-// a timeout (context.DeadlineExceeded).
-func TestScreen0WriteOnlyOnContinue(t *testing.T) {
+// The seen-flag is written EXACTLY ONCE once the screen has been shown, however the
+// operator left it. The old contract wrote only on an explicit continue, so reading
+// the notes and closing with Esc or Ctrl+C left the flag unwritten and the next
+// scheduled backup logged a WARNING that ParseLogCounts counted and
+// applyIssueExitCode promoted to exit 1, which the daemon reports to Healthchecks as
+// down (issue #305).
+//
+// Every resolution except the timeout is a KEYSTROKE, which is the evidence that a
+// person was there. isTerminalInteractive only proves a terminal: a detached tmux
+// window, an expect script or an `ssh -t` from a wrapper all carry a real TTY, and
+// there the screen would sit untouched until the 10-minute timeout. That one does
+// not write, and neither does a torn-down parent (TestMaybeShowWhatsnewTimeout).
+func TestScreen0WritesOnceHoweverTheScreenIsClosed(t *testing.T) {
 	const (
 		base    = "/tmp/whatsnew-base"
 		current = "0.30.0"
@@ -47,8 +55,21 @@ func TestScreen0WriteOnlyOnContinue(t *testing.T) {
 		wantCalls int
 	}{
 		{"continue writes once", nil, 1},
-		{"esc never writes", shell.ErrAborted, 0},
-		{"timeout never writes", context.DeadlineExceeded, 0},
+		{"esc writes: the pager resolves it as its own abort sentinel", shell.ErrAborted, 1},
+		// The real ctrl+c value, not a bare ErrClosed: the router turns the key into
+		// tea.Interrupt, Program.Run wraps it as ErrProgramKilled, and Ask resolves
+		// through Session.closedErr. A bare ErrClosed is a different fact and is
+		// covered by its own row below.
+		{"ctrl+c writes: a person closed the screen", shell.ClosedByInterrupt(), 1},
+		// A UI that died. It reaches whatsnewRender through the SAME ErrClosed door as
+		// ctrl+c, and writing for it marked the notes seen for an operator who never
+		// got to read them - permanently, since the version does not change again.
+		{"a dead UI does NOT write: nobody read anything", shell.ClosedByUIFailure(errors.New("read /dev/tty: input/output error")), 0},
+		// Bare ErrClosed is Session.closedErr with no program error at all: the program
+		// quit cleanly while an Ask was still pending, so something else tore the
+		// session down and the screen was never resolved by anyone.
+		{"a session closed with no error does NOT write: nothing resolved the screen", shell.ErrClosed, 0},
+		{"the 10-minute timeout does NOT write: a TTY is not a person", context.DeadlineExceeded, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

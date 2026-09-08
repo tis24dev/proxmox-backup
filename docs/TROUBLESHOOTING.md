@@ -227,6 +227,11 @@ cat /proc/self/gid_map
   explicitly, but that parent owner can replace descendants later executed with daemon
   privileges. Each advisory or refusal produces one startup `WARNING` naming the setting and
   reason.
+- **The value may never have reached the loader at all.** A variable assigned more than once in
+  `backup.env` is resolved last-wins, so a line you added above the template's own empty line is
+  discarded and the setting reads as empty. `--daemon-status` names this explicitly and so does
+  the integrity block on every run; see
+  [CONFIGURATION.md](CONFIGURATION.md#configuration-integrity-check).
 
 **Resolution**:
 ```bash
@@ -243,8 +248,20 @@ systemctl restart proxsave-daemon.service   # the paths are read at daemon start
   daemon lock, or send a healthcheck ping. Its four path states are `NOT CONFIGURED`, `READY`,
   `READY WITH WARNING`, and `REFUSED`. Debug output lists the UID and owner/mode evidence. A script
   refusal does not change the command's daemon-health exit code.
-- **Running daemon** is the state captured and applied at daemon startup. **Current
-  configuration** is what a restart would load and how that path looks now.
+- **Daemon now** is the state captured and applied at daemon startup. **Configuration** is what a
+  restart would load and how that path looks now.
+- On the `Configuration` line, `NOT CONFIGURED` says why, which is what tells a variable missing
+  from the file apart from one assigned an empty value and from one whose value a later line
+  overwrites:
+
+  ```text
+    Configuration: NOT CONFIGURED (PERSONAL_SCRIPT_PRE_RUN is not in the file)
+    Configuration: NOT CONFIGURED (PERSONAL_SCRIPT_PRE_RUN is on line 456 & is empty)
+    Configuration: NOT CONFIGURED (PERSONAL_SCRIPT_PRE_RUN is on lines 120 and 456 & line 456 wins and is empty)
+  ```
+
+  The `Daemon now` line never carries it: that daemon read its own copy of the file when it
+  started.
 - `OUT OF SYNC` means the personal-script path or config source changed; restart
   `proxsave-daemon.service`.
 - `PATH STATE CHANGED SINCE STARTUP` means ownership, mode, or verdict differs from the startup
@@ -710,7 +727,7 @@ The warning is gone and the run reports `Simple retention -> current: N, limit: 
 
 #### Symptom: No email notifications received
 
-First, confirm which delivery method you are using:
+First, confirm which delivery mode you are using:
 
 ```bash
 # configs/backup.env

@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -219,10 +220,7 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			return applied, failed
 		}
 		target := fmt.Sprintf("/nodes/%s/%s/%s/config", node, vm.Kind, vm.VMID)
-		display := vm.VMID
-		if vm.Name != "" {
-			display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
-		}
+		display := guestDisplay(vm)
 
 		resource, exists := inventory[vm.VMID]
 		if exists && resource.Node != node {
@@ -248,6 +246,21 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			// the cluster-wide absence check before doing so. Its disks are not
 			// part of a config restore and the log says so.
 			if err := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeAbsent); err != nil {
+				// A registration claims the VMID cluster-wide BEFORE the staged conf is
+				// written, and the helper's own cleanup only runs when that write
+				// returns an error. A cancelled restore kills the helper outright, so
+				// nothing runs and the claim can outlive the run as an empty,
+				// create-locked guest on a VMID nobody can reuse. It cannot be made
+				// atomic - the process can die at any instant - so say what may be
+				// left rather than leave the operator to find it.
+				if ctx.Err() != nil {
+					logging.DebugStep(logger, "pve guest configs apply",
+						"vmid=%s classification=absent action=aborted-mid-registration", vm.VMID)
+					logger.Warning("Aborted while registering VM/CT config %s: VMID %s may be left reserved and locked on the cluster",
+						display, vm.VMID)
+					failed++
+					continue
+				}
 				logger.Warning("Failed to register VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
 				failed++
 				continue
@@ -321,6 +334,94 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		applied++
 	}
 	return applied, failed
+}
+
+// refusedKeysThatDiffer reads the LIVE storage definition and sorts the refused keys
+// into the two that matter: the ones proven to hold something other than the staged
+// value, and the ones it could not judge at all. A key in neither list was compared
+// and matched.
+//
+// It reports COVERAGE rather than a single "comparable" flag, because one flag cannot
+// carry the answer. It used to be raised by the FIRST comparable key, so a definition
+// with one key compared and one key missing from the live object came back as
+// differing=nil, comparable=true, and the caller announced that every refused key
+// already matched - a check it had made on half of them.
+//
+// A value is compared only when both sides are plain scalars. `pvesh get
+// /storage/<id> --output-format=json` returns a flat object, but two of its shapes
+// cannot be compared as text: a content list is comma-joined in an order PVE does not
+// promise, and a boolean comes back as 1/0 against a cfg that may spell it either
+// way. Both are left uncompared rather than guessed, because a wrong "differs" turns
+// a clean restore into a failure.
+func refusedKeysThatDiffer(ctx context.Context, logger *logging.Logger, id string, dropped, args []string) (differing, uncompared []string) {
+	live, err := liveStorageDefinition(ctx, id)
+	if err != nil {
+		logger.Debug("storage %s: the live definition could not be read, so not one of the %d refused key(s) (%s) can be judged: %v",
+			id, len(dropped), strings.Join(dropped, ", "), err)
+		return nil, append([]string(nil), dropped...)
+	}
+	logger.Debug("storage %s: the live definition answered with %d comparable value(s); judging %d refused key(s) against it",
+		id, len(live), len(dropped))
+	staged := make(map[string]string, len(args))
+	for _, arg := range args {
+		key, value, ok := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if ok {
+			staged[key] = value
+		}
+	}
+	matched := 0
+	for _, key := range dropped {
+		want, haveStaged := staged[key]
+		got, haveLive := live[key]
+		if !haveStaged || !haveLive {
+			logger.Debug("storage %s: refused key %s has no comparable pair (staged=%v live=%v), so whether its staged value is in effect stays unknown",
+				id, key, haveStaged, haveLive)
+			uncompared = append(uncompared, key)
+			continue
+		}
+		if strings.TrimSpace(got) != strings.TrimSpace(want) {
+			logger.Debug("storage %s: refused key %s differs (live=%q staged=%q)", id, key, got, want)
+			differing = append(differing, key)
+			continue
+		}
+		matched++
+		logger.Debug("storage %s: refused key %s already holds the staged value", id, key)
+	}
+	logger.Debug("storage %s: refused keys judged - %d already correct, %d differ%s, %d not comparable%s",
+		id, matched, len(differing), namedKeys(differing), len(uncompared), namedKeys(uncompared))
+	return differing, uncompared
+}
+
+// namedKeys renders a key list as a parenthetical, and renders nothing at all when
+// the list is empty, so a summary line does not carry "0 differ ()".
+func namedKeys(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(keys, ", ") + ")"
+}
+
+// liveStorageDefinition returns the current values of a storage definition, keeping
+// only the ones that can be compared as text. See refusedKeysThatDiffer for why a
+// comma-joined list and a JSON boolean are left out instead of coerced.
+func liveStorageDefinition(ctx context.Context, id string) (map[string]string, error) {
+	out, err := runCommandStdout(ctx, "pvesh", "get", "/storage/"+id, "--output-format=json")
+	if err != nil {
+		return nil, fmt.Errorf("pvesh get /storage/%s: %w", id, err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse the live definition of storage %s: %w", id, err)
+	}
+	values := make(map[string]string, len(raw))
+	for key, value := range raw {
+		text, ok := value.(string)
+		if !ok || strings.Contains(text, ",") {
+			continue
+		}
+		values[key] = text
+	}
+	return values, nil
 }
 
 // guestConfDir maps a guest kind to its pmxcfs config directory.
@@ -466,12 +567,12 @@ func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
 // changed reports whether a set actually reached the node. It is false in the two
 // shapes where there was nothing to send: a staged block whose only keys are the
 // create-only header ones (--storage/--type, stripped by the caller), and a block
-// whose every remaining key came back refused. Both mean the existing definition
-// already matches everything this restore could change, which is a success - but
-// not an update, and the caller must not announce one.
-func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) (changed bool, err error) {
-	changed, _, err = pveshSetDroppingRefusedKeys(ctx, logger, "storage "+id, "/storage/"+id, args)
-	return changed, err
+// whose every remaining key came back refused. Neither is an update and the caller
+// must not announce one, but they are NOT the same fact and dropped is what tells
+// them apart: empty means the definition already matches everything this restore
+// could change, non-empty means nothing could be sent and it does not.
+func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) (changed bool, dropped []string, err error) {
+	return pveshSetDroppingRefusedKeys(ctx, logger, "storage "+id, "/storage/"+id, args)
 }
 
 // pveshSetDroppingRefusedKeys runs `pvesh set <path>` and, on a refusal that NAMES
@@ -616,14 +717,19 @@ func parseColonConfigLine(line string) (key, value string, ok bool) {
 	return key, value, true
 }
 
-func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, failed int, err error) {
+// applyStorageCfg returns three counts, not two. unknown is the outcome the two-bucket
+// shape had nowhere to put: nothing reached the node AND the restore could not
+// establish whether the staged values are already in effect. Calling that applied said
+// something it did not know, and calling it failed would abort a restore over something
+// never shown to be wrong.
+func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, unknown, failed int, err error) {
 	blocks, perr := parseStorageBlocks(cfgPath)
 	if perr != nil {
-		return 0, 0, perr
+		return 0, 0, 0, perr
 	}
 	if len(blocks) == 0 {
 		logger.Info("No storage definitions detected in storage.cfg")
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 
 	for _, blk := range blocks {
@@ -633,7 +739,7 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		// so an abort would be reported as storage definitions that failed to apply.
 		// The counts so far are returned with it: they say what really landed.
 		if cerr := ctx.Err(); cerr != nil {
-			return applied, failed, cerr
+			return applied, unknown, failed, cerr
 		}
 		createArgs, ok := storageBlockPveshArgs(blk)
 		if !ok {
@@ -655,17 +761,50 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 				}
 				setArgs = append(setArgs, arg)
 			}
-			changed, setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs)
+			changed, dropped, setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs)
 			switch {
 			case setErr != nil:
 				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
 				failed++
+			case !changed && len(dropped) > 0:
+				// Nothing reached the node AND keys were refused. The refusal alone
+				// does not say whether anything was LOST: a create-only key may
+				// already hold the staged value, in which case there was nothing to
+				// do, or it may differ, in which case the restore could not put it
+				// back. Only the live definition answers that, so it is read rather
+				// than guessed, and the answer has three shapes rather than two.
+				//
+				// differing first: a key proven wrong is a failure even when other
+				// keys went unjudged, because that one staged value is established
+				// as not in effect.
+				differing, uncompared := refusedKeysThatDiffer(ctx, logger, blk.ID, dropped, setArgs)
+				switch {
+				case len(differing) > 0:
+					logger.Warning("Failed to apply storage %s: the update schema refuses %s and the live definition does not match the staged value",
+						blk.ID, strings.Join(differing, ", "))
+					failed++
+				case len(uncompared) > 0:
+					logger.Warning("Applied nothing for storage %s: every staged key refused, not comparable (%s)",
+						blk.ID, strings.Join(uncompared, ", "))
+					unknown++
+				default:
+					logger.Info("Storage definition %s already matches every staged key the update schema refuses", blk.ID)
+					applied++
+				}
+			case changed && len(dropped) > 0:
+				// Part of the definition landed and part did not. Announcing the
+				// update without naming the rest loses the only evidence the operator
+				// has that their staged values are not in effect.
+				logger.Warning("Updated existing storage definition %s without %s: the update schema refuses those keys, so their staged values are not applied",
+					blk.ID, strings.Join(dropped, ", "))
+				applied++
 			case changed:
 				logger.Info("Updated existing storage definition %s", blk.ID)
 				applied++
 			default:
-				// Nothing was sent, so saying "Updated" would claim a write that
-				// never happened; the definition is nonetheless in the staged state.
+				// Nothing was sent and nothing was refused: the block carried no
+				// settable key at all, so the definition really does already match
+				// everything this restore could change.
 				logger.Info("Storage definition %s already matches every settable key", blk.ID)
 				applied++
 			}
@@ -675,11 +814,11 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		}
 
 		if err := ctx.Err(); err != nil {
-			return applied, failed, err
+			return applied, unknown, failed, err
 		}
 	}
 
-	return applied, failed, nil
+	return applied, unknown, failed, nil
 }
 
 func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {

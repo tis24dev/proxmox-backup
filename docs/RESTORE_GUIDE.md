@@ -725,7 +725,7 @@ VM/CT apply completed: ok=2 failed=0
 Storage configuration found: .../etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 Applied storage definition local
-Storage apply completed: ok=1 failed=0
+Storage apply completed: ok=1 unknown=0 failed=0
 ```
 
 See [pvesh SAFE Apply](#pvesh-safe-apply-cluster-safe-mode) for detailed explanation.
@@ -1505,7 +1505,7 @@ Storage configuration found: .../etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 Applied storage definition local
 Applied storage definition backup-nfs
-Storage apply completed: ok=2 failed=0
+Storage apply completed: ok=2 unknown=0 failed=0
 
 Datacenter configuration found: .../etc/pve/datacenter.cfg
 Apply datacenter.cfg? (y/N): n
@@ -1513,6 +1513,42 @@ Skipping datacenter.cfg apply
 
 Pools apply (membership) completed: ok=1 failed=0
 ```
+
+**Reading the storage summary**: `Storage apply completed: ok=N unknown=M failed=K` counts three
+different outcomes, and `unknown` is neither of the other two.
+
+| Count | What it means |
+|---|---|
+| `ok` | the definition was applied, or the restore read the live one and confirmed it already holds every staged value |
+| `failed` | the restore established that a staged value is NOT in effect and could not put it back |
+| `unknown` | nothing reached the node and the restore could not establish whether the staged values are already in effect |
+
+A definition lands in `unknown` when the update schema refuses every staged key (they are
+create-only on that storage type) AND the live definition could not be compared: `pvesh get
+/storage/<id>` failed, or a refused key is absent from the live object or is not a plain scalar.
+The run says so by name:
+
+```text
+Applied nothing for storage nas: every staged key refused, not comparable (server, export)
+```
+
+**Neither `unknown` nor `failed` halts the restore**, in either apply path. A non-zero count is
+not a stop; the two paths differ only in what the run's outcome records:
+
+- The SAFE cluster apply shown above logs the summary and the per-definition `WARNING`, then goes
+  straight on to `datacenter.cfg`. Nothing in that flow returns an error for a storage count, so
+  the log lines are the whole record.
+- The staged apply (`PVE staged apply: storage.cfg applied (ok=N unknown=M failed=K)`) does return
+  an error when `failed > 0`, but the caller does not treat it as an abort: it marks the run as
+  completed WITH WARNINGS and keeps applying the remaining categories. Only a user abort or an
+  inconsistent-state failure halts a restore.
+
+Leaving `unknown` short of a failure is deliberate: nothing there was shown to be wrong, so
+counting it as one would be a guess in the other direction. The consequence for the operator is
+the same either way. **A restore that ended without an error is not the same as a restore that is
+complete.** Check every definition the run named, with `pvesh get /storage/<id>
+--output-format=json` against the `storage.cfg` in the export, and set by hand anything that
+differs.
 
 **Benefits of pvesh Apply**:
 - Non-destructive: works with running cluster
