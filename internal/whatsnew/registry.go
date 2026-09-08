@@ -178,6 +178,7 @@ var notes = []Note{
 		Version: "0.38.0",
 		Lines: []string{
 			"A personal script the daemon refuses to start now says so, instead of the run looking as if it ran",
+			"The release notes screen closes with enter only; esc no longer offers a second exit that did the same thing",
 		},
 		Actions: []string{
 			"If the daemon says a personal script was not started for a run, the reason names what changed about the file",
