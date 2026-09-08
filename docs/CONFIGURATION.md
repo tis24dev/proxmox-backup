@@ -51,13 +51,14 @@ it and before the effective settings are printed:
 
 ```text
 INFO     Configuration integrity check:
-DEBUG    Configuration integrity: file=/opt/proxsave/configs/backup.env lines=442 assignments=182 distinct=182 template=182
-DEBUG    Configuration integrity: multi-value variables skipped: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS
-DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown (duration=2.4ms)
+DEBUG    Configuration integrity: file=/opt/proxsave/configs/backup.env lines=475 assignments=182 distinct=182 template=182
+DEBUG    Configuration integrity: template assigns 182 variables and documents 33 more as commented examples
+DEBUG    Configuration integrity: variables that may repeat without discarding: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS
+DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown, 0 legacy (duration=3.1ms)
 INFO     ✓ Configuration file ok
 ```
 
-It reports three things, one line each, and their levels differ because the facts differ:
+It reports four things, one line each, and their levels differ because the facts differ:
 
 | Finding | Level | Meaning |
 |---------|-------|---------|

@@ -22,7 +22,7 @@ var configIntegrityAuditor = config.AuditConfigFile
 // printed. The order is the point: a discarded value has to be reported before the
 // recap that would otherwise show the surviving one as if nothing were lost.
 //
-// Levels carry the difference between the three findings, which are not the same fact:
+// Levels carry the difference between the four findings, which are not the same fact:
 //   - duplicated: a value the operator wrote is discarded by the loader's last-wins
 //     rule, so it is a WARNING;
 //   - absent: the binary carries the variable in its embedded template but the file
@@ -30,7 +30,10 @@ var configIntegrityAuditor = config.AuditConfigFile
 //     WARNING too. An operator who has NOT upgraded runs an older binary with an older
 //     template and sees nothing here;
 //   - unknown: a variable the binary does not read. Nothing the operator wrote is lost
-//     by the loader, it was never picked up in the first place, so it is INFO.
+//     by the loader, it was never picked up in the first place, so it is INFO;
+//   - legacy: an old name the loader still honours. WARNING when the canonical name is
+//     assigned too, because then one of the two lines has no effect at all; INFO when
+//     the legacy name is the only one, since it works and only wants renaming.
 //
 // The raw counters go to DEBUG BEFORE the operator-facing lines, because the audit
 // knows the numbers before it renders them.
@@ -177,7 +180,7 @@ func duplicatedVariableSentence(duplicated config.DuplicatedVariable) string {
 // integrityVerdictCounts lists only the categories that actually fired, so the verdict
 // never spends a word on a category that found nothing.
 func integrityVerdictCounts(report *config.ConfigIntegrityReport) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if n := len(report.Duplicated); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d duplicated", n))
 	}
