@@ -363,30 +363,43 @@ func TestAKernelSettingChangeIsNotAPathStateChange(t *testing.T) {
 	components := []personalScriptPathComponent{{Path: "/home/me", UID: 1000, Mode: 0o755}}
 
 	// The stored state was written by a daemon that appended the advisory to Reason,
-	// which is what every release before this one did.
+	// which is what every release before this one did. Every shape it could have
+	// appended has to normalise away, not just the ones without internal punctuation:
+	// the disabled shape carries its own "; set it to 1", so a clause filter split on
+	// "; " dropped the first half and kept the second, leaving the stored side one
+	// clause longer than the live one.
 	runtime := daemonRuntimeDiagnostic{
 		Availability: daemonRuntimeAvailable,
 		ConfigPath:   "/etc/proxsave/backup.env",
 	}
-	running := personalScriptDiagnostic{
-		Path:       path,
-		State:      personalScriptReadyWithWarning,
-		Reason:     ancestors + "; fs.protected_hardlinks=1 blocks hard-linking root-owned executables",
-		Components: components,
+	stored := map[string]string{
+		"enforced":   "fs.protected_hardlinks=1 blocks hard-linking root-owned executables",
+		"disabled":   "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
+		"unreadable": "fs.protected_hardlinks unreadable: permission denied",
 	}
-	// The operator has since set the sysctl to 0, and nothing about the path moved.
-	current := personalScriptDiagnostic{
-		Path:             path,
-		State:            personalScriptReadyWithWarning,
-		Reason:           ancestors,
-		HardlinkAdvisory: "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
-		Components:       components,
-	}
+	for name, advisory := range stored {
+		t.Run(name, func(t *testing.T) {
+			running := personalScriptDiagnostic{
+				Path:       path,
+				State:      personalScriptReadyWithWarning,
+				Reason:     ancestors + "; " + advisory,
+				Components: components,
+			}
+			// The sysctl has since moved, and nothing about the path did.
+			current := personalScriptDiagnostic{
+				Path:             path,
+				State:            personalScriptReadyWithWarning,
+				Reason:           ancestors,
+				HardlinkAdvisory: "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
+				Components:       components,
+			}
 
-	comparison := comparePersonalScript(runtime, "/etc/proxsave/backup.env", running, current)
-	if comparison.Synchronization != personalScriptInSync {
-		t.Fatalf("synchronization = %q (%s); the path did not change, only fs.protected_hardlinks did",
-			comparison.Synchronization, comparison.SyncReason)
+			comparison := comparePersonalScript(runtime, "/etc/proxsave/backup.env", running, current)
+			if comparison.Synchronization != personalScriptInSync {
+				t.Fatalf("synchronization = %q (%s: %s); the path did not change, only fs.protected_hardlinks did",
+					comparison.Synchronization, comparison.SyncReason, comparison.SyncDetail)
+			}
+		})
 	}
 }
 

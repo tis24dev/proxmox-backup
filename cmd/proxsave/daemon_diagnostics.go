@@ -328,19 +328,23 @@ func pathStateDifference(running, current personalScriptDiagnostic) string {
 // the sysctl read, and the unreadable case.
 const hardlinkAdvisoryPrefix = "fs.protected_hardlinks"
 
-// withoutHardlinkAdvisory removes the advisory clause a daemon from before the split
-// appended to its stored Reason. Without it the two sides differ for a fact that is
-// no longer part of either, and every such daemon reports PATH STATE CHANGED until
-// it restarts.
+// withoutHardlinkAdvisory removes the advisory a daemon from before the split appended
+// to its stored Reason. Without it the two sides differ for a fact that is no longer
+// part of either, and every such daemon reports PATH STATE CHANGED until it restarts.
+//
+// It cuts from the prefix to the END of the string rather than filtering "; "-separated
+// clauses, because the advisory is not one clause. The disabled shape is
+// "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1" -
+// a filter split on "; " dropped the half that carries the prefix and kept "set it to
+// 1", so the stored side came out one clause longer than the live one and produced the
+// very verdict this function exists to stop. The cut is safe because there is one
+// producer, personalScriptForeignAncestorReason, and it appends the advisory last.
 func withoutHardlinkAdvisory(reason string) string {
-	kept := make([]string, 0, 4)
-	for _, clause := range strings.Split(reason, "; ") {
-		if strings.HasPrefix(strings.TrimSpace(clause), hardlinkAdvisoryPrefix) {
-			continue
-		}
-		kept = append(kept, clause)
+	start := strings.Index(reason, hardlinkAdvisoryPrefix)
+	if start < 0 {
+		return reason
 	}
-	return strings.Join(kept, "; ")
+	return strings.TrimSuffix(strings.TrimSpace(reason[:start]), ";")
 }
 
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:
