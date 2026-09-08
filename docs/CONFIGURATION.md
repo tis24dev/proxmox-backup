@@ -1295,7 +1295,7 @@ BACKUP_PBS_S3_ENDPOINTS=true       # s3.cfg (S3 endpoints, used by S3 datastores
 BACKUP_PBS_NODE_CONFIG=true        # node.cfg (global PBS settings)
 
 # ACME
-BACKUP_PBS_ACME_ACCOUNTS=true      # acme/accounts.cfg
+BACKUP_PBS_ACME_ACCOUNTS=true      # acme/accounts/ (one file per account)
 BACKUP_PBS_ACME_PLUGINS=true       # acme/plugins.cfg
 
 # Integrations

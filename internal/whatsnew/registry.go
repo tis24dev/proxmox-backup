@@ -179,10 +179,14 @@ var notes = []Note{
 		Lines: []string{
 			"A personal script the daemon refuses to start now says so, instead of the run looking as if it ran",
 			"The release notes screen closes with enter only; esc no longer offers a second exit that did the same thing",
+			"PBS ACME accounts stop reporting not configured: they are a directory, now backed up and restored as one",
+			"BACKUP_PBS_ACME_ACCOUNTS=false now really keeps the ACME account keys out of the archive",
 		},
 		Actions: []string{
 			"If the daemon says a personal script was not started for a run, the reason names what changed about the file",
 			"To clear a personal-script trust warning without moving the script, see Clearing a READY WITH WARNING in DAEMON.md",
+			"A PBS restore mirrors the ACME accounts: an account on the node that the backup does not carry is removed",
+			"Archives taken before this fix hold no accounts directory, and restoring one leaves the node accounts untouched",
 		},
 	},
 }
