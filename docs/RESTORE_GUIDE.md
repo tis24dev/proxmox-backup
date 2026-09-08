@@ -1514,6 +1514,30 @@ Skipping datacenter.cfg apply
 Pools apply (membership) completed: ok=1 failed=0
 ```
 
+**Reading the storage summary**: `Storage apply completed: ok=N unknown=M failed=K` counts three
+different outcomes, and `unknown` is neither of the other two.
+
+| Count | What it means |
+|---|---|
+| `ok` | the definition was applied, or the restore read the live one and confirmed it already holds every staged value |
+| `failed` | the restore established that a staged value is NOT in effect and could not put it back |
+| `unknown` | nothing reached the node and the restore could not establish whether the staged values are already in effect |
+
+A definition lands in `unknown` when the update schema refuses every staged key (they are
+create-only on that storage type) AND the live definition could not be compared: `pvesh get
+/storage/<id>` failed, or a refused key is absent from the live object or is not a plain scalar.
+The run says so by name:
+
+```text
+Applied nothing for storage nas: every staged key refused, not comparable (server, export)
+```
+
+`unknown` does NOT stop the restore. Only `failed > 0` does, and it is deliberate: nothing in the
+unknown case was shown to be wrong, so aborting a restore over it would be a guess in the other
+direction. It also means a restore is not complete just because it ended without an error. Check
+each definition the run named, with `pvesh get /storage/<id> --output-format=json` against the
+`storage.cfg` in the export, and set by hand anything that differs.
+
 **Benefits of pvesh Apply**:
 - Non-destructive: works with running cluster
 - Selective: apply only what you need
