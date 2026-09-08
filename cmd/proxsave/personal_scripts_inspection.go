@@ -67,7 +67,17 @@ type personalScriptDiagnostic struct {
 	// the two sides, so a clause that can change without the path moving turns a
 	// sysctl edit into PATH STATE CHANGED SINCE STARTUP.
 	HardlinkAdvisory string
-	Components       []personalScriptPathComponent
+	// HardlinkProtectionInForce is the same reading as a fact rather than a sentence,
+	// so a renderer decides the LEVEL without matching on the advisory's words. The
+	// two halves are written together by personalScriptHardlinkAdvisory and must never
+	// disagree; TestTheAdvisoryTextAndItsFlagAgree pins that they cannot.
+	//
+	// It exists because the advisory says two opposite things. Off or unreadable is a
+	// warning: the trust decision has nothing behind it. In force is the reassurance
+	// that it does, and raising that as a WARNING told the operator to act on
+	// something already right.
+	HardlinkProtectionInForce bool
+	Components                []personalScriptPathComponent
 }
 
 type personalScriptsDiagnostics struct {
@@ -107,15 +117,18 @@ func readProtectedHardlinks() (int, error) {
 // the ownership check stops nothing and the trust decision has no mitigation left
 // behind it. Reporting it is not a policy change: the path stays enabled either
 // way, as the maintainer decided; the operator is told what the decision rests on.
-func personalScriptHardlinkAdvisory() string {
+// It returns the sentence AND whether the protection is actually in force, because
+// the two readings need opposite levels and matching on the sentence to tell them
+// apart would put a renderer's verdict at the mercy of an edit to this text.
+func personalScriptHardlinkAdvisory() (string, bool) {
 	value, err := personalScriptHardlinkProtection()
 	if err != nil {
-		return fmt.Sprintf("fs.protected_hardlinks unreadable: %v", err)
+		return fmt.Sprintf("fs.protected_hardlinks unreadable: %v", err), false
 	}
 	if value == 0 {
-		return "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1"
+		return "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1", false
 	}
-	return fmt.Sprintf("fs.protected_hardlinks=%d blocks hard-linking root-owned executables", value)
+	return fmt.Sprintf("fs.protected_hardlinks=%d blocks hard-linking root-owned executables", value), true
 }
 
 // inspectPersonalScripts returns both configured-script verdicts without
@@ -235,7 +248,7 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 				// see HardlinkAdvisory.
 				diagnostic.State = personalScriptReadyWithWarning
 				diagnostic.Reason = personalScriptForeignAncestorReason(foreign, daemonUID)
-				diagnostic.HardlinkAdvisory = personalScriptHardlinkAdvisory()
+				diagnostic.HardlinkAdvisory, diagnostic.HardlinkProtectionInForce = personalScriptHardlinkAdvisory()
 			} else {
 				diagnostic.State = personalScriptReady
 			}

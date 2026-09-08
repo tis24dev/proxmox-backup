@@ -1112,6 +1112,17 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		if reason != "" {
 			line += theme.Subtle.Render(": " + reason)
 		}
+		// The mitigation the accepted ancestor RESTS ON, on its own line under the
+		// verdict, exactly where logPersonalScriptDiagnostic puts it. Leaving it out
+		// showed the trust decision without what stands behind it, on the screen an
+		// operator is most likely to be reading.
+		if advisory := components.SanitizeText(diagnostic.HardlinkAdvisory); advisory != "" {
+			style := theme.WarningText
+			if diagnostic.HardlinkProtectionInForce {
+				style = theme.Subtle
+			}
+			line += "\n" + theme.Text.Render(label+": ") + style.Render(advisory)
+		}
 	case personalScriptRefused:
 		line += theme.ErrorText.Render("REFUSED")
 		if path != "" {

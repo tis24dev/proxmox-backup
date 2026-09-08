@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -212,3 +213,112 @@ func stripStyling(line string) string {
 }
 
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// The advisory is the mitigation the accepted foreign-owned ancestor RESTS ON, and
+// inspectPersonalScript's own comment says it is reported with the ancestor, never
+// separately. The CLI does that; the dashboard read Path and Reason and dropped it,
+// so the one screen an operator is most likely to be looking at showed the trust
+// decision without what stands behind it.
+func TestBothRenderersShowTheHardlinkAdvisory(t *testing.T) {
+	diagnostic := personalScriptDiagnostic{
+		Key:              "PERSONAL_SCRIPT_PRE_RUN",
+		State:            personalScriptReadyWithWarning,
+		Path:             "/home/me/dd/hook.sh",
+		Reason:           "/home/me, /home/me/dd: UID 1000-owned; owner can replace descendants run as UID 0",
+		HardlinkAdvisory: "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
+	}
+	want := "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1"
+
+	if got := stripStyling(buildDashboardPersonalScriptLine("  Configuration", diagnostic)); !strings.Contains(got, want) {
+		t.Fatalf("dashboard line missing the advisory: %q", got)
+	}
+	if got := captureDaemonDiagnosticLine(t, diagnostic); !strings.Contains(got, want) {
+		t.Fatalf("CLI line missing the advisory: %q", got)
+	}
+}
+
+// The advisory carries two opposite messages and used to be logged at WARNING for
+// both. "fs.protected_hardlinks=1 blocks hard-linking root-owned executables" says
+// the protection IS in force: raising it as a warning tells the operator to act on
+// something that is already right, in the middle of a block where the other WARNING
+// lines mean the opposite.
+func TestTheAdvisoryLevelFollowsWhetherTheProtectionIsInForce(t *testing.T) {
+	base := personalScriptDiagnostic{
+		Key:    "PERSONAL_SCRIPT_PRE_RUN",
+		State:  personalScriptReadyWithWarning,
+		Path:   "/home/me/dd/hook.sh",
+		Reason: "/home/me, /home/me/dd: UID 1000-owned; owner can replace descendants run as UID 0",
+	}
+	cases := map[string]struct {
+		advisory  string
+		inForce   bool
+		wantLevel string
+	}{
+		"disabled": {
+			advisory:  "fs.protected_hardlinks=0 allows hard-linking root-owned executables; set it to 1",
+			wantLevel: "WARNING",
+		},
+		"unreadable": {
+			advisory:  "fs.protected_hardlinks unreadable: permission denied",
+			wantLevel: "WARNING",
+		},
+		"enforced": {
+			advisory:  "fs.protected_hardlinks=1 blocks hard-linking root-owned executables",
+			inForce:   true,
+			wantLevel: "INFO",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			diagnostic := base
+			diagnostic.HardlinkAdvisory = tc.advisory
+			diagnostic.HardlinkProtectionInForce = tc.inForce
+
+			var advisoryLine string
+			for _, line := range strings.Split(captureDaemonDiagnosticLine(t, diagnostic), "\n") {
+				if strings.Contains(line, "fs.protected_hardlinks") {
+					advisoryLine = line
+				}
+			}
+			if advisoryLine == "" {
+				t.Fatal("the advisory never reached the log")
+			}
+			if !strings.Contains(advisoryLine, tc.wantLevel) {
+				t.Fatalf("advisory logged at the wrong level, want %s: %q", tc.wantLevel, advisoryLine)
+			}
+		})
+	}
+}
+
+// The text and the flag are two halves of one reading and must never disagree: a
+// renderer that trusts the flag while the text says the opposite is worse than
+// either being wrong alone.
+func TestTheAdvisoryTextAndItsFlagAgree(t *testing.T) {
+	orig := personalScriptHardlinkProtection
+	t.Cleanup(func() { personalScriptHardlinkProtection = orig })
+
+	cases := []struct {
+		name    string
+		value   int
+		err     error
+		inForce bool
+	}{
+		{"disabled", 0, nil, false},
+		{"enforced", 1, nil, true},
+		{"unexpected value", 2, nil, true},
+		{"unreadable", 0, errors.New("permission denied"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			personalScriptHardlinkProtection = func() (int, error) { return tc.value, tc.err }
+			text, inForce := personalScriptHardlinkAdvisory()
+			if inForce != tc.inForce {
+				t.Fatalf("inForce = %v, want %v for %q", inForce, tc.inForce, text)
+			}
+			saysBlocks := strings.Contains(text, "blocks hard-linking")
+			if saysBlocks != tc.inForce {
+				t.Fatalf("the text and the flag disagree: inForce=%v text=%q", inForce, text)
+			}
+		})
+	}
+}

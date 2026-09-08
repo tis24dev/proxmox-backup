@@ -491,9 +491,19 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 // logPersonalScriptHardlinkAdvisory puts the mitigation on its own line, next to the
 // side it describes. It is a live kernel reading, so only the CURRENT side can carry
 // one; the running side shows the path facts alone.
+//
+// The LEVEL follows the reading rather than the field being present, because the two
+// readings say opposite things. Protection off, or unreadable, leaves the accepted
+// ancestor with nothing behind it and is a WARNING. Protection in force is the
+// reassurance that the trust decision holds, and announcing that as a WARNING put it
+// among lines that all mean the opposite.
 func logPersonalScriptHardlinkAdvisory(logger *logging.Logger, label string, diagnostic personalScriptDiagnostic) {
 	advisory := daemonDiagnosticText(diagnostic.HardlinkAdvisory)
 	if advisory == "" {
+		return
+	}
+	if diagnostic.HardlinkProtectionInForce {
+		logger.Info("%s: %s", label, advisory)
 		return
 	}
 	logger.Warning("%s: %s", label, advisory)

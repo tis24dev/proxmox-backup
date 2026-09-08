@@ -369,7 +369,7 @@ func TestForeignOwnedAncestorAdvisoryNamesTheHardlinkProtection(t *testing.T) {
 			t.Cleanup(func() { personalScriptHardlinkProtection = orig })
 			personalScriptHardlinkProtection = func() (int, error) { return tc.value, tc.probeer }
 
-			got := personalScriptHardlinkAdvisory()
+			got, _ := personalScriptHardlinkAdvisory()
 			if !strings.Contains(got, tc.want) {
 				t.Fatalf("advisory = %q, want it to contain %q", got, tc.want)
 			}
