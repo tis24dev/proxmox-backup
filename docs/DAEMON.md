@@ -231,11 +231,14 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   `/dev/null`. Nothing they print or fail at appears in the run log, in the log file, in the
   run recap, in an email, Telegram, Gotify or webhook notification, in a healthchecks ping, or
   in the Prometheus metrics. If you want a record of what your script did, your script writes
-  it.
-- **Their exit code is ignored.** A script that fails or goes missing at run time changes
-  nothing: the backup runs anyway, the run's own exit code is unaffected, and no warning is
-  counted in the run. (A path that is not executable never gets that far: the trusted-path
-  gate below refuses it at daemon start.) `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome: success,
+  it. The one thing that is reported is not about your script but about ProxSave's own
+  decision: when a script is **not started**, the daemon log carries one `WARNING` saying so.
+  See **When a script is not started** below.
+- **Their exit code is ignored.** A script that fails at run time changes nothing: the backup
+  runs anyway, the run's own exit code is unaffected, and no warning is counted in the run. A
+  script that has gone missing is not the same thing and does produce that one daemon-log
+  `WARNING`, because it did not run at all. (A path that is not executable never gets that far:
+  the trusted-path gate below refuses it at daemon start.) `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome: success,
   failure, a child that skipped because another backup held the lock, hang, and a run
   interrupted by a shutdown. Neither script starts when there is no run at all, which is
   `BACKUP_ENABLED=false` or a tick arriving while the daemon is stopping.
@@ -265,6 +268,59 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   startup `WARNING`, naming the setting and reason. These advisory/refusal warnings are the
   single exception to the scripts' execution silence; without them, a policy decision would
   be indistinguishable from a script that ran and did nothing.
+
+  The startup warning appears once per daemon start, not once per backup. Backups run in a
+  child process that never repeats the check, so a scheduled run does not carry it. It comes
+  back on a daemon restart, and on demand under `proxsave --daemon-status`.
+
+### Clearing a `READY WITH WARNING`
+
+The warning is not about your script's own ownership. That file already passed the stricter
+check, or it would be `REFUSED` rather than accepted. What raises it is a **parent directory**
+owned by neither root nor the daemon UID: that owner can unlink your script and put another
+file in its place.
+
+Moving the script to a root-owned path such as `/usr/local/bin` is the plain answer. Two others
+exist, and they are not equivalent:
+
+- A **hard link** (`ln`, not `ln -s`) of the script into a root-owned directory gives the same
+  inode an ancestor chain owned entirely by root. The warning goes because its cause is gone,
+  and nothing is weakened: the inode stays one the other user cannot modify. Be aware that most
+  editors save by rename-replace, so editing the copy in the home directory creates a **new**
+  inode and the hard link keeps serving the old content, silently.
+- A **bind mount** of the user-owned directory onto a root-owned mountpoint also clears it,
+  because symlink resolution does not see a bind mount and the ancestor chain read is the
+  mountpoint's. The real directory stays writable by its owner, so the risk the warning
+  describes is unchanged and simply no longer stated.
+
+Do **not** chown a user's home to `root:root` to silence the warning. Root can already traverse
+a mode-0700 home, which is why the path is accepted at all.
+
+There is no setting that suppresses the warning, and lowering `DEBUG_LEVEL` to hide it would
+hide every other warning ProxSave emits. Whichever of the above you choose, the per-run gate is
+unaffected: ProxSave still revalidates the opened inode before every single invocation, so
+nothing untrusted is executed even under a bind mount.
+
+### When a script is not started
+
+The startup gate speaks about the path as it was when the daemon started. A second gate runs
+before **every** invocation: the file is opened without following a symlink, the opened inode is
+re-checked for regular/executable/not group- or other-writable/owned by root or the daemon UID,
+and the child execs that inode rather than the pathname, so replacing the file between the check
+and the exec cannot change what runs.
+
+When that gate refuses, the script does not run, and the daemon log carries one line:
+
+```text
+WARNING  PERSONAL_SCRIPT_PRE_RUN was not started for this run: /home/me/scripts/pre.sh is owned by uid 1000; accepted owners are root or daemon uid 0
+```
+
+One line per refusal, so a pre and a post script refused in the same run produce two. The reason
+is the specific one: the file is gone, it is no longer executable, it became group- or
+other-writable, its owner changed, or the open did not come back within five seconds (a path on
+a dead NFS or CIFS mount). This is the only run-time line these scripts can produce, and it is
+about ProxSave's decision, never about your script's own behaviour. It goes to the daemon's log,
+not the backup's, so no run log, recap, notification, healthchecks ping or metric gains a row.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
   or arguments in the value, and no arguments passed. The script inherits the daemon's own
   environment with two variables removed, `LOG_FILE` and `BASE_DIR`: the first names the run

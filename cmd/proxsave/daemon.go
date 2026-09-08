@@ -650,21 +650,24 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	// the daemon, leaving the pid and info files behind and no clean-stop line. On both the
 	// script is started and left to the unit's cgroup.
 	//
-	// Neither call logs anything, at any level, on any outcome. That is deliberate and is not
-	// an omission to be repaired: these scripts are the operator's, not ours.
+	// Neither call logs anything the SCRIPT does, at any level, on any outcome: not its output,
+	// not its exit code, not a timeout kill. That is deliberate and is not an omission to be
+	// repaired - these scripts are the operator's, not ours. The one thing they do report is
+	// ProxSave's own decision not to start one, because a per-run gate refusal means the script
+	// did not run and nothing else would ever say so (personal_scripts_gate.go).
 	// Both waited calls carry parentCtx.Done() as their stop: a shutdown landing
 	// MID-WAIT abandons the wait (never the script) instead of holding this
 	// goroutine through the 90-second teardown budget - the same harm the
 	// detached branch below documents avoiding for a shutdown that has already
 	// happened when the post fires.
 	postWaits := true
-	runPersonalScript(d.cfg.PersonalScriptPreRun, parentCtx.Done())
+	runPersonalScriptReporting(d.logger, personalScriptPreRunKey, d.cfg.PersonalScriptPreRun, parentCtx.Done())
 	defer func() {
 		if postWaits && parentCtx.Err() == nil {
-			runPersonalScript(d.cfg.PersonalScriptPostRun, parentCtx.Done())
+			runPersonalScriptReporting(d.logger, personalScriptPostRunKey, d.cfg.PersonalScriptPostRun, parentCtx.Done())
 			return
 		}
-		startPersonalScriptDetached(d.cfg.PersonalScriptPostRun)
+		startPersonalScriptDetachedReporting(d.logger, personalScriptPostRunKey, d.cfg.PersonalScriptPostRun)
 	}()
 
 	r := d.getReporter()

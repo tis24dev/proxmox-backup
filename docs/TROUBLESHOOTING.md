@@ -212,13 +212,25 @@ cat /proc/self/gid_map
   happens, and no log line, warning, notification or ping mentions it.
 
 **Cause**:
-- Silence is by design: ProxSave starts these scripts and reports nothing about them, so a
-  script that never started looks exactly like one that ran and did nothing. The usual reasons
-  it never starts are a path that does not exist, a missing
-  shebang, a value that is a command line rather than a bare path (no shell is used, so
-  arguments, pipes and redirections are not interpreted), a path edited in `backup.env` without
-  restarting the daemon, or a run that was not the daemon's (a manual `proxsave --backup` and a
-  cron-mode run start neither script).
+- Silence is by design for what the script DOES: ProxSave discards its output, its exit code and
+  a timeout kill, so a script that ran and did nothing looks like one that ran and worked. The
+  usual reasons it never starts are a missing shebang, a value that is a command line rather
+  than a bare path (no shell is used, so arguments, pipes and redirections are not interpreted),
+  a path edited in `backup.env` without restarting the daemon, or a run that was not the
+  daemon's (a manual `proxsave --backup` and a cron-mode run start neither script).
+- **A script ProxSave refused to start is not silent.** Before every invocation the daemon
+  re-opens the configured file and re-checks the opened inode. If that gate refuses, the daemon
+  log carries one line per refusal:
+
+  ```text
+  WARNING  PERSONAL_SCRIPT_PRE_RUN was not started for this run: /home/me/scripts/pre.sh could not be opened
+  ```
+
+  The reason is specific: the file is gone, it lost its execute bit, it became group- or
+  other-writable, its owner changed, or the open did not return within five seconds (a path on a
+  dead NFS or CIFS mount). Look for it with
+  `journalctl -u proxsave-daemon.service | grep PERSONAL_SCRIPT`, not in the backup's own log:
+  the line belongs to the daemon.
 - The trusted-path gate is the one cause that DOES log. A symlinked path, a target that is not
   executable or is not owned by root/the daemon UID, a target writable by group or others, or
   a loosely writable non-sticky parent is `REFUSED` and disabled for that daemon. A
@@ -271,7 +283,11 @@ systemctl restart proxsave-daemon.service   # the paths are read at daemon start
   remains a prospective verdict and synchronization is unknown.
 - Do not change a user's home directory to `root:root`. A mode-0700 home can remain owned by its
   user; review the `READY WITH WARNING` trust decision, ensure the script target itself satisfies
-  the stricter ownership/mode rule, and restart the daemon after configuration changes.
+  the stricter ownership/mode rule, and restart the daemon after configuration changes. To clear
+  the advisory instead of living with it, see **Clearing a `READY WITH WARNING`** in
+  [DAEMON.md](DAEMON.md): moving the script, or hard-linking it into a root-owned directory,
+  removes its cause; a bind mount hides the cause without removing it. There is no setting that
+  suppresses the line.
 - Have the script write its own log if you want a record: ProxSave will not write one for you.
 - A script still running after 10 minutes is killed, silently, and the daemon carries on. The
   one exception is the abandoned-child unwind, where the post script is started and left to

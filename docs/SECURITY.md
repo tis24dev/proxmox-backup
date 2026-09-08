@@ -69,9 +69,19 @@ startup warning per advisory setting. A symlink, unsafe target, or loosely writa
 ancestor is `REFUSED`, blanked for that daemon, and produces one startup warning per refused
 setting, so neither policy result becomes silent non-execution.
 
+An administrator who wants the advisory gone has two options beyond moving the script, and they
+differ in what they change. A **hard link** of the script into a root-owned directory removes the
+cause: the ancestor chain becomes root-owned and the inode is still one the other user cannot
+modify. A **bind mount** of the user-owned directory onto a root-owned mountpoint removes only
+the advisory: `filepath.EvalSymlinks` does not see a bind mount, so the chain the gate reads is
+the mountpoint's while the real directory stays writable by its owner. Neither touches the per-run
+gate below, which is where the actual protection lives, so masking the chain costs the operator
+the statement of the risk and nothing else. Chowning a user home to root is not one of the
+options: root already traverses a mode-0700 home, which is the reason the shape is accepted.
+
 **What actually holds the accepted ancestor, and what it rests on.** The startup gate is a
 DIAGNOSTIC; it is not what protects the interval between startup and a run. Every invocation goes
-through a second, silent gate (`openPersonalScriptForExecution`): the final component is opened
+through a second gate (`openPersonalScriptForExecution`), silent when it passes: the final component is opened
 with `O_NOFOLLOW`, the OPENED INODE is then checked for regular/executable/not group- or
 other-writable/owned by root or the daemon UID, and the child execs `/proc/self/fd/3`, so
 replacing the pathname after the check cannot change the inode that runs. That gate is the reason
@@ -88,6 +98,15 @@ per-run gate opens through `safefs.OpenFileUnderRoot`, which roots at the PARENT
 guards only the final component - an ancestor owner can still swap an intermediate directory for a
 symlink, they just cannot make a non-root-owned file pass - and the check is repeated per run, not
 held, so it proves what the inode was at exec time and nothing about later runs.
+
+**A per-run refusal is reported.** The gate is silent about what the script does and loud about
+ProxSave's own decision not to start it: a refusal writes one `WARNING` to the daemon's log
+naming the variable and the specific reason (`PERSONAL_SCRIPT_PRE_RUN was not started for this
+run: ...`). This closes the gap the startup warning could not: a file replaced after startup with
+one the gate will not run left the daemon knowing the script had not run while the operator saw
+an ordinary successful backup. The script's own output, exit code and timeout kill are still
+discarded, and the line lands in the daemon's log rather than the run's, so no recap,
+notification, healthchecks ping or metric is affected.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
