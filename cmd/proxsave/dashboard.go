@@ -145,6 +145,18 @@ func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVe
 	if errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
+	// The last exit that does not count, and the one the timeout check cannot cover:
+	// shell.Ask returns ErrClosed for a program that DIED as well as for ctrl+c, so
+	// saving on every non-timeout error marked the notes seen after a renderer or
+	// terminal failure the operator never got to read past. Only an interrupt is a
+	// person; every other closed session is the UI going away on its own.
+	//
+	// Esc and q do NOT come through here at all - the pager resolves them itself, as
+	// nil or as its abort sentinel - so narrowing this arm cannot re-arm the warning
+	// for the keystrokes issue #305 was about.
+	if errors.Is(err, shell.ErrClosed) && !shell.IsUserInterrupt(err) {
+		return
+	}
 	_ = whatsnewSaveSeen(baseDir, toolVersion)
 }
 

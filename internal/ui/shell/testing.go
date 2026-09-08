@@ -109,8 +109,17 @@ func StartForTest(ctx context.Context, cfg Config) *Session {
 // TestAskReturnsErrClosedOnCtrlC pins the whole chain against a real driven
 // session, and TestAskReturnsErrClosedWhenProgramDies pins that a UI death does
 // NOT produce this value.
-func ClosedByInterrupt() error {
-	return (&Session{runErr: fmt.Errorf("%w: %w", tea.ErrProgramKilled, tea.ErrInterrupted)}).closedErr()
+func ClosedByInterrupt() error { return closedByKilled(tea.ErrInterrupted) }
+
+// ClosedByUIFailure is its counterpart: the same shape, reached because the PROGRAM
+// died rather than because a person pressed anything. Program.Run wraps every event
+// loop error as ErrProgramKilled, so the two differ only by what sits under that
+// wrapper, and a caller that must treat them differently needs both fixtures to be
+// built the same way rather than one real and one invented.
+func ClosedByUIFailure(cause error) error { return closedByKilled(cause) }
+
+func closedByKilled(cause error) error {
+	return (&Session{runErr: fmt.Errorf("%w: %w", tea.ErrProgramKilled, cause)}).closedErr()
 }
 
 // SyncBuffer is a goroutine-safe writer that accumulates renderer output so

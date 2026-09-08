@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,6 +178,28 @@ func TestVERF01(t *testing.T) {
 					t.Fatalf("the warning survived a %s: ShouldWarn = (%v, %v)", tc.name, show, err)
 				}
 			})
+		}
+	})
+
+	// The other side of the same rule. shell.Ask returns ErrClosed for a UI that DIED
+	// as well as for ctrl+c, and the fallback saved the flag for both, so a renderer
+	// failure or a terminal that stopped answering marked the notes seen for an
+	// operator who never saw them - permanently, since the version does not change
+	// again. Only a resolution that came from a person counts.
+	t.Run("a_ui_that_died_does_not_disarm_the_warning", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		base := t.TempDir()
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			return shell.ClosedByUIFailure(errors.New("read /dev/tty: input/output error"))
+		}
+
+		maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
+
+		if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
+			t.Fatalf("the seen-flag was written after the UI died: the operator never saw the notes (stat err=%v)", err)
+		}
+		if show, _, err := whatsnew.ShouldWarn(base, "0.30.0"); !show || err != nil {
+			t.Fatalf("the warning was disarmed by a UI failure: ShouldWarn = (%v, %v)", show, err)
 		}
 	})
 

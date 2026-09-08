@@ -55,8 +55,20 @@ func TestScreen0WritesOnceHoweverTheScreenIsClosed(t *testing.T) {
 		wantCalls int
 	}{
 		{"continue writes once", nil, 1},
-		{"esc writes: the notes were read", shell.ErrAborted, 1},
-		{"ctrl+c writes: bubbletea reports it as a closed session", shell.ErrClosed, 1},
+		{"esc writes: the pager resolves it as its own abort sentinel", shell.ErrAborted, 1},
+		// The real ctrl+c value, not a bare ErrClosed: the router turns the key into
+		// tea.Interrupt, Program.Run wraps it as ErrProgramKilled, and Ask resolves
+		// through Session.closedErr. A bare ErrClosed is a different fact and is
+		// covered by its own row below.
+		{"ctrl+c writes: a person closed the screen", shell.ClosedByInterrupt(), 1},
+		// A UI that died. It reaches whatsnewRender through the SAME ErrClosed door as
+		// ctrl+c, and writing for it marked the notes seen for an operator who never
+		// got to read them - permanently, since the version does not change again.
+		{"a dead UI does NOT write: nobody read anything", shell.ClosedByUIFailure(errors.New("read /dev/tty: input/output error")), 0},
+		// Bare ErrClosed is Session.closedErr with no program error at all: the program
+		// quit cleanly while an Ask was still pending, so something else tore the
+		// session down and the screen was never resolved by anyone.
+		{"a session closed with no error does NOT write: nothing resolved the screen", shell.ErrClosed, 0},
 		{"the 10-minute timeout does NOT write: a TTY is not a person", context.DeadlineExceeded, 0},
 	}
 	for _, tc := range cases {
