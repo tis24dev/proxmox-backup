@@ -1532,11 +1532,23 @@ The run says so by name:
 Applied nothing for storage nas: every staged key refused, not comparable (server, export)
 ```
 
-`unknown` does NOT stop the restore. Only `failed > 0` does, and it is deliberate: nothing in the
-unknown case was shown to be wrong, so aborting a restore over it would be a guess in the other
-direction. It also means a restore is not complete just because it ended without an error. Check
-each definition the run named, with `pvesh get /storage/<id> --output-format=json` against the
-`storage.cfg` in the export, and set by hand anything that differs.
+**Neither `unknown` nor `failed` halts the restore**, in either apply path. A non-zero count is
+not a stop; the two paths differ only in what the run's outcome records:
+
+- The SAFE cluster apply shown above logs the summary and the per-definition `WARNING`, then goes
+  straight on to `datacenter.cfg`. Nothing in that flow returns an error for a storage count, so
+  the log lines are the whole record.
+- The staged apply (`PVE staged apply: storage.cfg applied (ok=N unknown=M failed=K)`) does return
+  an error when `failed > 0`, but the caller does not treat it as an abort: it marks the run as
+  completed WITH WARNINGS and keeps applying the remaining categories. Only a user abort or an
+  inconsistent-state failure halts a restore.
+
+Leaving `unknown` short of a failure is deliberate: nothing there was shown to be wrong, so
+counting it as one would be a guess in the other direction. The consequence for the operator is
+the same either way. **A restore that ended without an error is not the same as a restore that is
+complete.** Check every definition the run named, with `pvesh get /storage/<id>
+--output-format=json` against the `storage.cfg` in the export, and set by hand anything that
+differs.
 
 **Benefits of pvesh Apply**:
 - Non-destructive: works with running cluster
